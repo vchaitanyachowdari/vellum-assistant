@@ -10,16 +10,16 @@ import { useAuth } from "@/lib/auth";
 import { Agent } from "@/lib/db";
 import { AgentType } from "@/lib/gcp";
 
-export default function AgentsPage() {
+export default function AssistantsPage() {
   const router = useRouter();
   const { isLoggedIn, isLoading: isAuthLoading, username } = useAuth();
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [assistants, setAssistants] = useState<Agent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState<AgentType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progressMessage, setProgressMessage] = useState<string | null>(null);
 
-  const fetchAgents = useCallback(async () => {
+  const fetchAssistants = useCallback(async () => {
     if (isAuthLoading || !isLoggedIn) {
       setIsLoading(false);
       return;
@@ -27,10 +27,10 @@ export default function AgentsPage() {
     try {
       const response = await fetch("/api/agents");
       if (!response.ok) {
-        throw new Error("Failed to fetch agents");
+        throw new Error("Failed to fetch assistants");
       }
       const data = await response.json();
-      setAgents(data);
+      setAssistants(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
@@ -39,10 +39,10 @@ export default function AgentsPage() {
   }, [isAuthLoading, isLoggedIn]);
 
   useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
+    fetchAssistants();
+  }, [fetchAssistants]);
 
-  const handleCreateAgent = async (agentType: AgentType) => {
+  const handleCreateAssistant = async (agentType: AgentType) => {
     setIsCreating(agentType);
     setProgressMessage("Initializing...");
     setError(null);
@@ -58,7 +58,7 @@ export default function AgentsPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create agent");
+        throw new Error("Failed to create assistant");
       }
 
       const reader = response.body?.getReader();
@@ -89,7 +89,7 @@ export default function AgentsPage() {
               if (eventType === "progress") {
                 setProgressMessage(data.message);
               } else if (eventType === "complete") {
-                router.push(`/agents/${data.agent.id}`);
+                router.push(`/assistants/${data.agent.id}`);
                 return;
               } else if (eventType === "error") {
                 throw new Error(data.message);
@@ -99,7 +99,7 @@ export default function AgentsPage() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create agent");
+      setError(err instanceof Error ? err.message : "Failed to create assistant");
       setIsCreating(null);
       setProgressMessage(null);
     }
@@ -121,7 +121,7 @@ export default function AgentsPage() {
             Sign in required
           </h2>
           <p className="mt-2 text-center text-sm text-zinc-500 dark:text-zinc-400">
-            Please sign in from the Home page to view and manage your agents.
+            Please sign in from the Home page to view and manage your assistants.
           </p>
           <Link
             href="/"
@@ -152,7 +152,7 @@ export default function AgentsPage() {
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
               <div className="text-center">
                 <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
-                  Creating Agent
+                  Creating Assistant
                 </h3>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                   {progressMessage}
@@ -166,15 +166,15 @@ export default function AgentsPage() {
         <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl dark:text-white">
-              Agents
+              Assistants
             </h1>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Create and manage your AI agents
+              Create and manage your AI assistants
             </p>
           </div>
           <div className="flex w-full gap-2 sm:w-auto">
             <button
-              onClick={() => handleCreateAgent("simple")}
+              onClick={() => handleCreateAssistant("simple")}
               disabled={isCreating !== null}
               className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 sm:w-auto"
             >
@@ -182,7 +182,7 @@ export default function AgentsPage() {
               {isCreating === "simple" ? "Creating..." : "Simple"}
             </button>
             <button
-              onClick={() => handleCreateAgent("vellyclaw")}
+              onClick={() => handleCreateAssistant("vellyclaw")}
               disabled={isCreating !== null}
               className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-700 disabled:opacity-50 sm:w-auto"
             >
@@ -202,18 +202,18 @@ export default function AgentsPage() {
           <div className="flex items-center justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
           </div>
-        ) : agents.length === 0 ? (
+        ) : assistants.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-zinc-200 px-4 py-12 dark:border-zinc-800">
             <Bot className="h-12 w-12 text-zinc-400" />
             <h3 className="mt-4 text-lg font-medium text-zinc-900 dark:text-white">
-              No agents yet
+              No assistants yet
             </h3>
             <p className="mt-1 text-center text-sm text-zinc-500 dark:text-zinc-400">
-              Get started by creating your first agent
+              Get started by creating your first assistant
             </p>
             <div className="mt-4 flex gap-2">
               <button
-                onClick={() => handleCreateAgent("simple")}
+                onClick={() => handleCreateAssistant("simple")}
                 disabled={isCreating !== null}
                 className="flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
               >
@@ -221,7 +221,7 @@ export default function AgentsPage() {
                 {isCreating === "simple" ? "Creating..." : "Simple"}
               </button>
               <button
-                onClick={() => handleCreateAgent("vellyclaw")}
+                onClick={() => handleCreateAssistant("vellyclaw")}
                 disabled={isCreating !== null}
                 className="flex cursor-pointer items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-700 disabled:opacity-50"
               >
@@ -232,26 +232,26 @@ export default function AgentsPage() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {agents.map((agent) => (
+            {assistants.map((assistant) => (
               <div
-                key={agent.id}
-                onClick={() => router.push(`/agents/${agent.id}`)}
+                key={assistant.id}
+                onClick={() => router.push(`/assistants/${assistant.id}`)}
                 className="group cursor-pointer rounded-lg border border-zinc-200 bg-white p-4 transition-all hover:border-indigo-300 hover:shadow-md sm:p-6 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-indigo-700"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-950">
                   <Bot className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
                 </div>
                 <h3 className="mt-4 font-medium text-zinc-900 dark:text-white">
-                  {agent.name}
+                  {assistant.name}
                 </h3>
-                {agent.createdBy && (
+                {assistant.createdBy && (
                   <div className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                     <User className="h-3 w-3" />
-                    <span>{agent.createdBy}</span>
+                    <span>{assistant.createdBy}</span>
                   </div>
                 )}
                 <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
-                  Created {agent.createdAt ? new Date(agent.createdAt).toLocaleDateString() : 'Unknown'}
+                  Created {assistant.createdAt ? new Date(assistant.createdAt).toLocaleDateString() : 'Unknown'}
                 </p>
               </div>
             ))}
