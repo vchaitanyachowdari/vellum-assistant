@@ -8,27 +8,9 @@ Next.js web application for Vellum Assistant.
 - npm or bun
 - PostgreSQL database
 
-## Environment Variables
-
-Copy `.env.example` to `.env.local` and fill in the required values:
-
-```bash
-cp ../.env.example .env.local
-```
-
-Required variables:
-- `DATABASE_URL` - PostgreSQL connection string
-- `ANTHROPIC_API_KEY` - For AI capabilities
-- `GCP_SA_KEY` - Google Cloud service account (for compute/storage)
-
 ## Development
 
-```bash
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
+See the [root README](../README.md) for local development setup instructions.
 
 ## Database
 
