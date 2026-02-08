@@ -77,15 +77,8 @@ fi
 
 cd "$PROJECT_ROOT"
 
-echo "📦 Installing web dependencies..."
-cd web
-bun install
+# Ensure vel is available even if ~/.local/bin isn't in PATH yet
+export PATH="$SYMLINK_DIR:$PATH"
 
-cd "$PROJECT_ROOT"
-
-echo ""
-echo "✅ Setup complete!"
-echo ""
-echo "Next steps:"
-echo "  1. Run 'vel help' to see available commands"
-echo "  2. Run 'vel up' to start the development environment"
+# Run vel setup for remaining steps
+vel setup
