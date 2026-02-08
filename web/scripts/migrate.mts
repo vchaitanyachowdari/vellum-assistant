@@ -1,60 +1,47 @@
 import { execSync } from "child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from "fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
 const args = process.argv.slice(2);
 const preview = args.includes("--preview");
-const drizzleDir = join(process.cwd(), "drizzle");
-
-function generateToTmpDir(): string[] {
-  const tmpOut = mkdtempSync(join(tmpdir(), "drizzle-migrate-"));
-  try {
-    if (existsSync(drizzleDir)) {
-      cpSync(drizzleDir, tmpOut, { recursive: true });
-    }
-
-    const before = new Set(readdirSync(tmpOut).filter((f) => f.endsWith(".sql")));
-
-    execSync(
-      `npx drizzle-kit generate --dialect postgresql --schema ./src/lib/schema.ts --out ${tmpOut}`,
-      { stdio: "pipe" }
-    );
-
-    const after = readdirSync(tmpOut).filter((f) => f.endsWith(".sql"));
-    const newFiles = after.filter((f) => !before.has(f)).sort();
-
-    return newFiles.map((f) => {
-      const content = readFileSync(join(tmpOut, f), "utf-8");
-      return `-- ${f}\n${content}`;
-    });
-  } finally {
-    rmSync(tmpOut, { recursive: true, force: true });
-  }
-}
-
-const sqlStatements = generateToTmpDir();
-
-if (sqlStatements.length === 0) {
-  console.log("No pending schema changes detected.");
-  process.exit(0);
-}
-
-const sql = sqlStatements.join("\n\n");
 
 if (preview) {
-  console.log("-- Preview of SQL to be generated:\n");
-  console.log(sql);
+  const diffDir = mkdtempSync(join(tmpdir(), "drizzle-diff-"));
+  try {
+    // Generate baseline migration from main branch schema
+    const baseSchema = execSync("git show origin/main:web/src/lib/schema.ts", {
+      encoding: "utf-8",
+    });
+    writeFileSync(join(diffDir, "base-schema.ts"), baseSchema);
+
+    execSync(
+      `bunx drizzle-kit generate --schema "${join(diffDir, "base-schema.ts")}" --out "${diffDir}" --dialect postgresql`,
+      { stdio: "pipe" }
+    );
+    const baseline = readdirSync(diffDir).filter((f) => f.endsWith(".sql"));
+
+    // Generate diff migration from current PR schema
+    execSync(
+      `bunx drizzle-kit generate --schema ./src/lib/schema.ts --out "${diffDir}" --dialect postgresql`,
+      { stdio: "pipe" }
+    );
+    const total = readdirSync(diffDir).filter((f) => f.endsWith(".sql"));
+    const newFiles = total.filter((f) => !baseline.includes(f)).sort();
+
+    if (newFiles.length > 0) {
+      console.log("### Schema changes detected:\n");
+      for (const f of newFiles) {
+        console.log(readFileSync(join(diffDir, f), "utf-8"));
+      }
+    } else {
+      console.log("No schema changes detected.");
+    }
+  } finally {
+    rmSync(diffDir, { recursive: true, force: true });
+  }
 } else {
-  execSync("npx drizzle-kit generate", { stdio: "inherit" });
-  console.log("\nRunning migrations...\n");
-  execSync("npx drizzle-kit migrate", { stdio: "inherit" });
-  console.log("\nMigrations applied successfully.");
+  console.log("Pushing schema changes to database...\n");
+  execSync("bunx drizzle-kit push --force", { stdio: "inherit" });
+  console.log("\nSchema push completed successfully.");
 }
