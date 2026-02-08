@@ -93,6 +93,18 @@ daemon
   });
 
 daemon
+  .command('restart')
+  .description('Restart the daemon')
+  .action(async () => {
+    const stopResult = await stopDaemon();
+    if (stopResult.stopped) {
+      console.log('Daemon stopped');
+    }
+    const startResult = await startDaemon();
+    console.log(`Daemon started (pid ${startResult.pid})`);
+  });
+
+daemon
   .command('status')
   .description('Show daemon status')
   .action(() => {
