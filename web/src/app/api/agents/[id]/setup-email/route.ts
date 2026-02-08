@@ -69,7 +69,7 @@ export async function POST(
     await sql`
       UPDATE agents
       SET configuration = ${JSON.stringify({
-        ...agent.configuration,
+        ...(agent.configuration as Record<string, unknown> || {}),
         agentmail: agentmailConfig,
       })},
       updated_at = NOW()
@@ -82,7 +82,7 @@ export async function POST(
       message: "Email configured successfully",
       agentmail: agentmailConfig,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("[Setup Email] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to setup email";
     return NextResponse.json(
@@ -139,7 +139,7 @@ export async function GET(
       configured: !!agentmail,
       agentmail: agentmail || null,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("[Setup Email] Error:", error);
     return NextResponse.json(
       { error: "Failed to check email status" },

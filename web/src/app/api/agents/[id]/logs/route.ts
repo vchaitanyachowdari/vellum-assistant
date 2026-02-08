@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error fetching logs:", error);
     return NextResponse.json(
       { error: "Failed to fetch logs" },

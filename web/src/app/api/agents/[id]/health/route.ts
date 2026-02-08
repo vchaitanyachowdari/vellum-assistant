@@ -19,11 +19,11 @@ export async function GET(request: Request, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
-    const provisioningError = agent.configuration?.provisioningError as string | undefined;
+    const provisioningError = (agent.configuration as Record<string, unknown>)?.provisioningError as string | undefined;
     if (provisioningError) {
       return NextResponse.json({
         status: "provisioning_failed",
@@ -122,7 +122,7 @@ export async function GET(request: Request, { params }: RouteParams) {
         ip: externalIp,
         stats,
       });
-    } catch (fetchError) {
+    } catch (fetchError: unknown) {
       console.log("Health check failed:", fetchError);
       const errorDetail = fetchError instanceof Error ? fetchError.message : "Unknown error";
       return NextResponse.json({
@@ -131,7 +131,7 @@ export async function GET(request: Request, { params }: RouteParams) {
         ip: externalIp,
       });
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error checking agent health:", error);
     return NextResponse.json(
       { error: "Failed to check agent health" },

@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
       await sql`
         UPDATE agents
         SET configuration = ${JSON.stringify({
-          ...newAgent.configuration,
+          ...(newAgent.configuration as Record<string, unknown> || {}),
           compute: {
             instanceName: instanceResult.instanceName,
             zone: instanceResult.zone,
@@ -187,7 +187,7 @@ export async function POST(request: NextRequest) {
       await sql`
         UPDATE agents
         SET configuration = ${JSON.stringify({
-          ...newAgent.configuration,
+          ...(newAgent.configuration as Record<string, unknown> || {}),
           provisioningError: provisionError instanceof Error ? provisionError.message : "Provisioning failed",
         })},
         updated_at = NOW()
@@ -203,12 +203,12 @@ export async function POST(request: NextRequest) {
         id: newAgent.id,
         name: newAgent.name,
         description: newAgent.description,
-        created_at: newAgent.created_at,
+        created_at: newAgent.createdAt,
       },
       link: agentLink,
       message: `Agent "${newAgent.name}" created successfully. The user now has ${currentAgentCount + 1}/${MAX_AGENTS_PER_USER} agents.`,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("[Create For User] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to create agent";
     return NextResponse.json(
@@ -274,7 +274,7 @@ export async function GET(request: NextRequest) {
       can_create_more: currentCount < MAX_AGENTS_PER_USER,
       remaining_slots: MAX_AGENTS_PER_USER - currentCount,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("[Create For User] Error:", error);
     return NextResponse.json(
       { error: "Failed to check agent count" },

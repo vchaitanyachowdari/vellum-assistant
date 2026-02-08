@@ -20,7 +20,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -37,7 +37,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       }
     }
 
-    const agentmailConfig = agent.configuration?.agentmail as
+    const agentmailConfig = (agent.configuration as Record<string, unknown>)?.agentmail as
       | { inbox_id?: string; webhook_id?: string }
       | undefined;
 
@@ -51,7 +51,7 @@ export async function POST(request: Request, { params }: RouteParams) {
           await deleteAgentMailInbox(agentmailConfig.inbox_id);
           console.log(`Deleted AgentMail inbox ${agentmailConfig.inbox_id}`);
         }
-      } catch (mailError) {
+      } catch (mailError: unknown) {
         console.warn("Failed to delete AgentMail resources, continuing:", mailError);
       }
     }
@@ -62,7 +62,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       success: true,
       message: "Agent, compute instance, and email resources deleted",
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error killing agent:", error);
     return NextResponse.json(
       { error: "Failed to kill agent" },

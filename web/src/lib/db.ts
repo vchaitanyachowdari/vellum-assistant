@@ -33,10 +33,19 @@ export type NewUser = typeof schema.users.$inferInsert;
 export type ApiKey = typeof schema.apiKeys.$inferSelect;
 export type NewApiKey = typeof schema.apiKeys.$inferInsert;
 
-// Legacy compatibility - getDb returns the drizzle instance
-export function getDb() {
-  return db;
-}
+// API input types
+export type CreateAgentInput = {
+  name?: string;
+  description?: string;
+  configuration?: Record<string, unknown>;
+  agent_type?: string;
+};
+
+export type UpdateAgentInput = {
+  name?: string;
+  description?: string;
+  configuration?: Record<string, unknown>;
+};
 
 // Agent queries
 export async function getAgents() {
@@ -125,7 +134,7 @@ export async function createApiKey(data: NewApiKey) {
   return result[0];
 }
 
-export async function deleteApiKey(id: string, userId: string) {
+export async function deleteApiKey(id: string, _userId: string) {
   await db
     .delete(schema.apiKeys)
     .where(eq(schema.apiKeys.id, id));

@@ -47,7 +47,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const files = await fetchFilesFromAgentServer(externalIp, path);
     return NextResponse.json({ files, path });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error listing files:", error);
     return NextResponse.json(
       { error: "Failed to list files" },

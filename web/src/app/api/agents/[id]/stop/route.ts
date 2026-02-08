@@ -19,7 +19,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -46,7 +46,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       success: true,
       message: `Instance ${computeConfig.instanceName} is stopping`,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error stopping agent:", error);
     return NextResponse.json(
       { error: "Failed to stop agent" },

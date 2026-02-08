@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     }
 
     const agent = agents[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
       `Forwarded email ${payload.message.message_id} to agent ${agent.id}`
     );
     return NextResponse.json({ status: "ok" });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error processing AgentMail webhook:", error);
     return NextResponse.json(
       { error: "Failed to process webhook" },

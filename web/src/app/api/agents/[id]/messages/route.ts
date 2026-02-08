@@ -39,7 +39,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -67,18 +67,18 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
                 const existingMsg = await getMessageByGcsId(outboxMsg.id);
                 if (!existingMsg) {
                   await createChatMessage({
-                    agent_id: agentId,
+                    agentId: agentId,
                     role: "assistant",
                     content: outboxMsg.content,
                     status: "delivered",
-                    gcs_message_id: outboxMsg.id,
+                    gcsMessageId: outboxMsg.id,
                   });
                 }
               }
             }
           }
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Failed to sync messages from agent outbox:", error);
       }
     }
@@ -88,7 +88,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       id: msg.id,
       role: msg.role,
       content: msg.content,
-      timestamp: msg.created_at,
+      timestamp: msg.createdAt,
     }));
 
     // Fetch recent errors from the agent
@@ -110,13 +110,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
             recentErrors = errorsData.errors || [];
           }
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Failed to fetch errors from agent:", error);
       }
     }
 
     return NextResponse.json({ messages: formattedMessages, errors: recentErrors });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error fetching messages:", error);
     return NextResponse.json(
       { error: "Failed to fetch messages" },
@@ -146,7 +146,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     const agent = result[0] as Agent;
-    const computeConfig = agent.configuration?.compute as
+    const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
       | { instanceName?: string; zone?: string }
       | undefined;
 
@@ -186,11 +186,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const agentData = await agentResponse.json();
 
     const dbMessage = await createChatMessage({
-      agent_id: agentId,
+      agentId: agentId,
       role: "user",
       content,
       status: "sent",
-      gcs_message_id: agentData.messageId,
+      gcsMessageId: agentData.messageId,
     });
 
     return NextResponse.json({
@@ -198,7 +198,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       messageId: dbMessage.id,
       message: "Message sent to agent inbox",
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error sending message:", error);
     return NextResponse.json(
       { error: "Failed to send message" },

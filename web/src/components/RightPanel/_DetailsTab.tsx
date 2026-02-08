@@ -41,10 +41,10 @@ export function DetailsTab({ agentId }: DetailsTabProps) {
         return;
       }
       const agent: Agent = await response.json();
-      const computeConfig = agent.configuration?.compute as
+      const computeConfig = (agent.configuration as Record<string, unknown>)?.compute as
         | { instanceName?: string; zone?: string; machineType?: string }
         | undefined;
-      const agentmailConfig = agent.configuration?.agentmail as
+      const agentmailConfig = (agent.configuration as Record<string, unknown>)?.agentmail as
         | { inbox_id?: string }
         | undefined;
 
@@ -75,7 +75,7 @@ export function DetailsTab({ agentId }: DetailsTabProps) {
         agentEmail: agentmailConfig?.inbox_id ?? null,
         stats,
       });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Failed to fetch agent details:", error);
     } finally {
       setIsLoading(false);
