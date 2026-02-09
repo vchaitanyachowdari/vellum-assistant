@@ -7,12 +7,12 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Layout } from "@/components/Layout";
 import { useAuth } from "@/lib/auth";
-import { Agent } from "@/lib/db";
+import { Assistant } from "@/lib/db";
 
 export default function AssistantsPage() {
   const router = useRouter();
   const { isLoggedIn, isLoading: isAuthLoading, username } = useAuth();
-  const [assistants, setAssistants] = useState<Agent[]>([]);
+  const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
