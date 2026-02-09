@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import os
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.vellum.vellum-assistant", category: "AmbientAgent")
@@ -41,15 +42,23 @@ final class AmbientAgent: ObservableObject {
 
     private let screenCapture = ScreenCapture()
     private let ocr = ScreenOCR()
-    private let knowledgeStore = KnowledgeStore()
+    let knowledgeStore = KnowledgeStore()
     private var analyzer: AmbientAnalyzer?
     private var watchTask: Task<Void, Never>?
     private var activeSuggestionWindow: AmbientSuggestionWindow?
     private var previousOCRText: String = ""
+    private var knowledgeCancellable: AnyCancellable?
+    private var suggestionWindow: AmbientSuggestionWindow?
 
     weak var appDelegate: AppDelegate?
 
     var knowledge: KnowledgeStore { knowledgeStore }
+
+    init() {
+        knowledgeCancellable = knowledgeStore.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
 
     func start() {
         guard watchTask == nil else { return }
@@ -191,15 +200,18 @@ final class AmbientAgent: ObservableObject {
             onAccept: { [weak self] in
                 self?.activeSuggestionWindow = nil
                 self?.lastSuggestion = nil
+                self?.suggestionWindow = nil
                 appDelegate.startSession(task: suggestion)
             },
             onDismiss: { [weak self] in
                 self?.activeSuggestionWindow = nil
                 self?.lastSuggestion = nil
+                self?.suggestionWindow = nil
             }
         )
         activeSuggestionWindow = window
         window.show()
+        suggestionWindow = window
     }
 
     private func currentWindowTitle() -> String? {
