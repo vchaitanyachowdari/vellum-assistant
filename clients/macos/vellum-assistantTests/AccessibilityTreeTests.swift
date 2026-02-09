@@ -148,6 +148,91 @@ final class AccessibilityTreeTests: XCTestCase {
         XCTAssertTrue(diff!.contains("gained focus"))
     }
 
+    func testDiff_shiftedIds_matchesByStableIdentity() {
+        // Simulate ID shift: an element inserted early pushes all subsequent IDs up.
+        // The diff should NOT report "OK" or "Submit" as added/removed — only "New Item" is new.
+        let prev = [
+            AXElement(id: 1, role: "AXButton", title: "OK", value: nil,
+                      frame: CGRect(x: 10, y: 10, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil),
+            AXElement(id: 2, role: "AXButton", title: "Submit", value: nil,
+                      frame: CGRect(x: 100, y: 10, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil)
+        ]
+        let curr = [
+            AXElement(id: 1, role: "AXButton", title: "New Item", value: nil,
+                      frame: CGRect(x: 0, y: 10, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil),
+            AXElement(id: 2, role: "AXButton", title: "OK", value: nil,
+                      frame: CGRect(x: 10, y: 10, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil),
+            AXElement(id: 3, role: "AXButton", title: "Submit", value: nil,
+                      frame: CGRect(x: 100, y: 10, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil)
+        ]
+        let diff = AXTreeDiff.diff(previous: prev, current: curr)
+        XCTAssertNotNil(diff)
+        // Only "New Item" should be reported as added
+        XCTAssertTrue(diff!.contains("Added"))
+        XCTAssertTrue(diff!.contains("New Item"))
+        // "OK" and "Submit" should NOT be reported as added or removed
+        XCTAssertFalse(diff!.contains("Removed"))
+    }
+
+    func testDiff_titleChange_reportsChanged() {
+        // A button whose label changes in place should be a "Changed" entry, not remove+add
+        let prev = [
+            AXElement(id: 1, role: "AXButton", title: "Play", value: nil,
+                      frame: CGRect(x: 50, y: 50, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: "play-btn", url: nil, placeholderValue: nil)
+        ]
+        let curr = [
+            AXElement(id: 1, role: "AXButton", title: "Pause", value: nil,
+                      frame: CGRect(x: 50, y: 50, width: 80, height: 30),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: "play-btn", url: nil, placeholderValue: nil)
+        ]
+        let diff = AXTreeDiff.diff(previous: prev, current: curr)
+        XCTAssertNotNil(diff)
+        XCTAssertTrue(diff!.contains("Changed"))
+        XCTAssertTrue(diff!.contains("Play"))
+        XCTAssertTrue(diff!.contains("Pause"))
+        XCTAssertFalse(diff!.contains("Added"))
+        XCTAssertFalse(diff!.contains("Removed"))
+    }
+
+    func testDiff_duplicateElements_trackedIndividually() {
+        // Two identical list items at different positions; removing one should report exactly one removal
+        let prev = [
+            AXElement(id: 1, role: "AXStaticText", title: "Item", value: nil,
+                      frame: CGRect(x: 0, y: 0, width: 100, height: 20),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil),
+            AXElement(id: 2, role: "AXStaticText", title: "Item", value: nil,
+                      frame: CGRect(x: 0, y: 0, width: 100, height: 20),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil)
+        ]
+        let curr = [
+            AXElement(id: 1, role: "AXStaticText", title: "Item", value: nil,
+                      frame: CGRect(x: 0, y: 0, width: 100, height: 20),
+                      isEnabled: true, isFocused: false, children: [],
+                      roleDescription: nil, identifier: nil, url: nil, placeholderValue: nil)
+        ]
+        let diff = AXTreeDiff.diff(previous: prev, current: curr)
+        XCTAssertNotNil(diff)
+        XCTAssertTrue(diff!.contains("Removed"))
+        // Should report exactly one removal, not zero (old bug) or two
+        let removedCount = diff!.components(separatedBy: "Removed").count - 1
+        XCTAssertEqual(removedCount, 1)
+    }
+
     // MARK: - Flatten
 
     func testFlattenElements() {
