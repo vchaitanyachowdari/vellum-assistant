@@ -11,6 +11,8 @@ final class KnowledgeCron {
     private var cronTask: Task<Void, Never>?
     private let model = "claude-haiku-4-5-20251001"
     private let minimumEntries = 5
+    private let maxConsecutiveFailures = 3
+    private var consecutiveFailures = 0
 
     var onInsight: ((KnowledgeInsight) -> Void)?
 
@@ -153,7 +155,7 @@ final class KnowledgeCron {
         ]
 
         do {
-            let (_, input) = try await client.sendToolUseRequest(
+            let result = try await client.sendToolUseRequest(
                 model: model,
                 maxTokens: 1024,
                 system: systemPrompt,
@@ -165,9 +167,9 @@ final class KnowledgeCron {
                 timeout: 30
             )
 
-            guard let rawInsights = input["insights"] as? [[String: Any]] else {
+            guard let rawInsights = result.input["insights"] as? [[String: Any]] else {
                 log.warning("Cron: failed to parse insights from response")
-                lastRunTimestamp = Date().timeIntervalSince1970
+                advanceOrRetry()
                 return
             }
 
@@ -202,10 +204,23 @@ final class KnowledgeCron {
                 log.info("Cron: no insights found in this run")
             }
 
+            consecutiveFailures = 0
+            lastRunTimestamp = Date().timeIntervalSince1970
+
         } catch {
             log.warning("Cron: analysis failed: \(error.localizedDescription)")
+            advanceOrRetry()
         }
+    }
 
-        lastRunTimestamp = Date().timeIntervalSince1970
+    /// Increment failure counter; advance watermark after repeated failures to avoid
+    /// getting permanently stuck on a deterministic error (e.g. payload too large).
+    private func advanceOrRetry() {
+        consecutiveFailures += 1
+        if consecutiveFailures >= maxConsecutiveFailures {
+            log.warning("Cron: \(self.consecutiveFailures) consecutive failures, advancing watermark to avoid stuck retry loop")
+            consecutiveFailures = 0
+            lastRunTimestamp = Date().timeIntervalSince1970
+        }
     }
 }
