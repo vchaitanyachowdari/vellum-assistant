@@ -19,10 +19,11 @@ final class AnthropicProvider: ActionInferenceProvider {
         screenSize: CGSize,
         task: String,
         history: [ActionRecord],
-        elements: [AXElement]?
+        elements: [AXElement]?,
+        consecutiveUnchangedSteps: Int
     ) async throws -> (action: AgentAction, usage: TokenUsage?) {
         let systemPrompt = buildSystemPrompt(screenSize: screenSize)
-        let messages = buildMessages(axTree: axTree, previousAXTree: previousAXTree, axDiff: axDiff, secondaryWindows: secondaryWindows, screenshot: screenshot, task: task, history: history)
+        let messages = buildMessages(axTree: axTree, previousAXTree: previousAXTree, axDiff: axDiff, secondaryWindows: secondaryWindows, screenshot: screenshot, task: task, history: history, consecutiveUnchangedSteps: consecutiveUnchangedSteps)
 
         let result = try await client.sendToolUseRequest(
             model: model,
@@ -60,6 +61,7 @@ final class AnthropicProvider: ActionInferenceProvider {
         RULES:
         - Call exactly one tool per turn. After each action, you'll receive the updated screen state.
         - ALWAYS use element_id to target elements from the accessibility tree. Only fall back to x,y coordinates if no tree is available.
+        - If the accessibility tree already shows you're in the correct app, do NOT call open_app again — proceed directly with your intended interaction (e.g., click an element, use a keyboard shortcut).
         - Use the wait tool when you need to pause for UI to update (e.g. after clicking a button that loads content).
         - FORM FIELD WORKFLOW: To fill a text field, first click it (by element_id) to focus it, then call type_text. If a field already shows "FOCUSED", skip the click and type immediately.
         - After typing, verify in the next turn that the text appeared correctly.
@@ -88,7 +90,7 @@ final class AnthropicProvider: ActionInferenceProvider {
 
     // MARK: - Message Building
 
-    private func buildMessages(axTree: String?, previousAXTree: String?, axDiff: String?, secondaryWindows: String?, screenshot: Data?, task: String, history: [ActionRecord]) -> [[String: Any]] {
+    private func buildMessages(axTree: String?, previousAXTree: String?, axDiff: String?, secondaryWindows: String?, screenshot: Data?, task: String, history: [ActionRecord], consecutiveUnchangedSteps: Int) -> [[String: Any]] {
         var contentBlocks: [[String: Any]] = []
 
         // Screenshot image block
@@ -112,10 +114,20 @@ final class AnthropicProvider: ActionInferenceProvider {
         if let diff = axDiff, !history.isEmpty {
             textParts.append(diff)
             textParts.append("")
-        } else if let prevTree = previousAXTree, !history.isEmpty {
-            // Fall back to full previous tree if diff unavailable
-            textParts.append("SCREEN STATE BEFORE YOUR LAST ACTION:")
-            textParts.append(prevTree)
+        } else if previousAXTree != nil && axTree != nil && !history.isEmpty {
+            // AX tree unchanged — tell the model its action had no effect
+            // (only when we have both current and previous trees; if current tree
+            // is nil we fell back to screenshot-only and can't judge)
+            let lastAction = history.last
+            let wasWait = lastAction?.action.type == .wait
+            textParts.append("CHANGES SINCE LAST ACTION:")
+            if consecutiveUnchangedSteps >= 2 {
+                textParts.append("⚠️ WARNING: \(consecutiveUnchangedSteps) consecutive actions had NO VISIBLE EFFECT on the UI. You MUST try a completely different approach — do not repeat any of your recent actions.")
+            } else if !wasWait {
+                textParts.append("Your last action (\(lastAction?.action.displayDescription ?? "unknown")) had NO VISIBLE EFFECT on the UI. The screen is identical to the previous step. Do NOT repeat the same action — try something different.")
+            } else {
+                textParts.append("No visible changes detected — the UI is identical to the previous step.")
+            }
             textParts.append("")
         }
 
