@@ -53,12 +53,27 @@ export async function up(): Promise<void> {
     console.log('🔄 Running database migrations...');
     const migrate = spawn('bunx', ['drizzle-kit', 'migrate'], {
       cwd: webDir,
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
       env: {
         ...process.env,
         DATABASE_URL: process.env.DATABASE_URL || 'postgresql://vellum:password@localhost:5432/vellum',
       },
     });
+
+    const NOTICE_BLOCK_RE = /\{\s*\n\s*severity_local:\s*'NOTICE',[\s\S]*?\}\n?/g;
+
+    const filterOutput = (stream: NodeJS.ReadableStream, target: NodeJS.WritableStream) => {
+      let buffer = '';
+      stream.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+      });
+      stream.on('end', () => {
+        target.write(buffer.replace(NOTICE_BLOCK_RE, ''));
+      });
+    };
+
+    filterOutput(migrate.stdout!, process.stdout);
+    filterOutput(migrate.stderr!, process.stderr);
 
     await new Promise<void>((resolve, reject) => {
       migrate.on('close', (code) => {
