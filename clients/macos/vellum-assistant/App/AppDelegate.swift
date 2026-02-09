@@ -14,15 +14,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var voiceTranscriptionWindow: VoiceTranscriptionWindow?
     let ambientAgent = AmbientAgent()
 
+    private var onboardingWindow: OnboardingWindow?
     private var windowObserver: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        let skipOnboarding = CommandLine.arguments.contains("--skip-onboarding")
+        #else
+        let skipOnboarding = false
+        #endif
+
+        if !skipOnboarding && !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            showOnboarding()
+            return
+        }
+
         setupMenuBar()
         setupHotKey()
         setupEscapeMonitor()
         setupVoiceInput()
         setupAmbientAgent()
+        setupWindowObserver()
+    }
 
+    private func setupWindowObserver() {
         // Watch for Settings window closing to revert to accessory activation policy
         windowObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: nil, queue: .main
@@ -78,6 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ambientItem = NSMenuItem(title: ambientTitle, action: #selector(toggleAmbientAgent), keyEquivalent: "")
         ambientItem.target = self
         menu.addItem(ambientItem)
+
+        let onboardingItem = NSMenuItem(title: "Replay Onboarding", action: #selector(replayOnboarding), keyEquivalent: "")
+        onboardingItem.target = self
+        menu.addItem(onboardingItem)
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -155,6 +174,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             systemSymbolName: iconName,
             accessibilityDescription: "vellum-assistant"
         )
+    }
+
+    @objc private func replayOnboarding() {
+        guard onboardingWindow == nil else { return }
+        popover.performClose(nil)
+
+        let onboarding = OnboardingWindow()
+        onboarding.onComplete = { [weak self] state in
+            UserDefaults.standard.set(state.assistantName, forKey: "assistantName")
+            UserDefaults.standard.set(state.chosenKey.rawValue, forKey: "activationKey")
+
+            onboarding.close()
+            self?.onboardingWindow = nil
+            NSApp.setActivationPolicy(.accessory)
+        }
+        onboarding.show()
+        onboardingWindow = onboarding
+    }
+
+    // MARK: - Onboarding
+
+    private func showOnboarding() {
+        let onboarding = OnboardingWindow()
+        onboarding.onComplete = { [weak self] state in
+            UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+            UserDefaults.standard.set(state.assistantName, forKey: "assistantName")
+            UserDefaults.standard.set(state.chosenKey.rawValue, forKey: "activationKey")
+
+            onboarding.close()
+            self?.onboardingWindow = nil
+
+            self?.setupMenuBar()
+            self?.setupHotKey()
+            self?.setupEscapeMonitor()
+            self?.setupVoiceInput()
+            self?.setupAmbientAgent()
+            self?.setupWindowObserver()
+
+            NSApp.setActivationPolicy(.accessory)
+        }
+        onboarding.show()
+        onboardingWindow = onboarding
     }
 
     // MARK: - Popover
