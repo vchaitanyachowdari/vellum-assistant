@@ -15,6 +15,8 @@ final class VoiceInputManager {
     private var isRecording = false
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private var fnHoldTask: Task<Void, Never>?
+    private static let holdDelay: UInt64 = 300_000_000 // 300ms in nanoseconds
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -22,7 +24,7 @@ final class VoiceInputManager {
     private let audioEngine = AVAudioEngine()
 
     func start() {
-        setupOptionKeyMonitors()
+        setupFnKeyMonitors()
     }
 
     func stop() {
@@ -37,9 +39,9 @@ final class VoiceInputManager {
         stopRecording()
     }
 
-    // MARK: - Option Key Detection
+    // MARK: - Fn Key Detection
 
-    private func setupOptionKeyMonitors() {
+    private func setupFnKeyMonitors() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             Task { @MainActor in
                 self?.handleFlagsChanged(event)
@@ -54,14 +56,24 @@ final class VoiceInputManager {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let optionPressed = event.modifierFlags.contains(.option)
-        let otherModifiers: NSEvent.ModifierFlags = [.command, .shift, .control]
+        let fnPressed = event.modifierFlags.contains(.function)
+        let otherModifiers: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
         let hasOtherModifiers = !event.modifierFlags.intersection(otherModifiers).isEmpty
 
-        if optionPressed && !hasOtherModifiers && !isRecording {
-            beginRecording()
-        } else if !optionPressed && isRecording {
-            stopRecording()
+        if fnPressed && !hasOtherModifiers && !isRecording {
+            // Start a delayed hold — cancelled if Fn is released quickly (e.g. Fn+arrow combo)
+            fnHoldTask?.cancel()
+            fnHoldTask = Task {
+                try? await Task.sleep(nanoseconds: Self.holdDelay)
+                guard !Task.isCancelled else { return }
+                beginRecording()
+            }
+        } else if !fnPressed {
+            fnHoldTask?.cancel()
+            fnHoldTask = nil
+            if isRecording {
+                stopRecording()
+            }
         }
     }
 
@@ -82,7 +94,7 @@ final class VoiceInputManager {
         let authStatus = SFSpeechRecognizer.authorizationStatus()
         if authStatus == .notDetermined {
             SFSpeechRecognizer.requestAuthorization { _ in }
-            log.info("Requested speech recognition authorization — hold Option again after approving")
+            log.info("Requested speech recognition authorization — hold Fn again after approving")
             return
         }
         guard authStatus == .authorized else {
