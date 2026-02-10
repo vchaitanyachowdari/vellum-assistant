@@ -1,33 +1,34 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Controller, useForm } from "react-hook-form";
+
 import { useAuth } from "@/lib/auth";
+import { toast } from "@/components/app/core/Toast";
+
+interface LoginFormValues {
+  username: string;
+  password: string;
+}
 
 export default function LoginPage() {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { control, handleSubmit, formState: { isSubmitting, errors } } = useForm<LoginFormValues>();
   const { login } = useAuth();
   const router = useRouter();
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setIsSubmitting(true);
-    try {
-      const errorMessage = await login(username, password);
-      if (!errorMessage) {
-        router.push("/assistant");
-      } else {
-        setError(errorMessage);
-      }
-    } finally {
-      setIsSubmitting(false);
+  const onSubmit = async (data: LoginFormValues) => {
+    const result = await login(data.username, data.password);
+    if (result.emailNotVerified) {
+      router.push("/check-email?reason=unverified");
+      return;
     }
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    router.push("/assistant");
   };
 
   return (
@@ -62,35 +63,52 @@ export default function LoginPage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              {error && (
-                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                  {error}
-                </div>
-              )}
+            <form
+              method="post"
+              onSubmit={handleSubmit(onSubmit)}
+              className="flex flex-col gap-4"
+            >
               <div className="flex flex-col gap-3">
-                <input
-                  id="username"
-                  name="username"
-                  type="text"
-                  autoComplete="username"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Username"
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-500/50"
-                />
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Password"
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-500/50"
-                />
+                <div>
+                  <Controller
+                    name="username"
+                    control={control}
+                    rules={{ required: "Username is required" }}
+                    render={({ field }) => (
+                      <input
+                        {...field}
+                        id="username"
+                        type="text"
+                        autoComplete="username"
+                        placeholder="Username"
+                        className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-500/50"
+                      />
+                    )}
+                  />
+                  {errors.username && (
+                    <p className="mt-1 text-xs text-red-300">{errors.username.message}</p>
+                  )}
+                </div>
+                <div>
+                  <Controller
+                    name="password"
+                    control={control}
+                    rules={{ required: "Password is required" }}
+                    render={({ field }) => (
+                      <input
+                        {...field}
+                        id="password"
+                        type="password"
+                        autoComplete="current-password"
+                        placeholder="Password"
+                        className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-indigo-500/50"
+                      />
+                    )}
+                  />
+                  {errors.password && (
+                    <p className="mt-1 text-xs text-red-300">{errors.password.message}</p>
+                  )}
+                </div>
               </div>
 
               <div className="text-right">
