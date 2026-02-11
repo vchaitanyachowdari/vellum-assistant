@@ -186,70 +186,99 @@ export class Session {
     this.prompter.resolveConfirmation(requestId, decision, selectedPattern, selectedScope);
   }
 
-  async processMessage(
+  /**
+   * Persist a user message and mark the session as processing.
+   * Returns the messageId immediately without running the agent loop.
+   * After calling this, call `runAgentLoop` to continue processing.
+   */
+  persistUserMessage(
     content: string,
     attachments: UserMessageAttachment[],
-    onEvent: (msg: ServerMessage) => void,
     requestId?: string,
     options?: { userMessageAlreadyPersisted?: boolean },
-  ): Promise<string> {
+  ): string {
     if (this.processing) {
-      onEvent({ type: 'error', message: 'Already processing a message' });
-      return '';
+      throw new Error('Session is already processing a message');
+    }
+
+    if (!content.trim() && attachments.length === 0) {
+      throw new Error('Message content or attachments are required');
     }
 
     const reqId = requestId ?? uuid();
     this.currentRequestId = reqId;
-    const rlog = log.child({ conversationId: this.conversationId, requestId: reqId });
     this.processing = true;
     this.abortController = new AbortController();
+
     let userMessageId = '';
 
+    if (options?.userMessageAlreadyPersisted) {
+      // The user message was already persisted (e.g. by channel inbound
+      // idempotency logic). Find its ID from the DB for memory-recall
+      // exclusion, and always add to in-memory array so the LLM sees it
+      // (cached sessions skip loadFromDb on subsequent messages).
+      const dbMessages = conversationStore.getMessages(this.conversationId);
+      const lastUserMsg = dbMessages.filter((m) => m.role === 'user').pop();
+      userMessageId = lastUserMsg?.id ?? '';
+
+      const userMessage = createUserMessage(content, attachments.map((attachment) => ({
+        id: attachment.id,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        data: attachment.data,
+        extractedText: attachment.extractedText,
+      })));
+      this.messages.push(userMessage);
+    } else {
+      // Add user message
+      const userMessage = createUserMessage(content, attachments.map((attachment) => ({
+        id: attachment.id,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        data: attachment.data,
+        extractedText: attachment.extractedText,
+      })));
+      this.messages.push(userMessage);
+      const persistedUserMessage = conversationStore.addMessage(
+        this.conversationId,
+        'user',
+        JSON.stringify(userMessage.content),
+      );
+      userMessageId = persistedUserMessage.id;
+    }
+
+    if (!userMessageId) {
+      this.processing = false;
+      this.abortController = null;
+      this.currentRequestId = undefined;
+      throw new Error('Failed to persist user message');
+    }
+
+    return userMessageId;
+  }
+
+  /**
+   * Run the agent loop after a user message has been persisted via
+   * `persistUserMessage`. Clears the `processing` flag when done.
+   */
+  async runAgentLoop(
+    content: string,
+    userMessageId: string,
+    onEvent: (msg: ServerMessage) => void,
+  ): Promise<void> {
+    if (!this.abortController) {
+      throw new Error('runAgentLoop called without prior persistUserMessage');
+    }
+    const abortController = this.abortController;
+    const reqId = this.currentRequestId ?? uuid();
+    const rlog = log.child({ conversationId: this.conversationId, requestId: reqId });
+
     try {
-      const isFirstMessage = this.messages.length === 0;
-      if (!content.trim() && attachments.length === 0) {
-        onEvent({ type: 'error', message: 'Message content or attachments are required' });
-        return '';
-      }
-
-      if (options?.userMessageAlreadyPersisted) {
-        // The user message was already persisted (e.g. by channel inbound
-        // idempotency logic). Find its ID from the DB for memory-recall
-        // exclusion, and always add to in-memory array so the LLM sees it
-        // (cached sessions skip loadFromDb on subsequent messages).
-        const dbMessages = conversationStore.getMessages(this.conversationId);
-        const lastUserMsg = dbMessages.filter((m) => m.role === 'user').pop();
-        userMessageId = lastUserMsg?.id ?? '';
-
-        const userMessage = createUserMessage(content, attachments.map((attachment) => ({
-          id: attachment.id,
-          filename: attachment.filename,
-          mimeType: attachment.mimeType,
-          data: attachment.data,
-          extractedText: attachment.extractedText,
-        })));
-        this.messages.push(userMessage);
-      } else {
-        // Add user message
-        const userMessage = createUserMessage(content, attachments.map((attachment) => ({
-          id: attachment.id,
-          filename: attachment.filename,
-          mimeType: attachment.mimeType,
-          data: attachment.data,
-          extractedText: attachment.extractedText,
-        })));
-        this.messages.push(userMessage);
-        const persistedUserMessage = conversationStore.addMessage(
-          this.conversationId,
-          'user',
-          JSON.stringify(userMessage.content),
-        );
-        userMessageId = persistedUserMessage.id;
-      }
+      const isFirstMessage = this.messages.length === 1;
 
       const compacted = await this.contextWindowManager.maybeCompact(
         this.messages,
-        this.abortController.signal,
+        abortController.signal,
       );
       if (compacted.compacted) {
         this.messages = compacted.messages;
@@ -291,7 +320,7 @@ export class Session {
       const recallQuery = buildMemoryQuery(content, this.messages);
       const recall = await buildMemoryRecall(recallQuery, this.conversationId, runtimeConfig, {
         excludeMessageIds: [userMessageId],
-        signal: this.abortController.signal,
+        signal: abortController.signal,
       });
 
       onEvent({
@@ -409,7 +438,7 @@ export class Session {
       let updatedHistory = await this.agentLoop.run(
         runMessages,
         buildEventHandler(),
-        this.abortController.signal,
+        abortController.signal,
         reqId,
       );
 
@@ -433,7 +462,7 @@ export class Session {
         updatedHistory = await this.agentLoop.run(
           runMessages,
           buildEventHandler(),
-          this.abortController.signal,
+          abortController.signal,
           reqId,
         );
 
@@ -493,7 +522,7 @@ export class Session {
 
       this.recordUsage(exchangeInputTokens, exchangeOutputTokens, model, onEvent);
 
-      if (this.abortController?.signal.aborted) {
+      if (abortController.signal.aborted) {
         onEvent({ type: 'generation_cancelled' });
       } else {
         onEvent({ type: 'message_complete' });
@@ -507,7 +536,7 @@ export class Session {
       }
     } catch (err) {
       // AbortError is expected when user cancels — don't treat as an error
-      if (this.abortController?.signal.aborted) {
+      if (abortController.signal.aborted) {
         rlog.info('Generation cancelled by user');
         onEvent({ type: 'generation_cancelled' });
       } else {
@@ -520,7 +549,29 @@ export class Session {
       this.processing = false;
       this.currentRequestId = undefined;
     }
+  }
 
+  /**
+   * Convenience method that persists a user message and runs the agent loop
+   * in a single call. Used by the IPC path where blocking is expected.
+   */
+  async processMessage(
+    content: string,
+    attachments: UserMessageAttachment[],
+    onEvent: (msg: ServerMessage) => void,
+    requestId?: string,
+    options?: { userMessageAlreadyPersisted?: boolean },
+  ): Promise<string> {
+    let userMessageId: string;
+    try {
+      userMessageId = this.persistUserMessage(content, attachments, requestId, options);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onEvent({ type: 'error', message });
+      return '';
+    }
+
+    await this.runAgentLoop(content, userMessageId, onEvent);
     return userMessageId;
   }
 

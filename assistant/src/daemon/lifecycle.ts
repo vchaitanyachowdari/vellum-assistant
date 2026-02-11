@@ -188,6 +188,8 @@ export async function runDaemon(): Promise<void> {
         port,
         processMessage: (assistantId, conversationId, content, attachmentIds, options) =>
           server.processMessage(assistantId, conversationId, content, attachmentIds, options),
+        persistAndProcessMessage: (assistantId, conversationId, content, attachmentIds) =>
+          server.persistAndProcessMessage(assistantId, conversationId, content, attachmentIds),
       });
       try {
         await runtimeHttp.start();
