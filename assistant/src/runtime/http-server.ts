@@ -198,6 +198,22 @@ export class RuntimeHttpServer {
       return Response.json({ suggestion: null, messageId: null, source: 'none' as const });
     }
 
+    // Staleness check: compare requested messageId against the latest
+    // assistant message BEFORE filtering by text content.  This ensures
+    // that a newer tool-only assistant turn (empty text) still causes
+    // older messageId requests to be correctly marked as stale.
+    const requestedMessageId = url.searchParams.get('messageId');
+    if (requestedMessageId) {
+      for (let i = rawMessages.length - 1; i >= 0; i--) {
+        if (rawMessages[i].role === 'assistant') {
+          if (rawMessages[i].id !== requestedMessageId) {
+            return Response.json({ suggestion: null, messageId: null, source: 'none' as const, stale: true });
+          }
+          break;
+        }
+      }
+    }
+
     // Walk backwards to find the last assistant message with text content
     for (let i = rawMessages.length - 1; i >= 0; i--) {
       const msg = rawMessages[i];
@@ -209,12 +225,6 @@ export class RuntimeHttpServer {
       const text = rendered.text.trim();
       if (!text) continue;
 
-      // Skip if a specific messageId was requested and doesn't match
-      const requestedMessageId = url.searchParams.get('messageId');
-      if (requestedMessageId && msg.id !== requestedMessageId) {
-        return Response.json({ suggestion: null, messageId: null, source: 'none' as const, stale: true });
-      }
-
       // Return cached suggestion if we already generated one for this message
       const cached = this.suggestionCache.get(msg.id);
       if (cached !== undefined) {
@@ -224,6 +234,7 @@ export class RuntimeHttpServer {
           source: 'llm' as const,
         });
       }
+
 
       // Try LLM suggestion if an Anthropic API key is configured
       const apiKey = getConfig().apiKeys.anthropic;
