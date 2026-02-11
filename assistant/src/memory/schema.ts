@@ -167,3 +167,36 @@ export const memoryCheckpoints = sqliteTable('memory_checkpoints', {
   value: text('value').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
+
+// ── Cron / Deferred Tasks ────────────────────────────────────────────
+
+export const cronJobs = sqliteTable('cron_jobs', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  cronExpression: text('cron_expression').notNull(),    // e.g. '0 9 * * 1-5'
+  timezone: text('timezone'),                           // e.g. 'America/Los_Angeles'
+  message: text('message').notNull(),
+  nextRunAt: integer('next_run_at').notNull(),
+  lastRunAt: integer('last_run_at'),
+  lastStatus: text('last_status'),                     // 'ok' | 'error'
+  retryCount: integer('retry_count').notNull().default(0),
+  createdBy: text('created_by').notNull(),             // 'agent' | 'user'
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const cronRuns = sqliteTable('cron_runs', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id')
+    .notNull()
+    .references(() => cronJobs.id, { onDelete: 'cascade' }),
+  status: text('status').notNull(),                    // 'ok' | 'error'
+  startedAt: integer('started_at').notNull(),
+  finishedAt: integer('finished_at'),
+  durationMs: integer('duration_ms'),
+  output: text('output'),
+  error: text('error'),
+  conversationId: text('conversation_id'),
+  createdAt: integer('created_at').notNull(),
+});
