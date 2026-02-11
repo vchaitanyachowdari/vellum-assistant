@@ -1,11 +1,12 @@
 import * as net from 'node:net';
 import { getConfig, loadRawConfig, saveRawConfig } from '../config/loader.js';
 import { getProvider, initializeProviders } from '../providers/registry.js';
+import { RateLimitProvider } from '../providers/ratelimit.js';
 import * as conversationStore from '../memory/conversation-store.js';
 import { getLogger } from '../util/logger.js';
 import { Session } from './session.js';
 import { ComputerUseSession } from './computer-use-session.js';
-import type { ClientMessage, ServerMessage, UserMessageAttachment, CuSessionCreate, CuObservation, AmbientObservation } from './ipc-protocol.js';
+import type { ClientMessage, ServerMessage, UserMessageAttachment, CuSessionCreate, CuObservation } from './ipc-protocol.js';
 import { handleAmbientObservation } from './ambient-handler.js';
 
 const log = getLogger('handlers');
@@ -140,8 +141,9 @@ export interface HandlerContext {
   sessions: Map<string, Session>;
   socketToSession: Map<net.Socket, string>;
   cuSessions: Map<string, ComputerUseSession>;
-  socketToCuSession: Map<net.Socket, string>;
+  socketToCuSession: Map<net.Socket, Set<string>>;
   socketSandboxOverride: Map<net.Socket, boolean>;
+  sharedRequestTimestamps: number[];
   debounceTimers: Map<string, ReturnType<typeof setTimeout>>;
   suppressConfigReload: boolean;
   setSuppressConfigReload(value: boolean): void;
@@ -503,8 +505,26 @@ function handleCuSessionCreate(
   socket: net.Socket,
   ctx: HandlerContext,
 ): void {
+  // Abort any existing session with the same ID to prevent zombies,
+  // and remove it from the previous owner's socket set so disconnect
+  // cleanup doesn't accidentally abort the replacement session.
+  const existingSession = ctx.cuSessions.get(msg.sessionId);
+  if (existingSession) {
+    existingSession.abort();
+    for (const [otherSocket, ids] of ctx.socketToCuSession) {
+      if (ids.delete(msg.sessionId)) {
+        if (ids.size === 0) ctx.socketToCuSession.delete(otherSocket);
+        break;
+      }
+    }
+  }
+
   const config = getConfig();
-  const provider = getProvider(config.provider);
+  let provider = getProvider(config.provider);
+  const { rateLimit } = config;
+  if (rateLimit.maxRequestsPerMinute > 0 || rateLimit.maxTokensPerSession > 0) {
+    provider = new RateLimitProvider(provider, rateLimit, ctx.sharedRequestTimestamps);
+  }
 
   const sendToClient = (serverMsg: ServerMessage) => {
     ctx.send(socket, serverMsg);
@@ -520,7 +540,14 @@ function handleCuSessionCreate(
   );
 
   ctx.cuSessions.set(msg.sessionId, session);
-  ctx.socketToCuSession.set(socket, msg.sessionId);
+
+  // Track all CU sessions per socket so disconnect cleans up all of them
+  let sessionIds = ctx.socketToCuSession.get(socket);
+  if (!sessionIds) {
+    sessionIds = new Set();
+    ctx.socketToCuSession.set(socket, sessionIds);
+  }
+  sessionIds.add(msg.sessionId);
 
   log.info({ sessionId: msg.sessionId, task: msg.task }, 'Computer-use session created');
 }
