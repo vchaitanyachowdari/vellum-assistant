@@ -8,7 +8,7 @@
 
 import { v4 as uuid } from 'uuid';
 import type { Provider, Message, ContentBlock, ToolDefinition } from '../providers/types.js';
-import type { ServerMessage, CuObservation, UiSurfaceShow, SurfaceData } from './ipc-protocol.js';
+import type { ServerMessage, CuObservation, SurfaceType, SurfaceData, UiSurfaceShow } from './ipc-protocol.js';
 import type { ToolExecutionResult } from '../tools/types.js';
 import { AgentLoop } from '../agent/loop.js';
 import { ToolExecutor } from '../tools/executor.js';
