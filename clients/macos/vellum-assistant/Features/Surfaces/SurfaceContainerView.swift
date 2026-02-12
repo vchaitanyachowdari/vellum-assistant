@@ -7,11 +7,20 @@ struct SurfaceContainerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: VSpacing.lg) {
-            // Optional title
-            if let title = surface.title {
-                Text(title)
-                    .font(VFont.headline)
-                    .foregroundColor(VColor.textPrimary)
+            // Title row with dismiss button
+            HStack(alignment: .top) {
+                if let title = surface.title {
+                    Text(title)
+                        .font(VFont.headline)
+                        .foregroundColor(VColor.textPrimary)
+                }
+                Spacer()
+                Button(action: { viewModel.onDismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(VColor.textSecondary)
+                }
+                .buttonStyle(.plain)
             }
 
             // Type-specific content
@@ -51,11 +60,18 @@ struct SurfaceContainerView: View {
             }
         }
         .padding(VSpacing.xl)
-        .frame(width: 380)
+        .frame(width: surfaceWidth)
         .vPanelBackground()
     }
 
     // MARK: - Helpers
+
+    private var surfaceWidth: CGFloat {
+        if case .dynamicPage(let data) = surface.data {
+            return CGFloat(data.width ?? 380)
+        }
+        return 380
+    }
 
     private var isFormOrConfirmation: Bool {
         switch surface.data {
