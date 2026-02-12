@@ -146,6 +146,11 @@ struct ChatView: View {
                 .font(VFont.mono)
                 .foregroundColor(VColor.textPrimary)
                 .lineLimit(1...3)
+                .onKeyPress(.return, phases: .down) { keyPress in
+                    if keyPress.modifiers.contains(.shift) { return .ignored }
+                    if canSend { onSend() }
+                    return .handled
+                }
                 .onSubmit { if canSend { onSend() } }
 
             // Attachment / Stop button
@@ -179,7 +184,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespaces).isEmpty
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
