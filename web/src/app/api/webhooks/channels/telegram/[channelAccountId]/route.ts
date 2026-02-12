@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { handleTelegramWebhook } from "@/lib/channels/service";
 
@@ -9,23 +9,22 @@ interface RouteParams {
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
-  try {
-    const { channelAccountId } = await params;
-    const payload = (await request.json()) as Record<string, unknown>;
-    const result = await handleTelegramWebhook({
-      channelAccountId,
-      headers: request.headers,
-      payload,
-    });
+  const { channelAccountId } = await params;
+  const payload = (await request.json()) as Record<string, unknown>;
 
-    return NextResponse.json({ ok: true, ...result });
-  } catch (error) {
-    console.error("Error processing Telegram channel webhook:", error);
-    return NextResponse.json(
-      { ok: false, error: "Failed to process Telegram webhook" },
-      { status: 500 }
-    );
-  }
+  after(async () => {
+    try {
+      await handleTelegramWebhook({
+        channelAccountId,
+        headers: request.headers,
+        payload,
+      });
+    } catch (error) {
+      console.error("[TG webhook] Error processing Telegram channel webhook:", error);
+    }
+  });
+
+  return NextResponse.json({ ok: true });
 }
 
 export async function GET(_request: NextRequest, { params }: RouteParams) {
