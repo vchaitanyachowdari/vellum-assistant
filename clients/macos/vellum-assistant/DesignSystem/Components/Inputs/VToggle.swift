@@ -55,6 +55,7 @@ struct VToggle: View {
     }
 }
 
+#if DEBUG
 #Preview("VToggle") {
     @Previewable @State var isOnA = true
     @Previewable @State var isOnB = false
@@ -69,3 +70,4 @@ struct VToggle: View {
     }
     .frame(width: 300, height: 200)
 }
+#endif

@@ -73,7 +73,8 @@ final class TextResponseWindow {
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: panel, queue: .main
         ) { notification in
-            Task { @MainActor in
+            // Queue is .main so we're already on the main thread
+            MainActor.assumeIsolated {
                 guard let window = notification.object as? NSPanel else { return }
                 UserDefaults.standard.set(Double(window.frame.width), forKey: "textResponsePanelWidth")
             }
