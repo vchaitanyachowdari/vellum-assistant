@@ -15,6 +15,7 @@ import {
   upsertAssistantChannelContact,
 } from "@/lib/channels/db";
 import { getChannelPlugin } from "@/lib/channels/plugins";
+import { downloadTelegramPhoto } from "@/lib/channels/plugins/telegram";
 import { DomainError } from "@/lib/auth/server-session";
 import { createRuntimeClient } from "@/lib/runtime/client";
 import { resolveRuntime } from "@/lib/runtime/resolver";
@@ -363,7 +364,8 @@ export async function handleTelegramWebhook(params: {
   }
 
   const config = getTelegramConfig((account.config || {}) as Record<string, unknown>);
-  if (!plugin.inbound.verifyWebhook({ headers: params.headers, secret: config.webhookSecret ?? undefined })) {
+  const secretValid = plugin.inbound.verifyWebhook({ headers: params.headers, secret: config.webhookSecret ?? undefined });
+  if (!secretValid) {
     return { status: "ignored", reason: "invalid_secret" as const };
   }
 
@@ -402,12 +404,35 @@ export async function handleTelegramWebhook(params: {
 
   const client = getRuntimeClient(account.assistant_id);
 
+  // Upload any photo attachments from the Telegram payload.
+  const attachmentIds: string[] = [];
+  const rawMessage = params.payload.message as Record<string, unknown> | undefined;
+  const photos = rawMessage?.photo as Array<{ file_id: string; file_unique_id: string; file_size?: number; width: number; height: number }> | undefined;
+  if (Array.isArray(photos) && photos.length > 0 && config.botToken) {
+    const attachment = await downloadTelegramPhoto(config.botToken, photos);
+    if (attachment) {
+      const uploaded = await client.uploadAttachment({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        data: attachment.data,
+      });
+      attachmentIds.push(uploaded.id);
+    }
+  }
+
+  // If there is no text and no attachments (e.g. photo download failed),
+  // acknowledge the webhook to Telegram but skip the runtime call.
+  if (!normalized.text && attachmentIds.length === 0) {
+    return { status: "ignored", reason: "no_content" as const };
+  }
+
   const inboundResult = await client.channelInbound({
     sourceChannel: "telegram",
     externalChatId: normalized.externalChatId,
     externalMessageId: normalized.externalMessageId,
     content: normalized.text,
     senderName: normalized.sender.displayName ?? normalized.sender.username ?? undefined,
+    attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
   });
 
   if (!inboundResult.accepted) {
