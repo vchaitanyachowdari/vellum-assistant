@@ -46,11 +46,11 @@ struct ThreadTabBar: View {
 }
 
 #Preview("ThreadTabBar") {
-    @Previewable @State var threads = [
+    let threads = [
         ThreadModel(title: "New Thread"),
     ]
 
-    ZStack {
+    return ZStack {
         VColor.background.ignoresSafeArea()
         ThreadTabBar(
             threads: threads,
