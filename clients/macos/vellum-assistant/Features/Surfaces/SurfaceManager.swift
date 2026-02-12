@@ -61,6 +61,8 @@ final class SurfaceManager: ObservableObject {
     /// Prevents duplicate actions (e.g. submit followed by dismiss) from racing.
     private var respondedSurfaces: Set<String> = []
 
+    private var closeObservers: [String: Any] = [:]
+
     private let panelWidth: CGFloat = 380
     private let panelMargin: CGFloat = 20
     private let panelSpacing: CGFloat = 10
@@ -134,16 +136,22 @@ final class SurfaceManager: ObservableObject {
         let surfacePanelHeight: CGFloat
         if case .dynamicPage(let dpData) = surface.data {
             let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            surfacePanelWidth = CGFloat(dpData.width ?? Int(min(screen.width * 0.5, 800)))
-            surfacePanelHeight = CGFloat(dpData.height ?? Int(min(screen.height * 0.75, 900)))
+            let defaultW = Int(screen.width * 0.6)
+            let defaultH = Int(screen.height * 0.75)
+            surfacePanelWidth = CGFloat(max(dpData.width ?? defaultW, defaultW))
+            surfacePanelHeight = CGFloat(max(dpData.height ?? defaultH, defaultH))
         } else {
             surfacePanelWidth = panelWidth
             surfacePanelHeight = 300
         }
 
+        let isDynamicPage = if case .dynamicPage = surface.data { true } else { false }
+
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: surfacePanelWidth, height: surfacePanelHeight),
-            styleMask: [.titled, .nonactivatingPanel, .utilityWindow, .hudWindow, .resizable],
+            styleMask: isDynamicPage
+                ? [.titled, .closable, .miniaturizable, .resizable]
+                : [.titled, .nonactivatingPanel, .utilityWindow, .hudWindow, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -158,13 +166,27 @@ final class SurfaceManager: ObservableObject {
             let newHeight = min(max(fittingSize.height, 150), maxH)
             panel.setContentSize(NSSize(width: surfacePanelWidth, height: newHeight))
         }
-        panel.level = .floating
+        if isDynamicPage {
+            // Normal window level for apps
+        } else {
+            panel.level = .floating
+        }
         panel.isMovableByWindowBackground = true
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+        if isDynamicPage {
+            panel.titleVisibility = .visible
+            panel.titlebarAppearsTransparent = false
+            panel.title = surface.title ?? "App"
+        } else {
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+        }
         panel.alphaValue = 0.95
         panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        if isDynamicPage {
+            panel.collectionBehavior = [.canJoinAllSpaces]
+        } else {
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        }
 
         if case .dynamicPage = surface.data {
             panel.minSize = NSSize(width: 280, height: 200)
@@ -172,6 +194,23 @@ final class SurfaceManager: ObservableObject {
         } else {
             panel.minSize = NSSize(width: 280, height: 100)
             panel.maxSize = NSSize(width: 600, height: 10000)
+        }
+
+        if isDynamicPage {
+            let surfaceId = surface.id
+            weak var observedPanel = panel
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.panels[surfaceId] === observedPanel else { return }
+                    self.viewModels[surfaceId]?.onDismiss()
+                }
+            }
+            closeObservers[surfaceId] = observer
         }
 
         panels[surface.id] = panel
@@ -212,6 +251,10 @@ final class SurfaceManager: ObservableObject {
     }
 
     func dismissAll() {
+        for observer in closeObservers.values {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        closeObservers.removeAll()
         let ids = Array(panels.keys)
         for id in ids {
             panels[id]?.close()
@@ -227,6 +270,9 @@ final class SurfaceManager: ObservableObject {
     }
 
     private func dismissSurfaceById(_ surfaceId: String) {
+        if let observer = closeObservers.removeValue(forKey: surfaceId) {
+            NotificationCenter.default.removeObserver(observer)
+        }
         panels[surfaceId]?.close()
         panels.removeValue(forKey: surfaceId)
         viewModels.removeValue(forKey: surfaceId)
