@@ -24,7 +24,6 @@ import { extractTextFromStoredMessageContent } from './message-content.js';
 import { getQdrantClient } from './qdrant-client.js';
 import {
   memoryEmbeddings,
-  memoryItemEntities,
   memoryItems,
   memoryItemSources,
   memorySegments,
