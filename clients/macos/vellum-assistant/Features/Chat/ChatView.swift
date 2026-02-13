@@ -454,6 +454,14 @@ private struct ChatBubble: View {
         !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var attachmentSummary: String {
+        let count = message.attachments.count
+        if count == 1 {
+            return "Sent \(message.attachments[0].filename)"
+        }
+        return "Sent \(count) attachments"
+    }
+
     private var imageAttachments: [ChatAttachment] {
         message.attachments.filter { $0.mimeType.hasPrefix("image/") && nsImage(for: $0) != nil }
     }
@@ -470,6 +478,11 @@ private struct ChatBubble: View {
                     .foregroundColor(isUser ? .white : VColor.textPrimary)
                     .tint(isUser ? .white : VColor.accent)
                     .textSelection(.enabled)
+            } else if !message.attachments.isEmpty {
+                // Show attachment summary when no text is provided
+                Text(attachmentSummary)
+                    .font(VFont.caption)
+                    .foregroundColor(isUser ? .white.opacity(0.8) : VColor.textSecondary)
             }
 
             if !imageAttachments.isEmpty {
