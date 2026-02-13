@@ -16,33 +16,27 @@ The platform has three main components:
 /
 ├── web/               # Next.js web application
 ├── assistant/         # Bun-based assistant runtime
+├── clients/           # Desktop clients
 ├── gateway/           # Telegram gateway service
-├── platform/          # Terraform infrastructure
-├── vel/               # Development toolkit CLI
+├── sanity-content/    # Sanity content
+├── scripts/           # Utility scripts
 └── .github/           # GitHub Actions workflows
 ```
 
-## Development Toolkit
-
-The `vel` CLI provides common development operations. After running `./setup.sh`, you can use `vel` directly:
+## Local Development
 
 ```bash
-./setup.sh          # Sets up vel CLI and creates symlink
+# Start local services (Postgres + MinIO)
+docker compose up -d
 
-vel up              # Start development environment
-vel down            # Stop development environment
-vel setup           # Run initial setup
-vel ps              # List running services
-vel help            # Show help
+# Start the web app
+cd web
+bun run dev
 ```
-
-The setup script creates a symlink at `~/.local/bin/vel` for easy access from anywhere.
-
-See [vel/README.md](./vel/README.md) for more details.
 
 ## Git Hooks
 
-This repository includes git hooks to help maintain code quality and security. The hooks are automatically installed when you run `./setup.sh`.
+This repository includes git hooks to help maintain code quality and security. The hooks are installed by running the install script directly.
 
 To manually install or update hooks:
 ```bash
