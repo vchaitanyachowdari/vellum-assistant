@@ -196,6 +196,9 @@ const clientMessages: Record<ClientMessageType, ClientMessage> = {
     type: 'bundle_app',
     appId: 'app-001',
   },
+  apps_list: {
+    type: 'apps_list',
+  },
   sign_bundle_payload_response: {
     type: 'sign_bundle_payload_response',
     signature: 'dGVzdC1zaWduYXR1cmU=',
@@ -523,6 +526,17 @@ const serverMessages: Record<ServerMessageType, ServerMessage> = {
       entry: 'index.html',
       capabilities: [],
     },
+  },
+  apps_list_response: {
+    type: 'apps_list_response',
+    apps: [
+      {
+        id: 'app-001',
+        name: 'My App',
+        description: 'A test app',
+        createdAt: 1700000000,
+      },
+    ],
   },
   sign_bundle_payload: {
     type: 'sign_bundle_payload',

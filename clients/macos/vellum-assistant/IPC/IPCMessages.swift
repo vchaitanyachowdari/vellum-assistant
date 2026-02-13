@@ -207,6 +207,19 @@ struct AppDataRequestMessage: Encodable, Sendable {
     let data: [String: AnyCodable]?
 }
 
+/// Sent to request the list of all apps.
+/// Wire type: `"apps_list"`
+struct AppsListRequestMessage: Encodable, Sendable {
+    let type: String = "apps_list"
+}
+
+/// Sent to request bundling an app for sharing.
+/// Wire type: `"bundle_app"`
+struct BundleAppRequestMessage: Encodable, Sendable {
+    let type: String = "bundle_app"
+    let appId: String
+}
+
 /// Sent to request the list of available skills.
 /// Wire type: `"skills_list"`
 struct SkillsListRequestMessage: Encodable, Sendable {
@@ -648,6 +661,27 @@ struct TrustRulesListResponseMessage: Decodable, Sendable {
     let rules: [TrustRuleItem]
 }
 
+/// A single app item returned from the daemon.
+struct AppItem: Decodable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let description: String?
+    let icon: String?
+    let createdAt: Int
+}
+
+/// Response containing the list of all apps.
+/// Wire type: `"apps_list_response"`
+struct AppsListResponseMessage: Decodable, Sendable {
+    let apps: [AppItem]
+}
+
+/// Response from bundling an app.
+/// Wire type: `"bundle_app_response"`
+struct BundleAppResponseMessage: Decodable, Sendable {
+    let bundlePath: String
+}
+
 /// Request from daemon to sign a bundle payload.
 /// Wire type: `"sign_bundle_payload"`
 struct SignBundlePayloadMessage: Decodable, Sendable {
@@ -813,6 +847,8 @@ enum ServerMessage: Decodable, Sendable {
     case toolResult(ToolResultMessage)
     case timerCompleted(TimerCompletedMessage)
     case trustRulesListResponse(TrustRulesListResponseMessage)
+    case appsListResponse(AppsListResponseMessage)
+    case bundleAppResponse(BundleAppResponseMessage)
     case signBundlePayload(SignBundlePayloadMessage)
     case getSigningIdentity
     case pong
@@ -920,6 +956,12 @@ enum ServerMessage: Decodable, Sendable {
         case "trust_rules_list_response":
             let message = try TrustRulesListResponseMessage(from: decoder)
             self = .trustRulesListResponse(message)
+        case "apps_list_response":
+            let message = try AppsListResponseMessage(from: decoder)
+            self = .appsListResponse(message)
+        case "bundle_app_response":
+            let message = try BundleAppResponseMessage(from: decoder)
+            self = .bundleAppResponse(message)
         case "sign_bundle_payload":
             let message = try SignBundlePayloadMessage(from: decoder)
             self = .signBundlePayload(message)

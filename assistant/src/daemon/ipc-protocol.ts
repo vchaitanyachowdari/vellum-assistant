@@ -230,6 +230,10 @@ export interface UpdateTrustRule {
   priority?: number;
 }
 
+export interface AppsListRequest {
+  type: 'apps_list';
+}
+
 export interface BundleAppRequest {
   type: 'bundle_app';
   appId: string;
@@ -390,6 +394,7 @@ export type ClientMessage =
   | RemoveTrustRule
   | UpdateTrustRule
   | BundleAppRequest
+  | AppsListRequest
   | SignBundlePayloadResponse
   | GetSigningIdentityResponse;
 
@@ -706,6 +711,17 @@ export interface TrustRulesListResponse {
   }>;
 }
 
+export interface AppsListResponse {
+  type: 'apps_list_response';
+  apps: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    icon?: string;
+    createdAt: number;
+  }>;
+}
+
 export interface BundleAppResponse {
   type: 'bundle_app_response';
   bundlePath: string;
@@ -861,6 +877,7 @@ export type ServerMessage =
   | TimerCompleted
   | TrustRulesListResponse
   | BundleAppResponse
+  | AppsListResponse
   | SignBundlePayloadRequest
   | GetSigningIdentityRequest;
 
