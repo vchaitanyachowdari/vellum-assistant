@@ -693,6 +693,9 @@ final class ChatViewModel: ObservableObject {
             if let existingId = currentAssistantMessageId,
                let index = messages.firstIndex(where: { $0.id == existingId }) {
                 messages[index].isStreaming = false
+                for j in messages[index].toolCalls.indices where !messages[index].toolCalls[j].isComplete {
+                    messages[index].toolCalls[j].isComplete = true
+                }
             }
             currentAssistantMessageId = nil
             pendingQueuedCount = 0
@@ -722,6 +725,9 @@ final class ChatViewModel: ObservableObject {
             if let existingId = currentAssistantMessageId,
                let index = messages.firstIndex(where: { $0.id == existingId }) {
                 messages[index].isStreaming = false
+                for j in messages[index].toolCalls.indices where !messages[index].toolCalls[j].isComplete {
+                    messages[index].toolCalls[j].isComplete = true
+                }
             }
             currentAssistantMessageId = nil
             pendingQueuedCount = 0
@@ -745,10 +751,14 @@ final class ChatViewModel: ObservableObject {
         isCancelling = true
         isThinking = false
 
-        // Mark current assistant message as stopped
+        // Mark current assistant message as stopped and complete any in-progress tool calls
+        // so their chips don't show an endless spinner.
         if let existingId = currentAssistantMessageId,
            let index = messages.firstIndex(where: { $0.id == existingId }) {
             messages[index].isStreaming = false
+            for j in messages[index].toolCalls.indices where !messages[index].toolCalls[j].isComplete {
+                messages[index].toolCalls[j].isComplete = true
+            }
         }
     }
 
