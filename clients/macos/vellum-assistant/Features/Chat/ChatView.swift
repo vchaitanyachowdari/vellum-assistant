@@ -363,46 +363,73 @@ struct ChatView: View {
                 // ScrollView adds scrolling when content exceeds 200pt.
                 ScrollView(.vertical, showsIndicators: false) {
                     ZStack(alignment: .leading) {
-                        TextField("What would you like to do?", text: $inputText, axis: .vertical)
-                            .font(VFont.body)
-                            .foregroundColor(VColor.textPrimary)
-                            .lineSpacing(4)
-                            .textFieldStyle(.plain)
-                            .lineLimit(1...)
-                            .disabled(!hasAPIKey)
-                            .accessibilityLabel("Message")
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear
-                                        .onAppear { editorContentHeight = geo.size.height }
-                                        .onChange(of: geo.size.height) { _, h in
-                                            withAnimation(VAnimation.spring) {
-                                                editorContentHeight = h
+                        // Suppress the built-in prompt when a ghost suggestion is
+                        // visible so the placeholder and ghost text don't overlap.
+                        if ghostSuffix != nil {
+                            TextField("", text: $inputText, axis: .vertical)
+                                .font(VFont.body)
+                                .foregroundColor(VColor.textPrimary)
+                                .lineSpacing(4)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...)
+                                .disabled(!hasAPIKey)
+                                .accessibilityLabel("Message")
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { editorContentHeight = geo.size.height }
+                                            .onChange(of: geo.size.height) { _, h in
+                                                withAnimation(VAnimation.spring) {
+                                                    editorContentHeight = h
+                                                }
                                             }
-                                        }
-                                }
-                            )
+                                    }
+                                )
+                        } else {
+                            TextField("What would you like to do?", text: $inputText, axis: .vertical)
+                                .font(VFont.body)
+                                .foregroundColor(VColor.textPrimary)
+                                .lineSpacing(4)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...)
+                                .disabled(!hasAPIKey)
+                                .accessibilityLabel("Message")
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { editorContentHeight = geo.size.height }
+                                            .onChange(of: geo.size.height) { _, h in
+                                                withAnimation(VAnimation.spring) {
+                                                    editorContentHeight = h
+                                                }
+                                            }
+                                    }
+                                )
+                        }
 
                         // Ghost text overlay — shows the suggested suffix so users
-                        // know what Tab will insert.
+                        // know what Tab will insert. Uses Text concatenation (`+`)
+                        // so the suffix renders at the end of the last line, not to
+                        // the right of the entire text block.
                         if let ghostSuffix {
-                            Text(inputText + ghostSuffix)
+                            // Text `+` concatenation requires each operand to be
+                            // a `Text` value (modifiers like `.font` and
+                            // `.foregroundColor` return `Text`, but `.lineSpacing`
+                            // returns `some View`), so `.lineSpacing` is applied
+                            // after the concatenation.
+                            (Text(inputText)
                                 .font(VFont.body)
-                                .lineSpacing(4)
                                 .foregroundColor(.clear)
+                            + Text(ghostSuffix)
+                                .font(VFont.body)
+                                .foregroundColor(VColor.textMuted.opacity(0.5)))
+                                .lineSpacing(4)
                                 .lineLimit(1...)
-                                .overlay(alignment: .leading) {
-                                    HStack(spacing: 0) {
-                                        Text(inputText)
-                                            .font(VFont.body)
-                                            .lineSpacing(4)
-                                            .foregroundColor(.clear)
-                                        Text(ghostSuffix)
-                                            .font(VFont.body)
-                                            .lineSpacing(4)
-                                            .foregroundColor(VColor.textMuted.opacity(0.5))
-                                    }
-                                }
+                                // Prevent the ghost text from expanding the composer —
+                                // sizing is driven solely by the TextField's content.
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxHeight: min(max(editorContentHeight, 28), 200), alignment: .topLeading)
+                                .clipped()
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)
                         }
