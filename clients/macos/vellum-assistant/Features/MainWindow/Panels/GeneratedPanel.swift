@@ -119,6 +119,13 @@ struct GeneratedPanel: View {
                         ProgressView()
                             .controlSize(.mini)
                             .frame(width: 24, height: 24)
+
+                        // Keep the ShareSheetButton in the view tree during
+                        // bundling so the NSButton stays attached to a window.
+                        // It's hidden but will be ready when bundling completes.
+                        shareButton(for: item)
+                            .frame(width: 0, height: 0)
+                            .opacity(0)
                     } else {
                         shareButton(for: item)
 
@@ -136,9 +143,17 @@ struct GeneratedPanel: View {
             RoundedRectangle(cornerRadius: VRadius.md)
                 .stroke(item.isShared ? Violet._700.opacity(0.4) : Emerald._700.opacity(0.4), lineWidth: 1)
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            openApp(item)
+        }
         .onHover { hovering in
             withAnimation(VAnimation.fast) {
-                hoveredAppId = hovering ? item.id : nil
+                if hovering {
+                    hoveredAppId = item.id
+                } else if !showShareSheet {
+                    hoveredAppId = nil
+                }
             }
         }
     }
@@ -193,20 +208,14 @@ struct GeneratedPanel: View {
                         set: { showShareSheet = $0 }
                     )
                 )
-                .frame(width: 28, height: 28)
+                .frame(width: 0, height: 0)
+                .opacity(0)
 
-                Button(action: {
+                VIconButton(label: "Share", icon: "square.and.arrow.up", iconOnly: true) {
                     bundleAndShare(appId: localId, itemId: item.id)
-                }) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 13))
-                        .foregroundColor(Emerald._400)
-                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(.plain)
             }
         } else if item.isShared, let uuid = item.sharedUUID {
-            // Shared apps can be re-shared — reconstruct from unpacked files
             ZStack {
                 ShareSheetButton(
                     items: shareFileURL != nil && sharingAppId == item.id ? [shareFileURL!] : [],
@@ -215,31 +224,20 @@ struct GeneratedPanel: View {
                         set: { showShareSheet = $0 }
                     )
                 )
-                .frame(width: 28, height: 28)
+                .frame(width: 0, height: 0)
+                .opacity(0)
 
-                Button(action: {
+                VIconButton(label: "Share", icon: "square.and.arrow.up", iconOnly: true) {
                     reshareApp(uuid: uuid, itemId: item.id)
-                }) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 13))
-                        .foregroundColor(Violet._400)
-                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
     private func deleteButton(for item: DisplayAppItem) -> some View {
-        Button(action: {
+        VIconButton(label: "Delete", icon: "trash", iconOnly: true) {
             deleteSharedApp(item)
-        }) {
-            Image(systemName: "trash")
-                .font(.system(size: 12))
-                .foregroundColor(Rose._400)
-                .frame(width: 24, height: 24)
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Data Fetching
@@ -342,6 +340,35 @@ struct GeneratedPanel: View {
         }
 
         displayItems = items
+    }
+
+    // MARK: - Open App
+
+    private func openApp(_ item: DisplayAppItem) {
+        if let localId = item.localAppId {
+            // Local apps: ask the daemon to open via ui_surface_show
+            try? daemonClient.sendAppOpen(appId: localId)
+        } else if let uuid = item.sharedUUID {
+            // Shared apps: construct surface from unpacked files on disk
+            let entryURL = "\(VellumAppSchemeHandler.scheme)://\(uuid)/index.html"
+            let html = """
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"><title>\(item.name)</title></head>
+            <body><script>window.location.href = '\(entryURL)';</script></body>
+            </html>
+            """
+            let surfaceMsg = UiSurfaceShowMessage(
+                sessionId: "shared-app",
+                surfaceId: "shared-app-\(uuid)",
+                surfaceType: "dynamic_page",
+                title: item.name,
+                data: AnyCodable(["html": html]),
+                actions: nil,
+                display: "panel"
+            )
+            daemonClient.onSurfaceShow?(surfaceMsg)
+        }
     }
 
     // MARK: - Bundle & Share
