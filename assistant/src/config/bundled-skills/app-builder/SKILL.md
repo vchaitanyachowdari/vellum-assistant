@@ -67,26 +67,13 @@ Build apps that look and feel like professional native software. Every app you c
 - **Empty states**: Design thoughtful empty states that guide the user — not just "No items."
 - **Details**: Rounded corners, subtle shadows, smooth gradients. Polish the small things.
 
-Use CSS variables for theming:
-```css
-:root {
-  --bg: #ffffff;
-  --surface: #f5f5f7;
-  --text: #1d1d1f;
-  --text-secondary: #86868b;
-  --accent: #007aff;
-  --accent-hover: #0056b3;
-  --border: #d2d2d7;
-  --danger: #ff3b30;
-  --success: #34c759;
-  --warning: #ff9500;
-  --radius: 10px;
-  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-lg: 0 4px 12px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
-}
-```
+#### Injected design system
 
-Use system fonts: `font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;`
+A design system CSS is auto-injected inside a `@layer`, so your app's styles always override it. It provides element defaults (body, inputs, buttons, etc.) and light/dark mode via `prefers-color-scheme`.
+
+**Default look:** Use `--v-*` variables and `.v-*` classes — no base styles needed. Variables: `--v-bg`, `--v-surface`, `--v-surface-border`, `--v-text`, `--v-text-secondary`, `--v-text-muted`, `--v-accent`, `--v-danger`, `--v-success`, `--v-warning`, `--v-radius-sm`/`md`/`lg`, `--v-shadow-sm`/`md`/`lg`, `--v-spacing-xs`/`sm`/`md`/`lg`/`xl`. Palettes: `--v-slate-{950..50}`, `--v-emerald-*`, `--v-violet-*`, `--v-rose-*`, `--v-amber-*`. Classes: `.v-button` (`.secondary`/`.danger`/`.ghost`), `.v-card`, `.v-list`/`.v-list-item`, `.v-badge`, `.v-input-row`, `.v-empty-state`, `.v-toggle`.
+
+**Custom themes:** When the user wants a specific visual style, write complete CSS with hardcoded colors — do NOT use `--v-*` variables (they switch between light/dark mode). Explicitly style `body`, `input`/`textarea`/`select`, `button`, headings, and links with your own colors.
 
 #### Advanced techniques you should use
 
