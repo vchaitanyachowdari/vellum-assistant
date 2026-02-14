@@ -4,6 +4,26 @@ import os
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.vellum.vellum-assistant", category: "DaemonClient")
 
+#if os(macOS)
+/// Resolve the Unix domain socket path for the daemon connection.
+/// Returns the path in priority order:
+/// 1. `VELLUM_DAEMON_SOCKET` environment variable (trimmed, with ~/ expansion)
+/// 2. `~/.vellum/vellum.sock`
+///
+/// Accepts an optional environment dictionary for testability.
+func resolveSocketPath(environment: [String: String]? = nil) -> String {
+    let env = environment ?? ProcessInfo.processInfo.environment
+    if let envPath = env["VELLUM_DAEMON_SOCKET"], !envPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let trimmed = envPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("~/") {
+            return NSHomeDirectory() + "/" + String(trimmed.dropFirst(2))
+        }
+        return trimmed
+    }
+    return NSHomeDirectory() + "/.vellum/vellum.sock"
+}
+#endif
+
 /// Protocol for daemon client communication, enabling dependency injection and testing.
 @MainActor
 public protocol DaemonClientProtocol {
@@ -161,9 +181,13 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
+    private let config: DaemonConfig
+
     // MARK: - Init
 
-    public init() {}
+    public init(config: DaemonConfig = .default) {
+        self.config = config
+    }
 
     deinit {
         // Swift 5.9+: deinit on @MainActor class is NOT guaranteed to run on main actor.
@@ -192,22 +216,11 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
 
     // MARK: - Socket Path
 
-    /// Resolves the daemon socket path (macOS only):
-    /// 1. `VELLUM_DAEMON_SOCKET` environment variable (or override dictionary)
-    /// 2. `~/.vellum/vellum.sock`
-    ///
-    /// Accepts an optional environment dictionary for testability.
+    /// Resolves the daemon socket path (macOS only).
+    /// Delegates to the standalone `resolveSocketPath()` function for DRY.
     #if os(macOS)
     public static func resolveSocketPath(environment: [String: String]? = nil) -> String {
-        let env = environment ?? ProcessInfo.processInfo.environment
-        if let envPath = env["VELLUM_DAEMON_SOCKET"], !envPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmed = envPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.hasPrefix("~/") {
-                return NSHomeDirectory() + "/" + String(trimmed.dropFirst(2))
-            }
-            return trimmed
-        }
-        return NSHomeDirectory() + "/.vellum/vellum.sock"
+        return VellumAssistantShared.resolveSocketPath(environment: environment)
     }
     #endif
 
@@ -226,13 +239,27 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
         shouldReconnect = true
 
         #if os(macOS)
-        let socketPath = Self.resolveSocketPath()
-        log.info("Connecting to daemon socket at \(socketPath)")
-        let endpoint = NWEndpoint.unix(path: socketPath)
+        log.info("Connecting to daemon socket at \(self.config.socketPath)")
+        let endpoint = NWEndpoint.unix(path: self.config.socketPath)
         #elseif os(iOS)
-        let hostname = UserDefaults.standard.string(forKey: "daemon_hostname") ?? "localhost"
+        // Check UserDefaults first to pick up runtime changes, fall back to config
+        // This allows reconnects to pick up changed settings while preserving custom configs for tests
+        let hostname: String
+        let port: UInt16
+
+        if let userHostname = UserDefaults.standard.string(forKey: "daemon_hostname"), !userHostname.isEmpty {
+            hostname = userHostname
+        } else {
+            hostname = self.config.hostname
+        }
+
         let rawPort = UserDefaults.standard.integer(forKey: "daemon_port")
-        let port = UInt16(clamping: rawPort > 0 && rawPort <= 65535 ? rawPort : 8765)
+        if rawPort > 0 && rawPort <= 65535 {
+            port = UInt16(rawPort)
+        } else {
+            port = self.config.port
+        }
+
         log.info("Connecting to daemon at \(hostname):\(port)")
         let endpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(hostname),
