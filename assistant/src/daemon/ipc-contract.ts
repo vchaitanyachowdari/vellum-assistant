@@ -395,6 +395,12 @@ export interface SlackWebhookConfigRequest {
   webhookUrl?: string;
 }
 
+export interface LinkOpenRequest {
+  type: 'link_open_request';
+  url: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface IpcBlobProbe {
   type: 'ipc_blob_probe';
   probeId: string;
@@ -601,6 +607,7 @@ export type ClientMessage =
   | SignBundlePayloadResponse
   | GetSigningIdentityResponse
   | IpcBlobProbe
+  | LinkOpenRequest
   | ShareAppCloudRequest
   | ShareToSlackRequest
   | SlackWebhookConfigRequest
@@ -1180,6 +1187,12 @@ export interface SlackWebhookConfigResponse {
   error?: string;
 }
 
+export interface OpenUrl {
+  type: 'open_url';
+  url: string;
+  title?: string;
+}
+
 export interface ReminderFired {
   type: 'reminder_fired';
   reminderId: string;
@@ -1374,6 +1387,7 @@ export type ServerMessage =
   | GalleryInstallResponse
   | ShareToSlackResponse
   | SlackWebhookConfigResponse
+  | OpenUrl
   | AppUpdatePreviewResponse
   | PublishPageResponse
   | UnpublishPageResponse;
