@@ -8,9 +8,11 @@ public struct VSplitView<Main: View, Panel: View>: View {
 
     public var body: some View {
         HStack(spacing: 0) {
+            // Main content - shrinks when panel appears
             main
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Panel slides in from right, pushing content
             if showPanel, let panel = panel {
                 panel
                     .frame(width: panelWidth)
