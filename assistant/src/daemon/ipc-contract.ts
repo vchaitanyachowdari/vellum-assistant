@@ -166,6 +166,19 @@ export interface AmbientObservation {
   timestamp: number;
 }
 
+export interface WatchObservation {
+  type: 'watch_observation';
+  watchId: string;
+  sessionId: string;
+  ocrText: string;
+  appName?: string;
+  windowTitle?: string;
+  bundleIdentifier?: string;
+  timestamp: number;
+  captureIndex: number;
+  totalExpected: number;
+}
+
 export interface AppDataRequest {
   type: 'app_data_request';
   surfaceId: string;
@@ -480,6 +493,7 @@ export type ClientMessage =
   | CuSessionAbort
   | CuObservation
   | AmbientObservation
+  | WatchObservation
   | TaskSubmit
   | UiSurfaceAction
   | AppDataRequest
@@ -1055,6 +1069,20 @@ export interface TimerCompleted {
   durationMinutes: number;
 }
 
+export interface WatchStarted {
+  type: 'watch_started';
+  sessionId: string;
+  watchId: string;
+  durationSeconds: number;
+  intervalSeconds: number;
+}
+
+export interface WatchCompleteRequest {
+  type: 'watch_complete_request';
+  sessionId: string;
+  watchId: string;
+}
+
 export type TraceEventKind =
   | 'request_received'
   | 'request_queued'
@@ -1198,6 +1226,8 @@ export type ServerMessage =
   | MessageQueued
   | MessageDequeued
   | TimerCompleted
+  | WatchStarted
+  | WatchCompleteRequest
   | TrustRulesListResponse
   | BundleAppResponse
   | AppsListResponse
