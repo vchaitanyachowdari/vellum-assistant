@@ -1338,6 +1338,14 @@ export interface UiSurfaceDismiss {
   surfaceId: string;
 }
 
+export interface UiSurfaceComplete {
+  type: 'ui_surface_complete';
+  sessionId: string;
+  surfaceId: string;
+  summary: string;
+  submittedData?: Record<string, unknown>;
+}
+
 export interface UiSurfaceUndoResult {
   type: 'ui_surface_undo_result';
   sessionId: string;
@@ -1382,6 +1390,7 @@ export type ServerMessage =
   | UiSurfaceShow
   | UiSurfaceUpdate
   | UiSurfaceDismiss
+  | UiSurfaceComplete
   | UiSurfaceUndoResult
   | AppDataResponse
   | SkillsListResponse
