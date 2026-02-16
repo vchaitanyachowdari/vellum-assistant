@@ -19,6 +19,8 @@ struct MainWindowView: View {
 
     @AppStorage("useThreadDrawer") private var useThreadDrawer: Bool = true
     @AppStorage("sidebarOpen") private var sidebarOpen: Bool = false
+    @AppStorage("themePreference") private var themePreference: String = "system"
+    @State private var systemIsDark: Bool = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     @AppStorage("threadDrawerWidth") private var threadDrawerWidth: Double = 240
     @AppStorage("sidePanelWidth") private var sidePanelWidth: Double = 400
     @State private var drawerDragStartWidth: Double?
@@ -271,6 +273,10 @@ struct MainWindowView: View {
             if windowState.isDynamicExpanded {
                 threadManager.activeViewModel?.activeSurfaceId = surfaceId
             }
+        }
+        .preferredColorScheme(themePreference == "light" ? .light : themePreference == "dark" ? .dark : systemIsDark ? .dark : .light)
+        .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("AppleInterfaceThemeChangedNotification"))) { _ in
+            systemIsDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         }
     }
 

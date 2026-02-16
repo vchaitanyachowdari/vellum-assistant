@@ -162,22 +162,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             appearance = nil // follow system
         }
+
         NSApp.appearance = appearance
-        // Propagate to all existing windows so the change takes effect immediately
         for window in NSApp.windows {
             window.appearance = appearance
             window.invalidateShadow()
             window.contentView?.needsDisplay = true
-            window.displayIfNeeded()
-        }
-        // Force SwiftUI to re-evaluate adaptive colors by toggling the appearance
-        DispatchQueue.main.async {
-            for window in NSApp.windows {
-                window.contentView?.effectiveAppearance.performAsCurrentDrawingAppearance {
-                    window.contentView?.needsLayout = true
-                    window.contentView?.needsDisplay = true
-                }
-            }
         }
     }
 
