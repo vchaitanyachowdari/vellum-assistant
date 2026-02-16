@@ -157,6 +157,10 @@ export const DEFAULT_CONFIG: AssistantConfig = {
   auditLog: {
     retentionDays: 0,
   },
+  logFile: {
+    dir: undefined,
+    retentionDays: 30,
+  },
   pricingOverrides: [],
   swarm: {
     enabled: true,

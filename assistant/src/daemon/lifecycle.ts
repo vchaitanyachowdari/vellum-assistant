@@ -22,7 +22,7 @@ import { gmailIntegration } from '../integrations/definitions/index.js';
 import { loadConfig } from '../config/loader.js';
 import { ensurePromptFiles } from '../config/system-prompt.js';
 import { DaemonServer } from './server.js';
-import { getLogger } from '../util/logger.js';
+import { getLogger, initLogger } from '../util/logger.js';
 import { DaemonError } from '../util/errors.js';
 import { startMemoryJobsWorker } from '../memory/jobs-worker.js';
 import { QdrantManager } from '../memory/qdrant-manager.js';
@@ -205,6 +205,10 @@ export async function runDaemon(): Promise<void> {
   initializeDb();
 
   const config = loadConfig();
+
+  if (config.logFile.dir) {
+    initLogger({ dir: config.logFile.dir, retentionDays: config.logFile.retentionDays });
+  }
 
   initializeProviders(config);
   await initializeTools();
