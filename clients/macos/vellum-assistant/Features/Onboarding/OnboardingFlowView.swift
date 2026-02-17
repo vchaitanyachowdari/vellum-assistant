@@ -5,6 +5,7 @@ import VellumAssistantShared
 struct OnboardingFlowView: View {
     @Bindable var state: OnboardingState
     let daemonClient: DaemonClientProtocol
+    @Bindable var authManager: AuthManager
     var onComplete: () -> Void
     var onOpenSettings: () -> Void
 
@@ -42,7 +43,11 @@ struct OnboardingFlowView: View {
                     Group {
                         switch state.currentStep {
                         case 0:
-                            WakeUpStepView(state: state)
+                            WakeUpStepView(state: state, onContinueWithVellum: {
+                                Task {
+                                    await authManager.startWorkOSLogin()
+                                }
+                            })
                         case 2:
                             APIKeyStepView(state: state)
                         case 3:
@@ -161,6 +166,11 @@ struct OnboardingFlowView: View {
                 onComplete()
             }
         }
+        .onChange(of: authManager.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated {
+                onComplete()
+            }
+        }
     }
 
     // MARK: - Mock Chrome
@@ -211,6 +221,7 @@ struct OnboardingFlowView: View {
     OnboardingFlowView(
         state: OnboardingState(),
         daemonClient: DaemonClient(),
+        authManager: AuthManager(),
         onComplete: {},
         onOpenSettings: {}
     )
