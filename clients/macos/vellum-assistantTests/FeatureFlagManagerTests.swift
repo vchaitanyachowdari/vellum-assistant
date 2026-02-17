@@ -203,4 +203,5 @@ final class FeatureFlagManagerTests: XCTestCase {
         // THEN the flag is correctly parsed as enabled
         XCTAssertTrue(manager.isEnabled("padded"))
     }
+
 }

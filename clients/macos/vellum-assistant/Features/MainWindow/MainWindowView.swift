@@ -740,6 +740,9 @@ struct MainWindowView: View {
                 ambientAgent: ambientAgent,
                 onMicrophoneToggle: onMicrophoneToggle
             )
+            .overlay(alignment: .bottomTrailing) {
+                DemoOverlayView()
+            }
         }
     }
 
