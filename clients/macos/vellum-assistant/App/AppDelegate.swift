@@ -270,6 +270,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
+            daemonLauncher.stopMonitoring()
             hasSetupApp = false
             hasSetupDaemon = false
             showAuthWindow()
