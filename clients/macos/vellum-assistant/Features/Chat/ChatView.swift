@@ -1009,9 +1009,10 @@ private struct ChatBubble: View {
         if hasStreamingCode {
             let rawName = message.streamingCodeToolName ?? ""
             let displayName = rawName.replacingOccurrences(of: "_", with: " ")
+            let activeBuildingStatus = message.toolCalls.last(where: { !$0.isComplete })?.buildingStatus
             VStack(alignment: .leading, spacing: VSpacing.xs) {
                 RunningIndicator(
-                    label: Self.friendlyRunningLabel(displayName),
+                    label: Self.friendlyRunningLabel(displayName, buildingStatus: activeBuildingStatus),
                     onTap: { onOpenActivity(message.id) }
                 )
                 CodePreviewView(code: message.streamingCodePreview!)
@@ -1020,9 +1021,9 @@ private struct ChatBubble: View {
         } else if hasActuallyRunningTool && !permissionWasDenied {
             // In progress — show single running indicator for the active tool
             let current = message.toolCalls.first(where: { !$0.isComplete })!
-            let progressive = Self.progressiveLabels(for: current.toolName)
+            let progressive = current.buildingStatus != nil ? [] : Self.progressiveLabels(for: current.toolName)
             RunningIndicator(
-                label: Self.friendlyRunningLabel(current.toolName, inputSummary: current.inputSummary),
+                label: Self.friendlyRunningLabel(current.toolName, inputSummary: current.inputSummary, buildingStatus: current.buildingStatus),
                 progressiveLabels: progressive,
                 labelInterval: progressive.isEmpty ? 6 : 15,
                 onTap: { onOpenActivity(message.id) }
@@ -1134,7 +1135,14 @@ private struct ChatBubble: View {
     }
 
     /// Maps tool names to user-friendly present-tense labels for the running state.
-    private static func friendlyRunningLabel(_ toolName: String, inputSummary: String? = nil) -> String {
+    private static func friendlyRunningLabel(_ toolName: String, inputSummary: String? = nil, buildingStatus: String? = nil) -> String {
+        // For app file tools, prefer the descriptive building status from tool input
+        if let status = buildingStatus {
+            let lower = toolName.lowercased()
+            if lower == "app file edit" || lower == "app file write" || lower == "app create" || lower == "app update" {
+                return status
+            }
+        }
         switch toolName.lowercased() {
         case "run command":            return "Running a command"
         case "read file":              return "Reading a file"
