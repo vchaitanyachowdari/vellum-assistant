@@ -25,15 +25,26 @@ mock.module('../config/skills.js', () => ({
 
 mock.module('../skills/active-skill-tools.js', () => ({
   deriveActiveSkillIds: (messages: Message[]) => {
-    // Replicate the real regex scan for loaded_skill markers
+    // Two-pass approach matching real implementation:
+    // 1. Collect tool_use IDs where name === 'skill_load'
+    const skillLoadUseIds = new Set<string>();
+    for (const msg of messages) {
+      for (const block of msg.content) {
+        if (block.type === 'tool_use' && block.name === 'skill_load') {
+          skillLoadUseIds.add(block.id);
+        }
+      }
+    }
+
+    // 2. Parse markers only from tool_result blocks whose tool_use_id matches
     const re = /<loaded_skill\s+id="([^"]+)"\s*\/>/g;
     const seen = new Set<string>();
     const ids: string[] = [];
     for (const msg of messages) {
       for (const block of msg.content) {
-        let text: string | undefined;
-        if (block.type === 'text') text = block.text;
-        else if (block.type === 'tool_result') text = block.content;
+        if (block.type !== 'tool_result') continue;
+        if (!skillLoadUseIds.has(block.tool_use_id)) continue;
+        const text = block.content;
         if (!text) continue;
         for (const match of text.matchAll(re)) {
           if (!seen.has(match[1])) {
@@ -180,11 +191,24 @@ function makeManifest(toolNames: string[]): SkillToolManifest {
   };
 }
 
-function toolResultMsg(content: string): Message {
-  return {
-    role: 'user',
-    content: [{ type: 'tool_result', tool_use_id: 't1', content }],
-  };
+let toolUseCounter = 0;
+
+/**
+ * Creates a pair of messages representing a skill_load tool_use followed by
+ * its tool_result with the given content (typically a `<loaded_skill>` marker).
+ */
+function skillLoadMessages(content: string): Message[] {
+  const id = `sl-${++toolUseCounter}`;
+  return [
+    {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id, name: 'skill_load', input: {} }],
+    },
+    {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: id, content }],
+    },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +240,7 @@ describe('projectSkillTools', () => {
     mockManifests = { deploy: makeManifest(['deploy_run', 'deploy_status']) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -239,8 +263,8 @@ describe('projectSkillTools', () => {
     };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -260,7 +284,7 @@ describe('projectSkillTools', () => {
 
     // Only deploy is in history; oncall is preactivated
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     const result = projectSkillTools(history, {
@@ -283,15 +307,15 @@ describe('projectSkillTools', () => {
 
     // First turn: both skills active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     projectSkillTools(history1, { previouslyActiveSkillIds: sessionState });
 
     // Second turn: only deploy remains active (oncall marker gone)
     mockUnregisteredSkillIds = [];
     const history2: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const result = projectSkillTools(history2, { previouslyActiveSkillIds: sessionState });
 
@@ -304,7 +328,7 @@ describe('projectSkillTools', () => {
     // No manifest registered for "broken", so parseToolManifestFile will throw
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="broken" />'),
+      ...skillLoadMessages('<loaded_skill id="broken" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -319,7 +343,7 @@ describe('projectSkillTools', () => {
     mockManifests = {};
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="nonexistent" />'),
+      ...skillLoadMessages('<loaded_skill id="nonexistent" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -333,7 +357,7 @@ describe('projectSkillTools', () => {
     mockManifests = { deploy: makeManifest(['deploy_run']) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     // deploy is both in history AND preactivated — should not duplicate
@@ -370,13 +394,13 @@ describe('projectSkillTools', () => {
     const sessionB = new Set<string>();
 
     // Session A activates deploy
-    const historyA: Message[] = [toolResultMsg('<loaded_skill id="deploy" />')];
+    const historyA: Message[] = [...skillLoadMessages('<loaded_skill id="deploy" />')];
     const resultA = projectSkillTools(historyA, { previouslyActiveSkillIds: sessionA });
     expect(resultA.allowedToolNames.has('deploy_run')).toBe(true);
 
     // Session B activates oncall — should NOT unregister deploy from session A
     mockUnregisteredSkillIds = [];
-    const historyB: Message[] = [toolResultMsg('<loaded_skill id="oncall" />')];
+    const historyB: Message[] = [...skillLoadMessages('<loaded_skill id="oncall" />')];
     projectSkillTools(historyB, { previouslyActiveSkillIds: sessionB });
     expect(mockUnregisteredSkillIds).not.toContain('deploy');
 
@@ -481,7 +505,7 @@ describe('resolveTools callback (session wiring)', () => {
 
     const resolveTools = makeResolveTools(baseToolDefs);
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     const result = resolveTools(history);
@@ -501,7 +525,7 @@ describe('resolveTools callback (session wiring)', () => {
 
     const resolveTools = makeResolveTools(baseToolDefs);
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
 
     const result = resolveTools(history);
@@ -521,8 +545,8 @@ describe('resolveTools callback (session wiring)', () => {
 
     const resolveTools = makeResolveTools(baseToolDefs);
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
 
     const result = resolveTools(history);
@@ -581,7 +605,7 @@ describe('allowed tool set merging', () => {
     mockManifests = { deploy: makeManifest(['deploy_run', 'deploy_status']) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     const projection = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -605,7 +629,7 @@ describe('allowed tool set merging', () => {
 
     // Only deploy is active
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
 
     const projection = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -625,8 +649,8 @@ describe('allowed tool set merging', () => {
 
     // Turn 1: both active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     const projection1 = projectSkillTools(history1, { previouslyActiveSkillIds: sessionState });
     const allowed1 = buildAllowedSet(projection1);
@@ -636,7 +660,7 @@ describe('allowed tool set merging', () => {
 
     // Turn 2: only deploy remains
     const history2: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const projection2 = projectSkillTools(history2, { previouslyActiveSkillIds: sessionState });
     const allowed2 = buildAllowedSet(projection2);
@@ -702,6 +726,10 @@ describe('mid-run skill tool activation (end-to-end)', () => {
     // Simulate skill_load output appended as a tool result in the same run
     const historyTurn2: Message[] = [
       ...historyTurn1,
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'skill-load-1', name: 'skill_load', input: { skill_id: 'deploy' } }],
+      },
       {
         role: 'user',
         content: [
@@ -885,8 +913,8 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 1: both skills active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     const result1 = resolveTools(history1);
     expect(result1.toolDefinitions).toHaveLength(5); // 2 base + 3 skill tools
@@ -895,7 +923,7 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 2: oncall marker removed from history (truncated)
     const history2: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const result2 = resolveTools(history2);
 
@@ -917,8 +945,8 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 1: both skills active, both tools allowed
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     const result1 = resolveTools(history1);
     expect(result1.allowedToolNames.has('oncall_page')).toBe(true);
@@ -926,7 +954,7 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 2: oncall marker gone — its tool should be blocked
     const history2: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const result2 = resolveTools(history2);
 
@@ -949,8 +977,8 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 1: both active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     projectSkillTools(history1, { previouslyActiveSkillIds: sessionState });
 
@@ -959,7 +987,7 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 2: deploy marker gone
     const history2: Message[] = [
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     projectSkillTools(history2, { previouslyActiveSkillIds: sessionState });
 
@@ -978,8 +1006,8 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 1: both skills active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     const result1 = resolveTools(history1);
     expect(result1.toolDefinitions).toHaveLength(4); // 2 base + 2 skill
@@ -1021,7 +1049,7 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 1: deploy active
     const history1: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const result1 = resolveTools(history1);
     expect(result1.allowedToolNames.has('deploy_run')).toBe(true);
@@ -1033,7 +1061,7 @@ describe('context-derived deactivation regression', () => {
 
     // Turn 3: marker reappears — reactivated
     const history3: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
     ];
     const result3 = resolveTools(history3);
     expect(result3.allowedToolNames.has('deploy_run')).toBe(true);
@@ -1110,7 +1138,7 @@ describe('slash preactivation through session processing', () => {
 
     // History has an oncall marker from a previous exchange
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
 
     // deploy is preactivated via slash, oncall is from history
@@ -1163,7 +1191,7 @@ describe('bundled skill: gmail', () => {
     mockManifests = { gmail: makeManifest([...GMAIL_TOOL_NAMES]) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="gmail" />'),
+      ...skillLoadMessages('<loaded_skill id="gmail" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -1210,7 +1238,7 @@ describe('bundled skill: claude-code', () => {
     mockManifests = { 'claude-code': makeManifest(['claude_code']) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="claude-code" />'),
+      ...skillLoadMessages('<loaded_skill id="claude-code" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -1253,7 +1281,7 @@ describe('bundled skill: weather', () => {
     mockManifests = { weather: makeManifest(['get_weather']) };
 
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="weather" />'),
+      ...skillLoadMessages('<loaded_skill id="weather" />'),
     ];
 
     const result = projectSkillTools(history, { previouslyActiveSkillIds: sessionState });
@@ -1302,8 +1330,8 @@ describe('resetSkillToolProjection', () => {
 
     // Activate both skills
     const history: Message[] = [
-      toolResultMsg('<loaded_skill id="deploy" />'),
-      toolResultMsg('<loaded_skill id="oncall" />'),
+      ...skillLoadMessages('<loaded_skill id="deploy" />'),
+      ...skillLoadMessages('<loaded_skill id="oncall" />'),
     ];
     projectSkillTools(history, { previouslyActiveSkillIds: trackedIds });
     expect(trackedIds.size).toBe(2);
