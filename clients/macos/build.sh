@@ -45,18 +45,33 @@ RESOURCES_DIR="$CONTENTS/Resources"
 DISPLAY_VERSION="${DISPLAY_VERSION:-0.1.0}"
 BUILD_VERSION="${BUILD_VERSION:-1}"
 
+CMD="${1:-build}"
+
 # Signing identity (overridable via env for CI)
+# Auto-detect any valid code signing certificate in keychain
 if [ -z "${SIGN_IDENTITY:-}" ]; then
+    # Try Developer ID Application first (for distribution)
     SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
         | grep "Developer ID Application" \
         | head -1 \
         | sed 's/.*"\(.*\)"/\1/' || true)
+
+    # Fall back to Apple Development certificate (for local dev)
+    if [ -z "$SIGN_IDENTITY" ]; then
+        SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+            | grep -E "(Apple Development|Mac Developer)" \
+            | head -1 \
+            | sed 's/.*"\(.*\)"/\1/' || true)
+    fi
+
+    # Fall back to adhoc signing (no certificate)
     if [ -z "$SIGN_IDENTITY" ]; then
         SIGN_IDENTITY="-"
     fi
 fi
 
-CMD="${1:-build}"
+# Export SIGN_IDENTITY so nested invocations (watch mode) inherit it
+export SIGN_IDENTITY
 
 case "$CMD" in
     test)
