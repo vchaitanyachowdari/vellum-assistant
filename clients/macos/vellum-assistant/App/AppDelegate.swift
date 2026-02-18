@@ -484,6 +484,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Give BrowserPiPManager a reference to DaemonClient for sending interactive input
         browserPiPManager.daemonClient = daemonClient
 
+        daemonClient.onBrowserCDPRequest = { [weak self] msg in
+            Task { @MainActor in
+                await self?.handleBrowserCDPRequest(msg)
+            }
+        }
+
+
         // Reload webviews for surfaces whose app files changed (cross-session broadcast)
         daemonClient.onAppFilesChanged = { [weak self] appId in
             guard let self else { return }
@@ -1021,4 +1028,110 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         secretPromptManager.dismissAll()
         daemonLauncher.stop()
     }
+
+    // MARK: - Browser CDP Request Handling
+
+    @MainActor
+    private func handleBrowserCDPRequest(_ msg: BrowserCDPRequestMessage) async {
+        // Show confirmation dialog
+        let alert = NSAlert()
+        alert.messageText = "Browser Remote Control"
+        alert.informativeText = "To control your browser, Chrome needs to be restarted with remote debugging enabled. Your tabs will be automatically restored."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Restart Chrome")
+        alert.addButton(withTitle: "Use Background Browser")
+
+        // Add "Always launch" checkbox
+        let checkbox = NSButton(checkboxWithTitle: "Always launch Chrome with remote debugging", target: nil, action: nil)
+        alert.accessoryView = checkbox
+
+        let response = alert.runModal()
+
+        if response == .alertFirstButtonReturn {
+            // User chose to restart Chrome
+            var success = false
+            if let chrome = ChromeAccessibilityHelper.findRunningChrome() {
+                success = await ChromeAccessibilityHelper.restartChromeForCDP(app: chrome)
+            } else {
+                // Chrome not running — launch it with flags
+                if let chromeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") {
+                    do {
+                        let config = NSWorkspace.OpenConfiguration()
+                        config.arguments = ["--remote-debugging-port=9222", "--force-renderer-accessibility"]
+                        config.activates = true
+                        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                            NSWorkspace.shared.openApplication(at: chromeURL, configuration: config) { _, error in
+                                if let error {
+                                    continuation.resume(throwing: error)
+                                } else {
+                                    continuation.resume()
+                                }
+                            }
+                        }
+                        // Poll for CDP availability instead of blind sleep
+                        success = await Self.pollForCDP()
+                    } catch {
+                        success = false
+                    }
+                }
+            }
+
+            // Handle "Always launch" checkbox
+            if checkbox.state == .on {
+                createChromeDebugLaunchAgent()
+            }
+
+            try? daemonClient.send(BrowserCDPResponseMessage(sessionId: msg.sessionId, success: success))
+        } else {
+            // User chose background browser
+            try? daemonClient.send(BrowserCDPResponseMessage(sessionId: msg.sessionId, success: false, declined: true))
+        }
+    }
+
+    /// Poll http://localhost:9222/json/version until CDP responds or we time out.
+    private static func pollForCDP(maxAttempts: Int = 10, intervalNs: UInt64 = 1_000_000_000) async -> Bool {
+        for _ in 0..<maxAttempts {
+            try? await Task.sleep(nanoseconds: intervalNs)
+            if let url = URL(string: "http://localhost:9222/json/version"),
+               let (_, response) = try? await URLSession.shared.data(from: url),
+               let http = response as? HTTPURLResponse,
+               http.statusCode == 200 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func createChromeDebugLaunchAgent() {
+        let plistContent = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>com.vellum.chrome-debug</string>
+            <key>ProgramArguments</key>
+            <array>
+                <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
+                <string>--remote-debugging-port=9222</string>
+                <string>--force-renderer-accessibility</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+        </dict>
+        </plist>
+        """
+
+        let launchAgentsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+        let plistPath = launchAgentsDir.appendingPathComponent("com.vellum.chrome-debug.plist")
+
+        do {
+            try FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
+            try plistContent.write(to: plistPath, atomically: true, encoding: .utf8)
+        } catch {
+            // Best effort — log but don't fail
+        }
+    }
+
 }
