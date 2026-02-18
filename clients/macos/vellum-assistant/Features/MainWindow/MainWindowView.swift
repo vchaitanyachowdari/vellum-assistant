@@ -1279,6 +1279,7 @@ struct MainWindowView: View {
                 surfaceManager: surfaceManager,
                 daemonClient: daemonClient,
                 trafficLightPadding: trafficLightPadding,
+                isSidebarOpen: sidebarOpen,
                 isPublishing: $isPublishing,
                 publishedUrl: $publishedUrl,
                 publishError: $publishError,
@@ -1605,6 +1606,7 @@ private struct DynamicWorkspaceWrapper: View {
     let surfaceManager: SurfaceManager
     let daemonClient: DaemonClient
     let trafficLightPadding: CGFloat
+    let isSidebarOpen: Bool
     @Binding var isPublishing: Bool
     @Binding var publishedUrl: String?
     @Binding var publishError: String?
@@ -1832,7 +1834,7 @@ private struct DynamicWorkspaceWrapper: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close workspace")
                 }
-                .padding(.leading, VSpacing.lg)
+                .padding(.leading, isSidebarOpen ? VSpacing.lg : trafficLightPadding)
                 .padding(.trailing, VSpacing.xl)
                 .padding(.top, VSpacing.md)
 
