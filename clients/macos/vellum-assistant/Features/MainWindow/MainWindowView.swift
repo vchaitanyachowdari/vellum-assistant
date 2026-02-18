@@ -36,6 +36,7 @@ struct MainWindowView: View {
     @AppStorage("threadDrawerWidth") private var threadDrawerWidth: Double = 240
     @AppStorage("sidePanelWidth") private var sidePanelWidth: Double = 400
     @AppStorage("homeBaseDashboardDefaultEnabled") private var homeBaseDashboardDefaultEnabled: Bool = false
+    @AppStorage("homeBaseDashboardAutoEnabled") private var homeBaseDashboardAutoEnabled: Bool = false
     @State private var drawerDragStartWidth: Double?
     @State private var drawerDragStartAvailableWidth: CGFloat?
     @State private var isDrawerDragging: Bool = false
@@ -157,6 +158,13 @@ struct MainWindowView: View {
 
     private func requestHomeBaseDashboardIfNeeded() {
         guard !isBootstrapOnboardingActive else { return }
+        // Auto-enable the dashboard once after bootstrap completes.
+        // Uses a one-time sentinel so users can later disable it without
+        // having it force-re-enabled on every launch.
+        if !homeBaseDashboardAutoEnabled {
+            homeBaseDashboardAutoEnabled = true
+            homeBaseDashboardDefaultEnabled = true
+        }
         guard homeBaseDashboardDefaultEnabled else { return }
         guard daemonClient.isConnected else { return }
         guard !requestedHomeBaseAtLaunch else { return }
@@ -458,7 +466,15 @@ struct MainWindowView: View {
                 if let surface = windowState.activeDynamicParsedSurface,
                    case .dynamicPage(let dpData) = surface.data,
                    let appId = dpData.appId {
-                    windowState.selection = .app(appId)
+                    // Auto-dock chat alongside the app so the user can
+                    // keep chatting while viewing the surface.
+                    let threadId = threadManager.activeThreadId ?? threadManager.visibleThreads.first?.id
+                    if let threadId {
+                        threadManager.selectThread(id: threadId)
+                        windowState.setAppEditing(appId: appId, threadId: threadId)
+                    } else {
+                        windowState.selection = .app(appId)
+                    }
                 } else {
                     windowState.selection = .app(msg.surfaceId)
                 }
