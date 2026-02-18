@@ -489,6 +489,7 @@ extension ChatViewModel {
             refinementStreamingText = nil
             cancelledDuringRefinement = false
             isThinking = false
+            pendingVoiceMessage = false
             let wasCancelling = isCancelling
             isCancelling = false
             // Snapshot turn-specific state before reset so the secret_blocked
@@ -827,6 +828,7 @@ extension ChatViewModel {
             refinementStreamingText = nil
             cancelledDuringRefinement = false
             isThinking = false
+            pendingVoiceMessage = false
             let wasCancelling = isCancelling
             isCancelling = false
             if let existingId = currentAssistantMessageId,
