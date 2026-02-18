@@ -631,12 +631,12 @@ struct MainWindowView: View {
             .frame(height: 36)
 
             NewConversationButton(action: { windowState.selection = nil; threadManager.createThread() })
-                .padding(.horizontal, VSpacing.sm)
+                .padding(.horizontal, VSpacing.md)
                 .padding(.top, VSpacing.md)
-                .padding(.bottom, VSpacing.lg)
+                .padding(.bottom, VSpacing.xl)
 
             ScrollView {
-                VStack(spacing: VSpacing.xl) {
+                VStack(spacing: VSpacing.xxl) {
                     // MARK: Threads Section
                     VStack(spacing: VSpacing.xs) {
                         SidebarSectionHeader(title: "Threads")
@@ -1333,6 +1333,7 @@ private struct NewConversationButton: View {
 
     var body: some View {
         VButton(label: "New conversation", icon: "plus", style: .primary, isFullWidth: true, action: action)
+            .controlSize(.small)
     }
 }
 
