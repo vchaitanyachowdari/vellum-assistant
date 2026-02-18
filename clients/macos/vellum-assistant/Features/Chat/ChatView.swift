@@ -619,10 +619,14 @@ struct ChatView: View {
                         }
                     }
 
-                    if isThinking {
-                        ThinkingIndicator(label: !hasEverSentMessage && messages.contains(where: { $0.role == .user }) ? "Waking up..." : "Thinking")
-                            .id("thinking-indicator")
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    if isThinking && !(messages.last?.isStreaming == true) {
+                        RunningIndicator(
+                            label: !hasEverSentMessage && messages.contains(where: { $0.role == .user }) ? "Waking up..." : "Thinking",
+                            showIcon: false
+                        )
+                        .frame(maxWidth: 520, alignment: .leading)
+                        .id("thinking-indicator")
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
 
                     // Invisible anchor at the very bottom of all content
@@ -2350,12 +2354,14 @@ private struct MarkdownTableView: View {
     }
 }
 
-// MARK: - Thinking Indicator
+// MARK: - Running Indicator
 
-/// Minimal in-progress indicator for tool execution, matching ThinkingIndicator style.
+/// Minimal in-progress indicator for thinking and tool execution.
 /// Supports progressive labels that cycle on a timer for long-running tools.
 private struct RunningIndicator: View {
     var label: String = "Running"
+    /// Whether to show the terminal icon (appropriate for tool execution states).
+    var showIcon: Bool = true
     /// Optional sequence of labels to cycle through over time.
     var progressiveLabels: [String] = []
     /// Seconds between each label transition.
@@ -2390,9 +2396,11 @@ private struct RunningIndicator: View {
 
     private var indicatorContent: some View {
         HStack(spacing: VSpacing.xs) {
-            Image(systemName: "terminal")
-                .font(.system(size: 10))
-                .foregroundColor(VColor.textSecondary)
+            if showIcon {
+                Image(systemName: "terminal")
+                    .font(.system(size: 10))
+                    .foregroundColor(VColor.textSecondary)
+            }
 
             Text(displayLabel)
                 .font(VFont.caption)
@@ -2479,57 +2487,6 @@ private struct CodePreviewView: View {
             return lines.suffix(30).joined(separator: "\n")
         }
         return code
-    }
-}
-
-private struct ThinkingIndicator: View {
-    var label: String = "Thinking"
-    @State private var phase: Int = 0
-    @State private var timer: Timer?
-
-    var body: some View {
-        HStack(spacing: VSpacing.sm) {
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(VColor.textSecondary)
-                        .frame(width: 6, height: 6)
-                        .scaleEffect(dotScale(for: index))
-                        .opacity(dotOpacity(for: index))
-                }
-            }
-
-            Text(label)
-                .font(VFont.body)
-                .foregroundColor(VColor.textSecondary)
-
-            Spacer()
-        }
-        .padding(.horizontal, VSpacing.md)
-        .padding(.vertical, VSpacing.sm)
-        .background(
-            RoundedRectangle(cornerRadius: VRadius.lg)
-                .fill(VColor.backgroundSubtle.opacity(0.5))
-        )
-        .frame(maxWidth: 160, alignment: .leading)
-        .onAppear { startAnimation() }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    private func dotOpacity(for index: Int) -> Double {
-        phase == index ? 1.0 : 0.35
-    }
-
-    private func dotScale(for index: Int) -> CGFloat {
-        phase == index ? 1.15 : 0.85
-    }
-
-    private func startAnimation() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            withAnimation(.easeInOut(duration: 0.4)) {
-                phase = (phase + 1) % 3
-            }
-        }
     }
 }
 
