@@ -141,7 +141,8 @@ export async function executeBrowserNavigate(
     // Install request interception to block redirects/sub-requests to private networks.
     // This prevents SSRF bypass via server-side redirects and DNS rebinding attacks,
     // since Playwright follows redirects internally and performs its own DNS resolution.
-    if (!allowPrivateNetwork) {
+    // CDP mode skips route interception since page.route() may not work with connectOverCDP.
+    if (!allowPrivateNetwork && browserManager.browserMode !== 'cdp') {
       routeHandler = async (route, request) => {
         try {
           const reqUrl = request.url();
