@@ -258,7 +258,10 @@ extension ChatViewModel {
                 }
             } else {
                 // Create new assistant message
-                let msg = ChatMessage(role: .assistant, text: delta.text, isStreaming: true)
+                var msg = ChatMessage(role: .assistant, text: delta.text, isStreaming: true)
+                if currentTurnUserText == "/models" {
+                    msg.modelList = ModelListData()
+                }
                 currentAssistantMessageId = msg.id
                 messages.append(msg)
                 lastContentWasToolCall = false
@@ -349,6 +352,7 @@ extension ChatViewModel {
                 }
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             // Reset processing messages to sent
@@ -375,6 +379,7 @@ extension ChatViewModel {
                 messages.removeSubrange((lastUserIndex + 1)...)
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
 
@@ -410,6 +415,7 @@ extension ChatViewModel {
                 messages[index].streamingCodeToolName = nil
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             // Reset processing messages to sent
@@ -434,10 +440,12 @@ extension ChatViewModel {
         case .messageDequeued(let msg):
             guard belongsToSession(msg.sessionId) else { return }
             pendingQueuedCount = max(0, pendingQueuedCount - 1)
-            // Mark the associated user message as processing
+            // Mark the associated user message as processing and track its text
+            // so assistantTextDelta tags the response correctly.
             if let messageId = requestIdToMessageId.removeValue(forKey: msg.requestId),
                let index = messages.firstIndex(where: { $0.id == messageId }) {
                 messages[index].status = .processing
+                currentTurnUserText = messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             // Recompute positions for remaining queued messages
             for i in messages.indices {
@@ -462,6 +470,7 @@ extension ChatViewModel {
                 messages[index].streamingCodeToolName = nil
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             // Reset processing messages to sent
@@ -488,6 +497,7 @@ extension ChatViewModel {
                 messages[index].streamingCodeToolName = nil
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             if !wasCancelling {
@@ -797,6 +807,7 @@ extension ChatViewModel {
                 messages[index].streamingCodeToolName = nil
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             // When the user intentionally cancelled, suppress both the typed

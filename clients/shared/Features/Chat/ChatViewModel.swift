@@ -89,6 +89,10 @@ public final class ChatViewModel: ObservableObject {
     /// tasks so that a cancelled loop's cleanup doesn't clear a newer replacement.
     private var messageLoopGeneration: UInt64 = 0
     var currentAssistantMessageId: UUID?
+    /// The trimmed user text that initiated the current assistant turn.
+    /// Used to tag the assistant message (e.g. modelList for "/models") without
+    /// scanning the whole transcript, which would be fragile under queued messages.
+    var currentTurnUserText: String?
     /// Tracks whether the current assistant message has received any text content.
     /// Used to determine `arrivedBeforeText` for each tool call in the message.
     var currentAssistantHasText: Bool = false
@@ -200,6 +204,11 @@ public final class ChatViewModel: ObservableObject {
             return
         }
 
+        // When "/models" is sent, also refresh configuredProviders so the table UI has fresh data
+        if text == "/models" && !hasSkillInvocation {
+            try? daemonClient.send(ModelGetRequestMessage())
+        }
+
         // Fire auto-title callback on the first user message
         if !text.isEmpty, let callback = onFirstUserMessage {
             onFirstUserMessage = nil
@@ -249,6 +258,13 @@ public final class ChatViewModel: ObservableObject {
 
         let ipcAttachments: [IPCAttachment]? = attachments.isEmpty ? nil : attachments.map {
             IPCAttachment(filename: $0.filename, mimeType: $0.mimeType, data: $0.data, extractedText: nil)
+        }
+
+        // Track the user text for this turn so assistantTextDelta can tag the
+        // response correctly (e.g. modelList for "/models") without scanning the
+        // whole transcript. For queued messages this is set in messageDequeued.
+        if !willBeQueued {
+            currentTurnUserText = text
         }
 
         if sessionId == nil {
@@ -514,6 +530,7 @@ public final class ChatViewModel: ObservableObject {
                 }
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             pendingQueuedCount = 0
@@ -555,6 +572,7 @@ public final class ChatViewModel: ObservableObject {
                 }
             }
             currentAssistantMessageId = nil
+            currentTurnUserText = nil
             currentAssistantHasText = false
             lastContentWasToolCall = false
             pendingQueuedCount = 0
@@ -609,6 +627,7 @@ public final class ChatViewModel: ObservableObject {
             self.isCancelling = false
             self.isSending = false
             self.currentAssistantMessageId = nil
+            self.currentTurnUserText = nil
             self.currentAssistantHasText = false
             self.lastContentWasToolCall = false
             self.pendingQueuedCount = 0
@@ -991,6 +1010,15 @@ public final class ChatViewModel: ObservableObject {
             }
 
             chatMessages.append(chatMsg)
+        }
+
+        // Tag assistant messages that follow a "/models" user message so
+        // the client renders the table UI instead of plain markdown.
+        for i in chatMessages.indices {
+            if chatMessages[i].role == .user && chatMessages[i].text.trimmingCharacters(in: .whitespacesAndNewlines) == "/models",
+               i + 1 < chatMessages.count && chatMessages[i + 1].role == .assistant {
+                chatMessages[i + 1].modelList = ModelListData()
+            }
         }
 
         let hasUserSentMessages = messages.contains { $0.role == .user }
