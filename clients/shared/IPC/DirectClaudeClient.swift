@@ -8,7 +8,9 @@ import Foundation
 @MainActor
 public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
 
-    public var isConnected: Bool { apiKey != nil }
+    /// Always `true` — standalone mode doesn't require a persistent connection.
+    /// API key presence is checked at send time so the chat UI is always accessible.
+    public var isConnected: Bool { true }
     public var isBlobTransportAvailable: Bool { false }
 
     private var apiKey: String? {
@@ -20,7 +22,7 @@ public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
 
     private var continuations: [UUID: AsyncStream<ServerMessage>.Continuation] = [:]
     private var activeTasks: [String: Task<Void, Never>] = [:] // sessionId → stream task
-    private var pendingMessages: [[String: Any]] = [] // conversation history
+    private var pendingMessages: [String: [[String: Any]]] = [:] // sessionId → conversation history
 
     public init() {}
 
@@ -50,16 +52,17 @@ public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
     }
 
     public func connect() async throws {
-        guard apiKey != nil else {
-            throw DirectClientError.noAPIKey
-        }
-        // No persistent connection needed — the Anthropic API is stateless HTTP
+        // No persistent connection needed — the Anthropic API is stateless HTTP.
+        // API key presence is validated at send time to keep the chat UI accessible
+        // even when no key is yet configured.
     }
 
     public func disconnect() {
         for task in activeTasks.values { task.cancel() }
         activeTasks.removeAll()
         pendingMessages.removeAll()
+        for continuation in continuations.values { continuation.finish() }
+        continuations.removeAll()
     }
 
     // MARK: - Private Message Handlers
@@ -75,15 +78,27 @@ public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
     }
 
     private func handleUserMessage(_ msg: UserMessageMessage) {
-        guard let key = apiKey else { return }
+        guard let key = apiKey else {
+            // No API key — emit an error message so the user sees actionable feedback
+            let sessionId = msg.sessionId
+            let errMsg = ServerMessage.sessionError(SessionErrorMessage(
+                sessionId: sessionId,
+                code: .providerApi,
+                userMessage: "No API key configured. Go to Settings → Anthropic API Key to add your key.",
+                retryable: false
+            ))
+            broadcast(errMsg)
+            broadcast(.messageComplete(MessageCompleteMessage(sessionId: sessionId)))
+            return
+        }
         let sessionId = msg.sessionId
 
-        // Add user message to conversation history
+        // Add user message to this session's conversation history
         let userContent = msg.content ?? ""
-        pendingMessages.append(["role": "user", "content": userContent])
+        pendingMessages[sessionId, default: []].append(["role": "user", "content": userContent])
 
         let task = Task { @MainActor in
-            await self.streamCompletion(sessionId: sessionId, apiKey: key, messages: self.pendingMessages)
+            await self.streamCompletion(sessionId: sessionId, apiKey: key, messages: self.pendingMessages[sessionId] ?? [])
         }
         activeTasks[sessionId] = task
     }
@@ -115,7 +130,28 @@ public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
         var assistantText = ""
 
         do {
-            let (bytes, _) = try await URLSession.shared.bytes(for: request)
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                let body = try await { () async throws -> String in
+                    var raw = ""
+                    for try await line in bytes.lines { raw += line }
+                    return raw
+                }()
+                let userMessage: String
+                if let data = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let error = json["error"] as? [String: Any],
+                   let msg = error["message"] as? String {
+                    userMessage = msg
+                } else {
+                    userMessage = "API error \(http.statusCode). Check your API key in Settings."
+                }
+                broadcast(.sessionError(SessionErrorMessage(sessionId: sessionId, code: .providerApi, userMessage: userMessage, retryable: false)))
+                broadcast(.messageComplete(MessageCompleteMessage(sessionId: sessionId)))
+                activeTasks.removeValue(forKey: sessionId)
+                return
+            }
 
             for try await line in bytes.lines {
                 if Task.isCancelled { break }
@@ -153,9 +189,9 @@ public final class DirectClaudeClient: ObservableObject, DaemonClientProtocol {
             }
         }
 
-        // Append the full assistant reply to conversation history for multi-turn support
+        // Append the full assistant reply to this session's history for multi-turn support
         if !assistantText.isEmpty {
-            pendingMessages.append(["role": "assistant", "content": assistantText])
+            pendingMessages[sessionId, default: []].append(["role": "assistant", "content": assistantText])
         }
 
         broadcast(.messageComplete(MessageCompleteMessage(sessionId: sessionId)))

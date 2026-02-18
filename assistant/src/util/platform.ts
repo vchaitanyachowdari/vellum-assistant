@@ -102,6 +102,47 @@ export function getSessionTokenPath(): string {
   return join(getRootDir(), 'session-token');
 }
 
+/**
+ * Returns the TCP port the daemon should listen on for iOS clients.
+ * Reads VELLUM_DAEMON_TCP_PORT env var; defaults to 8765.
+ */
+export function getTCPPort(): number {
+  const override = process.env.VELLUM_DAEMON_TCP_PORT?.trim();
+  if (override) {
+    const port = parseInt(override, 10);
+    if (!isNaN(port) && port > 0 && port <= 65535) return port;
+  }
+  return 8765;
+}
+
+/**
+ * Returns whether the daemon TCP listener should be enabled.
+ * Resolution order (first match wins):
+ *   1. VELLUM_DAEMON_TCP_ENABLED env var ('true'/'1' → on, 'false'/'0' → off)
+ *   2. Presence of the flag file ~/.vellum/tcp-enabled (exists → on)
+ *   3. Default: false
+ *
+ * The flag-file check makes it easy to enable TCP in dev without restarting
+ * the shell: `touch ~/.vellum/tcp-enabled && kill -USR1 <daemon-pid>`.
+ * The macOS DaemonLauncher also sets the env var for bundled-binary deployments.
+ */
+export function isTCPEnabled(): boolean {
+  const override = process.env.VELLUM_DAEMON_TCP_ENABLED?.trim();
+  if (override === 'true' || override === '1') return true;
+  if (override === 'false' || override === '0') return false;
+  return existsSync(join(getRootDir(), 'tcp-enabled'));
+}
+
+/**
+ * Returns the hostname/address for the TCP listener.
+ * Reads VELLUM_DAEMON_TCP_HOST env var; defaults to '127.0.0.1' (localhost only).
+ * Set VELLUM_DAEMON_TCP_HOST=0.0.0.0 to accept connections from all interfaces
+ * (required for real iOS device connections over a local network).
+ */
+export function getTCPHost(): string {
+  return process.env.VELLUM_DAEMON_TCP_HOST?.trim() || '127.0.0.1';
+}
+
 export function getHttpTokenPath(): string {
   return join(getRootDir(), 'http-token');
 }

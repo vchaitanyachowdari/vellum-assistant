@@ -3,12 +3,31 @@ import UIKit
 import UserNotifications
 import VellumAssistantShared
 
+/// Observable wrapper that holds the active DaemonClientProtocol implementation.
+/// Allows SwiftUI views to receive the client via @EnvironmentObject without
+/// requiring DaemonClient to be the concrete type.
+@MainActor
+final class ClientProvider: ObservableObject {
+    @Published var client: any DaemonClientProtocol
+
+    init(client: any DaemonClientProtocol) {
+        self.client = client
+    }
+}
+
 @MainActor
 class AppDelegate: NSObject, UIApplicationDelegate {
-    let daemonClient: DaemonClient
+    let clientProvider: ClientProvider
 
     override init() {
-        self.daemonClient = DaemonClient(config: .fromUserDefaults())
+        let mode = UserDefaults.standard.string(forKey: "connection_mode") ?? ConnectionMode.standalone.rawValue
+        let client: any DaemonClientProtocol
+        if mode == ConnectionMode.connected.rawValue {
+            client = DaemonClient(config: .fromUserDefaults())
+        } else {
+            client = DirectClaudeClient()
+        }
+        self.clientProvider = ClientProvider(client: client)
         super.init()
     }
 
@@ -17,7 +36,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         Task {
-            try? await daemonClient.connect()
+            try? await clientProvider.client.connect()
         }
 
         // Register for push notifications
@@ -65,9 +84,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func sendDeviceTokenToDaemon(_ token: String) async throws {
-        guard daemonClient.isConnected else { return }
+        guard clientProvider.client.isConnected else { return }
         // Send a RegisterDeviceTokenMessage to the daemon so it can route notifications
-        try daemonClient.send(RegisterDeviceTokenMessage(token: token, platform: "ios"))
+        try clientProvider.client.send(RegisterDeviceTokenMessage(token: token, platform: "ios"))
     }
 
     func application(
@@ -83,7 +102,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
 // MARK: - UNUserNotificationCenterDelegate
 
-extension AppDelegate: UNUserNotificationCenterDelegate {
+extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -98,8 +117,8 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 
             Task { @MainActor in
                 // If daemon is connected, send the reply via IPC
-                if self.daemonClient.isConnected, let sid = sessionId {
-                    try? self.daemonClient.send(UserMessageMessage(
+                if self.clientProvider.client.isConnected, let sid = sessionId {
+                    try? self.clientProvider.client.send(UserMessageMessage(
                         sessionId: sid,
                         content: replyText,
                         attachments: nil
