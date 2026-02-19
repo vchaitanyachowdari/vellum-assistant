@@ -231,10 +231,8 @@ describe('policyCallback credential injection', () => {
     }
   });
 
-  test('unresolvable credential ID returns empty headers', async () => {
-    let receivedHeaders: http.IncomingHttpHeaders = {};
-    const echo = http.createServer((req, res) => {
-      receivedHeaders = req.headers;
+  test('unresolvable credential ID is blocked', async () => {
+    const echo = http.createServer((_req, res) => {
       res.writeHead(200);
       res.end('ok');
     });
@@ -250,19 +248,18 @@ describe('policyCallback credential injection', () => {
 
       const session = createSession(CONV_ID, ['cred-vanish'], undefined, DATA_DIR);
 
-      const started = await startSession(session.id);
-
       // Remove the resolution so the policyCallback's resolveById fails at request time
       resolveByIdResults.delete('cred-vanish');
+
+      const started = await startSession(session.id);
 
       const status = await proxyRequest(
         started.port!,
         `http://127.0.0.1:${echoPort}/test`,
       );
 
-      // Should allow through with empty headers (fail-safe)
-      expect(status).toBe(200);
-      expect(receivedHeaders['authorization']).toBeUndefined();
+      // Unresolvable credentials are blocked (fail-closed)
+      expect(status).toBe(403);
     } finally {
       echo.close();
     }
