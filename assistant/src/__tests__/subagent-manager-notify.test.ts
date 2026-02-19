@@ -9,14 +9,14 @@ interface FakeManagedSubagent {
     abort: () => void;
     dispose: () => void;
     messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
-    sendToClient: () => void;
+    sendToClient: (msg: ServerMessage) => void;
     loadFromDb?: () => Promise<void>;
     persistUserMessage?: (msg: string) => string;
     runAgentLoop?: () => Promise<void>;
     usageStats: { inputTokens: number; outputTokens: number; estimatedCost: number };
   };
   state: SubagentState;
-  parentSendToClient: () => void;
+  parentSendToClient: (msg: ServerMessage) => void;
 }
 
 /** Type-safe accessor for SubagentManager's private internals via bracket notation. */
@@ -38,7 +38,7 @@ function injectFakeSubagent(
   manager: SubagentManager,
   subagentId: string,
   state: SubagentState,
-  parentSendToClient?: () => void,
+  parentSendToClient?: (msg: ServerMessage) => void,
 ): void {
   const fakeSession: FakeManagedSubagent['session'] = {
     abort: () => {},
