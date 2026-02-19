@@ -313,11 +313,11 @@ struct MainWindowView: View {
                     windowState.activeDynamicParsedSurface = nil
                 }
 
-                // Close the left sidebar when any right-side content opens to avoid crowding
+                // Close the left sidebar when an app opens to avoid crowding
                 if sidebarOpen {
                     let shouldClose: Bool = {
                         switch newSelection {
-                        case .panel, .app, .appEditing: return true
+                        case .app, .appEditing: return true
                         default: return false
                         }
                     }()
@@ -409,18 +409,30 @@ struct MainWindowView: View {
 
                     Divider().background(VColor.surfaceBorder)
 
-                    // Content area with sidebar drawer overlay
+                    // Content area with sidebar drawer overlay.
+                    // On panel routes the sidebar pushes content via leading padding
+                    // so the panel view is never obscured. On chat routes the sidebar
+                    // floats as an overlay.
                     ZStack(alignment: .leading) {
-                        chatContentView(geometry: geometry)
+                        let sidebarVisible = sidebarOpen && windowState.layoutConfig.left.visible
+                        let sidebarPushesContent: Bool = {
+                            if case .panel = windowState.selection { return true }
+                            return false
+                        }()
+                        let sidebarInset = sidebarVisible && sidebarPushesContent
+                            ? threadDrawerWidth + VSpacing.xs : 0
 
-                        // Sidebar drawer overlay
-                        if sidebarOpen && windowState.layoutConfig.left.visible {
-                            // Sidebar panel + resize handle
+                        chatContentView(geometry: geometry)
+                            .padding(.leading, sidebarInset)
+
+                        // Sidebar drawer
+                        if sidebarVisible {
                             HStack(spacing: 0) {
                                 sidebarView
                                 drawerDragDivider(availableWidth: geometry.size.width / zoomManager.zoomLevel)
                             }
-                            .shadow(color: .black.opacity(0.2), radius: 8, x: 2, y: 0)
+                            .shadow(color: sidebarPushesContent ? .clear : .black.opacity(0.2),
+                                    radius: 8, x: 2, y: 0)
                             .transition(.move(edge: .leading))
                             .animation(nil, value: threadDrawerWidth)
                         }
@@ -982,12 +994,21 @@ struct MainWindowView: View {
                         let newWidth = initialWidth + Double(deltaX)
                         let minDrawerWidth: CGFloat = 200
                         let minMainContent: CGFloat = 300
-                        let sidePanelVisible =
-                            (windowState.activePanel != nil &&
-                             !(windowState.isDynamicExpanded && windowState.activePanel == .generated) &&
-                             windowState.activePanel != .directory) ||
-                            (windowState.isDynamicExpanded && windowState.activePanel == .generated && windowState.isChatDockOpen)
-                        let activePanelWidth: CGFloat = sidePanelVisible ? sidePanelWidth : 0
+                        // Only subtract side panel width when a right-side split panel is
+                        // actually rendered. Full-window panels (identity, agent, settings,
+                        // debug, doctor, directory) don't have a right split.
+                        let hasRightSplitPanel: Bool = {
+                            guard let panel = windowState.activePanel else { return false }
+                            switch panel {
+                            case .documentEditor:
+                                return true
+                            case .generated:
+                                return windowState.isDynamicExpanded && windowState.isChatDockOpen
+                            default:
+                                return false
+                            }
+                        }()
+                        let activePanelWidth: CGFloat = hasRightSplitPanel ? sidePanelWidth : 0
                         let maxAllowed = initialAvailableWidth - minMainContent - VSpacing.xs - (VSpacing.xs * 2) - activePanelWidth
 
                         // Update width without animation to prevent jitter
