@@ -1624,7 +1624,8 @@ private struct ActiveChatViewWrapper: View {
                 enabledSince: settingsStore.mediaEmbedsEnabledSince,
                 allowedDomains: settingsStore.mediaEmbedVideoAllowlistDomains
             ),
-            isTemporaryChat: isTemporaryChat
+            isTemporaryChat: isTemporaryChat,
+            activeSubagents: viewModel.activeSubagents
         )
     }
 }
