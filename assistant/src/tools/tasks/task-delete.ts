@@ -2,7 +2,7 @@ import { RiskLevel } from '../../permissions/types.js';
 import type { Tool, ToolContext, ToolExecutionResult } from '../types.js';
 import type { ToolDefinition } from '../../providers/types.js';
 import { deleteTask, deleteTasks, getTask } from '../../tasks/task-store.js';
-import { getWorkItem, deleteWorkItem } from '../../work-items/work-item-store.js';
+import { removeWorkItemFromQueue } from '../../work-items/work-item-store.js';
 import { getLogger } from '../../util/logger.js';
 
 const log = getLogger('task-delete');
@@ -50,11 +50,10 @@ class TaskDeleteTool implements Tool {
         if (!deleted) {
           // The LLM may pass a work item ID instead of a task template ID.
           // Fall back to removing from the task queue so the user's intent succeeds.
-          const workItem = getWorkItem(ids[0]);
-          if (workItem) {
-            deleteWorkItem(workItem.id);
-            log.info({ inputId: ids[0], resolvedWorkItemId: workItem.id, fallback: true, deletedCount: 1 }, 'deleted via work item fallback');
-            return { content: `Removed "${workItem.title}" from the task queue.`, isError: false };
+          const result = removeWorkItemFromQueue(ids[0]);
+          if (result.success) {
+            log.info({ inputId: ids[0], fallback: true, deletedCount: 1 }, 'deleted via work item fallback');
+            return { content: result.message, isError: false };
           }
           log.warn({ inputId: ids[0] }, 'no task or work item found for deletion');
           return { content: `No task found with ID ${ids[0]}`, isError: true };
@@ -73,11 +72,10 @@ class TaskDeleteTool implements Tool {
           taskIds.push(id);
           taskTitles.push(task.title);
         } else {
-          const workItem = getWorkItem(id);
-          if (workItem) {
-            deleteWorkItem(workItem.id);
-            log.info({ inputId: id, resolvedWorkItemId: workItem.id, fallback: true }, 'deleted work item in batch (fallback)');
-            workItemTitles.push(workItem.title);
+          const result = removeWorkItemFromQueue(id);
+          if (result.success) {
+            log.info({ inputId: id, fallback: true }, 'deleted work item in batch (fallback)');
+            workItemTitles.push(result.title);
           } else {
             log.warn({ inputId: id }, 'batch delete: no task or work item found');
           }
