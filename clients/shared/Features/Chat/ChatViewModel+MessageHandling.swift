@@ -273,6 +273,8 @@ extension ChatViewModel {
                     msg.modelPicker = ModelPickerData()
                 } else if currentTurnUserText == "/models" {
                     msg.modelList = ModelListData()
+                } else if currentTurnUserText == "/commands" {
+                    msg.commandList = CommandListData()
                 }
                 currentAssistantMessageId = msg.id
                 messages.append(msg)
