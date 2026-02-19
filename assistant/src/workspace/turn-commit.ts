@@ -11,6 +11,12 @@
 
 import { getWorkspaceGitService } from './git-service.js';
 import { getLogger } from '../util/logger.js';
+import {
+  DefaultCommitMessageProvider,
+  type CommitContext,
+  type CommitMessageProvider,
+} from './commit-message-provider.js';
+import { getEnrichmentService } from './commit-message-enrichment-service.js';
 
 const log = getLogger('turn-commit');
 
@@ -26,46 +32,6 @@ export interface TurnCommitMetadata {
 }
 
 /**
- * Build a commit message with structured metadata for a turn boundary commit.
- *
- * Format:
- * ```
- * Turn: <summary>
- *
- * Session: sess_xyz
- * Turn: 5
- * Timestamp: 2026-02-18T15:30:00Z
- * Files: 3 changed
- * ```
- */
-function buildCommitMessage(summary: string, metadata: TurnCommitMetadata): string {
-  return [
-    `Turn: ${summary}`,
-    '',
-    `Session: ${metadata.sessionId}`,
-    `Turn: ${metadata.turnNumber}`,
-    `Timestamp: ${metadata.timestamp}`,
-    `Files: ${metadata.filesChanged} changed`,
-  ].join('\n');
-}
-
-/**
- * Build a short summary of what changed from a list of file paths.
- */
-function buildChangeSummary(files: string[]): string {
-  if (files.length === 0) {
-    return 'workspace changes';
-  }
-  if (files.length === 1) {
-    return files[0];
-  }
-  if (files.length <= 3) {
-    return files.join(', ');
-  }
-  return `${files.slice(0, 2).join(', ')} and ${files.length - 2} more`;
-}
-
-/**
  * Attempt a turn-boundary commit for the workspace.
  *
  * Checks the workspace for uncommitted changes. If any are found,
@@ -77,40 +43,62 @@ function buildChangeSummary(files: string[]): string {
  * @param workspaceDir - Absolute path to the workspace directory
  * @param sessionId - Session/conversation identifier
  * @param turnNumber - 1-based turn number within the session
+ * @param provider - Optional commit message provider (defaults to deterministic)
  */
 export async function commitTurnChanges(
   workspaceDir: string,
   sessionId: string,
   turnNumber: number,
+  provider?: CommitMessageProvider,
 ): Promise<void> {
+  const messageProvider = provider ?? new DefaultCommitMessageProvider();
   try {
     const gitService = getWorkspaceGitService(workspaceDir);
+    const commitStartMs = Date.now();
 
     // Atomic status check + commit within a single mutex lock to prevent
     // TOCTOU races with heartbeat commits.
     const { committed, status } = await gitService.commitIfDirty((st) => {
       const uniqueFiles = [...new Set([...st.staged, ...st.modified, ...st.untracked])];
-      const timestamp = new Date().toISOString();
-      const summary = buildChangeSummary(uniqueFiles);
 
-      const metadata: TurnCommitMetadata = {
+      const ctx: CommitContext = {
+        workspaceDir,
+        trigger: 'turn',
         sessionId,
         turnNumber,
-        timestamp,
-        filesChanged: uniqueFiles.length,
+        changedFiles: uniqueFiles,
+        timestampMs: Date.now(),
       };
 
-      return { message: buildCommitMessage(summary, metadata) };
+      return messageProvider.buildImmediateMessage(ctx);
     });
+
+    const commitDurationMs = Date.now() - commitStartMs;
 
     if (committed) {
       const uniqueFiles = [...new Set([...status.staged, ...status.modified, ...status.untracked])];
       log.info(
-        { sessionId, turnNumber, filesChanged: uniqueFiles.length },
+        { sessionId, turnNumber, filesChanged: uniqueFiles.length, durationMs: commitDurationMs },
         'Turn-boundary commit created',
       );
+
+      // Fire-and-forget enrichment — never blocks turn completion
+      try {
+        const commitHash = await gitService.getHeadHash();
+        const ctx: CommitContext = {
+          workspaceDir,
+          trigger: 'turn',
+          sessionId,
+          turnNumber,
+          changedFiles: uniqueFiles,
+          timestampMs: Date.now(),
+        };
+        getEnrichmentService().enqueue({ workspaceDir, commitHash, context: ctx, gitService });
+      } catch (enrichErr) {
+        log.debug({ enrichErr }, 'Failed to enqueue enrichment (non-fatal)');
+      }
     } else {
-      log.debug({ sessionId, turnNumber }, 'No workspace changes to commit for turn');
+      log.debug({ sessionId, turnNumber, durationMs: commitDurationMs }, 'No workspace changes to commit for turn');
     }
   } catch (err) {
     // Never let commit failures propagate — they must not affect the turn

@@ -703,6 +703,44 @@ export const SkillsInstallConfigSchema = z.object({
   }).default('npm'),
 });
 
+export const WorkspaceGitConfigSchema = z.object({
+  turnCommitMaxWaitMs: z
+    .number({ error: 'workspaceGit.turnCommitMaxWaitMs must be a number' })
+    .int('workspaceGit.turnCommitMaxWaitMs must be an integer')
+    .positive('workspaceGit.turnCommitMaxWaitMs must be a positive integer')
+    .default(4000),
+  failureBackoffBaseMs: z
+    .number({ error: 'workspaceGit.failureBackoffBaseMs must be a number' })
+    .int('workspaceGit.failureBackoffBaseMs must be an integer')
+    .positive('workspaceGit.failureBackoffBaseMs must be a positive integer')
+    .default(2000),
+  failureBackoffMaxMs: z
+    .number({ error: 'workspaceGit.failureBackoffMaxMs must be a number' })
+    .int('workspaceGit.failureBackoffMaxMs must be an integer')
+    .positive('workspaceGit.failureBackoffMaxMs must be a positive integer')
+    .default(60000),
+  enrichmentQueueSize: z
+    .number({ error: 'workspaceGit.enrichmentQueueSize must be a number' })
+    .int('workspaceGit.enrichmentQueueSize must be an integer')
+    .positive('workspaceGit.enrichmentQueueSize must be a positive integer')
+    .default(50),
+  enrichmentConcurrency: z
+    .number({ error: 'workspaceGit.enrichmentConcurrency must be a number' })
+    .int('workspaceGit.enrichmentConcurrency must be an integer')
+    .positive('workspaceGit.enrichmentConcurrency must be a positive integer')
+    .default(1),
+  enrichmentJobTimeoutMs: z
+    .number({ error: 'workspaceGit.enrichmentJobTimeoutMs must be a number' })
+    .int('workspaceGit.enrichmentJobTimeoutMs must be an integer')
+    .positive('workspaceGit.enrichmentJobTimeoutMs must be a positive integer')
+    .default(30000),
+  enrichmentMaxRetries: z
+    .number({ error: 'workspaceGit.enrichmentMaxRetries must be a number' })
+    .int('workspaceGit.enrichmentMaxRetries must be an integer')
+    .nonnegative('workspaceGit.enrichmentMaxRetries must be non-negative')
+    .default(2),
+});
+
 export const SwarmConfigSchema = z.object({
   enabled: z
     .boolean({ error: 'swarm.enabled must be a boolean' })
@@ -950,6 +988,15 @@ export const AssistantConfigSchema = z.object({
     install: { nodeManager: 'npm' },
     allowBundled: null,
   }),
+  workspaceGit: WorkspaceGitConfigSchema.default({
+    turnCommitMaxWaitMs: 4000,
+    failureBackoffBaseMs: 2000,
+    failureBackoffMaxMs: 60000,
+    enrichmentQueueSize: 50,
+    enrichmentConcurrency: 1,
+    enrichmentJobTimeoutMs: 30000,
+    enrichmentMaxRetries: 2,
+  }),
 }).superRefine((config, ctx) => {
   if (config.contextWindow.targetInputTokens >= config.contextWindow.maxInputTokens) {
     ctx.addIssue({
@@ -1005,3 +1052,4 @@ export type SkillsLoadConfig = z.infer<typeof SkillsLoadConfigSchema>;
 export type SkillsInstallConfig = z.infer<typeof SkillsInstallConfigSchema>;
 export type SwarmConfig = z.infer<typeof SwarmConfigSchema>;
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+export type WorkspaceGitConfig = z.infer<typeof WorkspaceGitConfigSchema>;
