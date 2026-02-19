@@ -111,7 +111,7 @@ struct ChatView: View {
     @State private var emptyStatePlaceholder: String = placeholderTexts.randomElement()!
     @State private var emptyStateVisible = false
     @State private var identity: IdentityInfo? = IdentityInfo.load()
-    private let appearance = AvatarAppearanceManager.shared
+    @State private var appearance = AvatarAppearanceManager.shared
     @AppStorage("hasEverSentMessage") private var hasEverSentMessage: Bool = false
 
     private static let defaultGreetings = [
@@ -898,6 +898,7 @@ private struct ChatBubble: View {
     var onReportMessage: ((String?) -> Void)?
     var mediaEmbedSettings: MediaEmbedResolverSettings?
 
+    @State private var appearance = AvatarAppearanceManager.shared
     @State private var isHovered = false
     @State private var isRegenerateHovered = false
     @State private var isCopyHovered = false
@@ -986,8 +987,18 @@ private struct ChatBubble: View {
     }
 
     var body: some View {
-        HStack(spacing: VSpacing.sm) {
+        HStack(alignment: .top, spacing: VSpacing.sm) {
             if isUser { Spacer(minLength: 0) }
+
+            if !isUser {
+                Image(nsImage: appearance.chatAvatarImage)
+                    .interpolation(.none)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+                    .padding(.top, 2)
+            }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: VSpacing.sm) {
                 if !isUser && hasInterleavedContent {
