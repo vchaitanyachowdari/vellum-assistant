@@ -85,6 +85,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
     // MARK: - Published State
 
     @Published public var isConnected: Bool = false
+    private var isConnecting: Bool = false
 
     /// Whether blob transport has been verified for this connection.
     /// Resets to `false` on disconnect/reconnect. Only set to `true` after
@@ -331,6 +332,10 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
     /// Reconnect task handle.
     private var reconnectTask: Task<Void, Never>?
 
+    /// Network path monitor — triggers immediate reconnect when network becomes available.
+    private var pathMonitor: NWPathMonitor?
+    private let pathMonitorQueue = DispatchQueue(label: "com.vellum.vellum-assistant.network-monitor", qos: .background)
+
     /// Ping timer task handle.
     private var pingTask: Task<Void, Never>?
 
@@ -376,6 +381,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
         pingTask?.cancel()
         pongTimeoutTask?.cancel()
         blobProbeTask?.cancel()
+        pathMonitor?.cancel()
         connection?.cancel()
     }
 
@@ -402,6 +408,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
         // Disconnect any existing connection without triggering reconnect.
         disconnectInternal(triggerReconnect: false)
 
+        isConnecting = true
         shouldReconnect = true
 
         #if os(macOS)
@@ -462,6 +469,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                 resumed = true
                 log.error("Connection timed out after \(Self.connectTimeout)s")
                 self?.isConnected = false
+                self?.isConnecting = false
                 self?.stopPingTimer()
                 conn.stateUpdateHandler = nil
                 conn.cancel()
@@ -489,6 +497,8 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                                     self.isAuthenticated = true
                                     #endif
                                     self.isConnected = true
+                                    self.isConnecting = false
+                                    self.startNetworkMonitor()
                                     NotificationCenter.default.post(name: .daemonDidReconnect, object: self)
                                     self.reconnectDelay = 1.0
                                     self.startPingTimer()
@@ -499,6 +509,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                                 } catch {
                                     log.error("Daemon authentication failed: \(error.localizedDescription)")
                                     self.isConnected = false
+                                    self.isConnecting = false
                                     self.isAuthenticated = false
                                     self.stopPingTimer()
                                     conn.stateUpdateHandler = nil
@@ -511,6 +522,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                     case .failed(let error):
                         log.error("Connection failed: \(error.localizedDescription)")
                         self.isConnected = false
+                        self.isConnecting = false
                         self.isAuthenticated = false
                         self.stopPingTimer()
                         if !resumed {
@@ -524,6 +536,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                     case .cancelled:
                         log.info("Connection cancelled")
                         self.isConnected = false
+                        self.isConnecting = false
                         self.isAuthenticated = false
                         self.stopPingTimer()
                         if !resumed {
@@ -1133,6 +1146,9 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
         shouldReconnect = triggerReconnect
         reconnectTask?.cancel()
         reconnectTask = nil
+        if !triggerReconnect {
+            stopNetworkMonitor()
+        }
         stopPingTimer()
         #if os(macOS) || os(iOS)
         if let pending = authContinuation {
@@ -1159,6 +1175,7 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
         receiveBuffer = Data()
         cuObservationSequenceBySession.removeAll()
         isConnected = false
+        isConnecting = false
         httpPort = nil
         latestMemoryStatus = nil
 
@@ -1521,6 +1538,46 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
                 if self.shouldReconnect && self.reconnectTask == nil {
                     self.scheduleReconnect()
                 }
+            }
+        }
+    }
+
+    // MARK: - Network Reachability
+
+    private func startNetworkMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                self?.handleNetworkPathChange(path)
+            }
+        }
+        monitor.start(queue: pathMonitorQueue)
+        pathMonitor = monitor
+    }
+
+    private func stopNetworkMonitor() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+    }
+
+    private func handleNetworkPathChange(_ path: NWPath) {
+        guard path.status == .satisfied, !isConnected, !isConnecting, shouldReconnect else { return }
+        log.info("Network available — resetting backoff and reconnecting immediately")
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectDelay = 1.0
+        isConnecting = true
+        Task { @MainActor [weak self] in
+            guard let self, self.shouldReconnect else {
+                self?.isConnecting = false
+                return
+            }
+            do {
+                try await self.connect()
+            } catch {
+                log.error("Immediate reconnect on network change failed: \(error.localizedDescription)")
+                self.scheduleReconnect()
             }
         }
     }
