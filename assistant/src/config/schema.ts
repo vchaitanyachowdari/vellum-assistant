@@ -784,6 +784,46 @@ export const WorkspaceGitConfigSchema = z.object({
   }).default({}),
 });
 
+export const AgentHeartbeatConfigSchema = z.object({
+  enabled: z
+    .boolean({ error: 'agentHeartbeat.enabled must be a boolean' })
+    .default(false),
+  intervalMs: z
+    .number({ error: 'agentHeartbeat.intervalMs must be a number' })
+    .int('agentHeartbeat.intervalMs must be an integer')
+    .positive('agentHeartbeat.intervalMs must be a positive integer')
+    .default(3_600_000),
+  activeHoursStart: z
+    .number({ error: 'agentHeartbeat.activeHoursStart must be a number' })
+    .int('agentHeartbeat.activeHoursStart must be an integer')
+    .min(0, 'agentHeartbeat.activeHoursStart must be >= 0')
+    .max(23, 'agentHeartbeat.activeHoursStart must be <= 23')
+    .optional(),
+  activeHoursEnd: z
+    .number({ error: 'agentHeartbeat.activeHoursEnd must be a number' })
+    .int('agentHeartbeat.activeHoursEnd must be an integer')
+    .min(0, 'agentHeartbeat.activeHoursEnd must be >= 0')
+    .max(23, 'agentHeartbeat.activeHoursEnd must be <= 23')
+    .optional(),
+}).superRefine((config, ctx) => {
+  const hasStart = config.activeHoursStart != null;
+  const hasEnd = config.activeHoursEnd != null;
+  if (hasStart !== hasEnd) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [hasStart ? 'activeHoursEnd' : 'activeHoursStart'],
+      message: 'agentHeartbeat.activeHoursStart and agentHeartbeat.activeHoursEnd must both be set or both be omitted',
+    });
+  }
+  if (hasStart && hasEnd && config.activeHoursStart === config.activeHoursEnd) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['activeHoursEnd'],
+      message: 'agentHeartbeat.activeHoursStart and agentHeartbeat.activeHoursEnd must not be equal (would create an empty window)',
+    });
+  }
+});
+
 export const SwarmConfigSchema = z.object({
   enabled: z
     .boolean({ error: 'swarm.enabled must be a boolean' })
@@ -1061,6 +1101,10 @@ export const AssistantConfigSchema = z.object({
   pricingOverrides: z
     .array(ModelPricingOverrideSchema)
     .default([]),
+  agentHeartbeat: AgentHeartbeatConfigSchema.default({
+    enabled: false,
+    intervalMs: 3_600_000,
+  }),
   swarm: SwarmConfigSchema.default({
     enabled: true,
     maxWorkers: 3,
@@ -1168,6 +1212,7 @@ export type ModelPricingOverride = z.infer<typeof ModelPricingOverrideSchema>;
 export type SkillEntryConfig = z.infer<typeof SkillEntryConfigSchema>;
 export type SkillsLoadConfig = z.infer<typeof SkillsLoadConfigSchema>;
 export type SkillsInstallConfig = z.infer<typeof SkillsInstallConfigSchema>;
+export type AgentHeartbeatConfig = z.infer<typeof AgentHeartbeatConfigSchema>;
 export type SwarmConfig = z.infer<typeof SwarmConfigSchema>;
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 export type WorkspaceGitConfig = z.infer<typeof WorkspaceGitConfigSchema>;
