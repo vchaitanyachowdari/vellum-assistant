@@ -65,6 +65,7 @@ import {
 } from '../calls/twilio-routes.js';
 import { RelayConnection, activeRelayConnections } from '../calls/relay-server.js';
 import type { RelayWebSocketData } from '../calls/relay-server.js';
+import { handleSubscribeAssistantEvents } from './routes/events-routes.js';
 import { consumeCallback, consumeCallbackError } from '../security/oauth-callback-registry.js';
 
 // Re-export shared types so existing consumers don't need to update imports
@@ -758,6 +759,10 @@ export class RuntimeHttpServer {
           body: formBody,
         });
         return await handleConnectAction(fakeReq);
+      }
+
+      if (endpoint === 'events' && req.method === 'GET') {
+        return handleSubscribeAssistantEvents(req, url);
       }
 
       // ── Internal OAuth callback endpoint (gateway → runtime) ──
