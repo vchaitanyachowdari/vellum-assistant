@@ -418,7 +418,6 @@ export function initializeDb(): void {
     CREATE TABLE IF NOT EXISTS llm_usage_events (
       id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL,
-      assistant_id TEXT,
       conversation_id TEXT,
       run_id TEXT,
       request_id TEXT,
@@ -548,6 +547,7 @@ export function initializeDb(): void {
   migrateMemoryItemsScopeSaltedFingerprints(database);
   migrateAssistantIdToSelf(database);
   migrateRemoveAssistantIdColumns(database);
+  migrateLlmUsageEventsDropAssistantId(database);
 
   // Indexes for query performance on large datasets
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_request_logs_conv_created ON llm_request_logs(conversation_id, created_at)`);
@@ -610,7 +610,6 @@ export function initializeDb(): void {
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status)`);
 
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_usage_events_created_at ON llm_usage_events(created_at)`);
-  database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_usage_events_assistant_id ON llm_usage_events(assistant_id)`);
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_usage_events_provider ON llm_usage_events(provider)`);
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_usage_events_model ON llm_usage_events(model)`);
   database.run(/*sql*/ `CREATE INDEX IF NOT EXISTS idx_llm_usage_events_actor ON llm_usage_events(actor)`);
@@ -1438,19 +1437,22 @@ function migrateAssistantIdToSelf(database: ReturnType<typeof drizzle<typeof sch
 }
 
 /**
- * One-shot migration: rebuild the four tables that previously stored assistant_id
- * to remove that column now that all rows are keyed to the implicit single-tenant
- * identity ("self").
+ * One-shot migration: rebuild tables that previously stored assistant_id to remove
+ * that column now that all rows are keyed to the implicit single-tenant identity ("self").
  *
  * Must run AFTER migrateAssistantIdToSelf (which normalises all values to "self")
  * so there are no constraint violations when recreating the tables without the
  * assistant_id dimension.
+ *
+ * Each table section is guarded by a DDL check so this is safe on fresh installs
+ * where the column was never created in the first place.
  *
  * Tables rebuilt:
  *   - conversation_keys       UNIQUE (conversation_key)
  *   - attachments             no structural unique; content-dedup index updated
  *   - channel_inbound_events  UNIQUE (source_channel, external_chat_id, external_message_id)
  *   - message_runs            no unique constraint on assistant_id
+ *   - llm_usage_events        nullable column with no constraint
  */
 function migrateRemoveAssistantIdColumns(database: ReturnType<typeof drizzle<typeof schema>>): void {
   const raw = (database as unknown as { $client: Database }).$client;
@@ -1587,6 +1589,128 @@ function migrateRemoveAssistantIdColumns(database: ReturnType<typeof drizzle<typ
       raw.exec(/*sql*/ `DROP TABLE message_runs`);
       raw.exec(/*sql*/ `ALTER TABLE message_runs_new RENAME TO message_runs`);
     }
+
+    // --- llm_usage_events ---
+    const lueDdl = raw.query(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'llm_usage_events'`,
+    ).get() as { sql: string } | null;
+    if (lueDdl?.sql.includes('assistant_id')) {
+      raw.exec(/*sql*/ `
+        CREATE TABLE llm_usage_events_new (
+          id TEXT PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          conversation_id TEXT,
+          run_id TEXT,
+          request_id TEXT,
+          actor TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL,
+          output_tokens INTEGER NOT NULL,
+          cache_creation_input_tokens INTEGER,
+          cache_read_input_tokens INTEGER,
+          estimated_cost_usd REAL,
+          pricing_status TEXT NOT NULL,
+          metadata_json TEXT
+        )
+      `);
+      raw.exec(/*sql*/ `
+        INSERT INTO llm_usage_events_new (
+          id, created_at, conversation_id, run_id, request_id, actor, provider, model,
+          input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+          estimated_cost_usd, pricing_status, metadata_json
+        )
+        SELECT
+          id, created_at, conversation_id, run_id, request_id, actor, provider, model,
+          input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+          estimated_cost_usd, pricing_status, metadata_json
+        FROM llm_usage_events
+      `);
+      raw.exec(/*sql*/ `DROP TABLE llm_usage_events`);
+      raw.exec(/*sql*/ `ALTER TABLE llm_usage_events_new RENAME TO llm_usage_events`);
+    }
+
+    raw.query(
+      `INSERT OR IGNORE INTO memory_checkpoints (key, value, updated_at) VALUES (?, '1', ?)`,
+    ).run(checkpointKey, Date.now());
+
+    raw.exec('COMMIT');
+  } catch (e) {
+    try { raw.exec('ROLLBACK'); } catch { /* no active transaction */ }
+    throw e;
+  } finally {
+    raw.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
+ * One-shot migration: rebuild llm_usage_events to drop the assistant_id column.
+ *
+ * This is a SEPARATE migration from migrateRemoveAssistantIdColumns so that installs
+ * where the 4-table version of that migration already ran (checkpoint already set)
+ * still get the llm_usage_events column removed. Without a separate checkpoint key,
+ * those installs would skip the llm_usage_events rebuild entirely.
+ *
+ * Safe on fresh installs (DDL guard exits early) and idempotent via checkpoint.
+ */
+function migrateLlmUsageEventsDropAssistantId(database: ReturnType<typeof drizzle<typeof schema>>): void {
+  const raw = (database as unknown as { $client: Database }).$client;
+  const checkpointKey = 'migration_remove_assistant_id_lue_v1';
+  const checkpoint = raw.query(
+    `SELECT 1 FROM memory_checkpoints WHERE key = ?`,
+  ).get(checkpointKey);
+  if (checkpoint) return;
+
+  // DDL guard: if the column was already removed (fresh install or migrateRemoveAssistantIdColumns
+  // ran with the llm_usage_events block), just record the checkpoint and exit.
+  const lueDdl = raw.query(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'llm_usage_events'`,
+  ).get() as { sql: string } | null;
+
+  if (!lueDdl?.sql.includes('assistant_id')) {
+    raw.query(
+      `INSERT OR IGNORE INTO memory_checkpoints (key, value, updated_at) VALUES (?, '1', ?)`,
+    ).run(checkpointKey, Date.now());
+    return;
+  }
+
+  raw.exec('PRAGMA foreign_keys = OFF');
+  try {
+    raw.exec('BEGIN');
+
+    raw.exec(/*sql*/ `
+      CREATE TABLE llm_usage_events_new (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        conversation_id TEXT,
+        run_id TEXT,
+        request_id TEXT,
+        actor TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        cache_creation_input_tokens INTEGER,
+        cache_read_input_tokens INTEGER,
+        estimated_cost_usd REAL,
+        pricing_status TEXT NOT NULL,
+        metadata_json TEXT
+      )
+    `);
+    raw.exec(/*sql*/ `
+      INSERT INTO llm_usage_events_new (
+        id, created_at, conversation_id, run_id, request_id, actor, provider, model,
+        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+        estimated_cost_usd, pricing_status, metadata_json
+      )
+      SELECT
+        id, created_at, conversation_id, run_id, request_id, actor, provider, model,
+        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+        estimated_cost_usd, pricing_status, metadata_json
+      FROM llm_usage_events
+    `);
+    raw.exec(/*sql*/ `DROP TABLE llm_usage_events`);
+    raw.exec(/*sql*/ `ALTER TABLE llm_usage_events_new RENAME TO llm_usage_events`);
 
     raw.query(
       `INSERT OR IGNORE INTO memory_checkpoints (key, value, updated_at) VALUES (?, '1', ?)`,

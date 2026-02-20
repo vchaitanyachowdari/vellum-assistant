@@ -519,7 +519,6 @@ export const llmRequestLogs = sqliteTable('llm_request_logs', {
 export const llmUsageEvents = sqliteTable('llm_usage_events', {
   id: text('id').primaryKey(),
   createdAt: integer('created_at').notNull(),
-  assistantId: text('assistant_id'),
   conversationId: text('conversation_id'),
   runId: text('run_id'),
   requestId: text('request_id'),
