@@ -517,7 +517,6 @@ struct ActiveChatViewWrapper: View {
             onConfirmationDeny: { requestId in viewModel.respondToConfirmation(requestId: requestId, decision: "deny") },
             onAlwaysAllow: { requestId, selectedPattern, selectedScope, decision in viewModel.respondToAlwaysAllow(requestId: requestId, selectedPattern: selectedPattern, selectedScope: selectedScope, decision: decision) },
             onSurfaceAction: { surfaceId, actionId, data in viewModel.sendSurfaceAction(surfaceId: surfaceId, actionId: actionId, data: data) },
-            onRegenerate: { viewModel.regenerateLastMessage() },
             sessionError: viewModel.sessionError,
             onRetry: { viewModel.retryAfterSessionError() },
             onDismissSessionError: { viewModel.dismissSessionError() },
@@ -538,8 +537,6 @@ struct ActiveChatViewWrapper: View {
                     )
                 }
             },
-            onDeleteQueuedMessage: { messageId in viewModel.deleteQueuedMessage(messageId: messageId) },
-            onSendDirectQueuedMessage: { messageId in viewModel.sendDirectQueuedMessage(messageId: messageId) },
             mediaEmbedSettings: MediaEmbedResolverSettings(
                 enabled: settingsStore.mediaEmbedsEnabled,
                 enabledSince: settingsStore.mediaEmbedsEnabledSince,
