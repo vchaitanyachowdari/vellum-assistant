@@ -1346,3 +1346,59 @@ Every app should include: search/filter, toast notifications for all CRUD operat
 - Never let a failed data operation silently pass — always show a toast or inline error message.
 - If the page loads with no data, show a designed empty state (`.v-empty-state`) — never a blank screen.
 - For forms, show validation errors inline next to the relevant field, not as an alert.
+
+## Actionable UI
+
+When the user wants to triage, manage, or bulk-act on a collection of items (emails, files, notifications, tasks, subscriptions, contacts), generate an interactive UI that lets them review, select, and act on items directly.
+
+### Pattern
+1. **Fetch data** — use the relevant tools to gather the items
+2. **Generate interactive UI** — render a `dynamic_page` with selectable items and action buttons
+3. **User selects + clicks action** — the UI sends a `surfaceAction` with an action ID and selected item IDs
+4. **Execute tools** — parse the action, call the appropriate tools
+5. **Update UI** — use `ui_update` to remove processed items and show feedback via `widgets.toast()`
+
+### HTML structure
+Choose the best layout for the data: grouped cards with checkboxes, data tables with selectable rows, kanban columns, stacked list items with inline actions, or any creative layout. The key constraint: items must be selectable and action buttons must call `sendAction` with the selected item IDs.
+
+### CSS building blocks
+- `.v-action-bar` — sticky bar at top, auto-hidden when nothing selected. Contains `.v-action-bar-count` and `.v-action-bar-buttons`
+- `.v-action-progress` — inline progress bar for bulk operations
+- `.v-group-header` / `.v-group-body` — collapsible grouped sections
+- `.v-row-removing` — fade-out + slide animation for processed items
+
+### Action data conventions
+- Use semantic action IDs: `archive`, `unsubscribe`, `delete`, `move`, `mark_read`
+- Always include selected item IDs: `sendAction("archive", { ids: ["msg_1", "msg_2"] })`
+
+### Processing flow
+1. Parse the `surfaceAction` to get the action ID and data
+2. Use `vellum.confirm(title, message)` for destructive actions before executing
+3. Call the relevant tools with the item IDs
+4. Use `ui_update` to remove processed items and update counts
+5. Show `widgets.toast()` for feedback
+
+### Error handling
+- Handle partial failures: remove successful items, toast count, keep failed items selectable for retry
+
+### Surface lifecycle
+- Use `ui_show` with `display: "panel"` to keep the surface open alongside chat
+- Use `widgets.groupedSelect()` for grouped multi-select with action bar
+- Use `widgets.removeItems()` to animate processed items out
+
+## Home Base
+
+Home Base starts from a prebuilt scaffold. When updating Home Base, preserve required task-lane anchors and apply changes through `app_file_edit` or `app_file_write`.
+
+Home Base buttons send prefilled natural-language prompts through `vellum.sendAction`. Treat these as normal user messages, not as direct execution commands.
+- For appearance changes: keep customization color-first, ask for explicit confirmation before applying a full-dashboard update.
+- For optional capability setup tasks (voice/computer control/ambient): keep them user-initiated and request permissions only when required for the chosen path.
+- If a prompt is underspecified, ask one brief follow-up and continue.
+
+## External Links
+
+When building apps with linkable items (search results, product cards, bookings), use `vellum.openLink(url, metadata)` to make them clickable. Construct deep-link URLs when possible (airline booking pages, product pages, hotel reservations). Include `metadata.provider` and `metadata.type` for context: `vellum.openLink("https://delta.com/book?flight=DL123", {provider: "delta", type: "booking"})`.
+
+## Branding
+
+A "Built on Vellum" badge is auto-injected into every dynamic page and app at the bottom-right corner. Do NOT add your own "Built on Vellum" or "Powered by Vellum" text — the badge is handled automatically by the rendering layer.
