@@ -56,6 +56,25 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
     /// Forwards only message count changes to ThreadManager's objectWillChange.
     private var activeViewModelCancellable: AnyCancellable?
 
+    /// Metadata for sessions whose threads were hidden locally.
+    /// Keyed by daemon session ID so we can detect inbound activity and restore them.
+    struct HiddenSessionInfo {
+        let sessionId: String
+        let title: String
+        let sourceChannel: String?
+        let externalChatId: String?
+        let displayName: String?
+        let username: String?
+    }
+    private(set) var hiddenSessions: [String: HiddenSessionInfo] = [:]
+
+    /// Fired when a previously-hidden thread is restored due to new activity.
+    /// The String parameter is the thread title for display in a toast.
+    var onThreadReconnected: ((String) -> Void)?
+
+    /// Task monitoring daemon messages for activity on hidden sessions.
+    private var hiddenSessionMonitorTask: Task<Void, Never>?
+
     /// Threads that are not archived — used by the UI to populate the sidebar.
     /// Sorted: pinned first (by pinnedOrder ascending), then unpinned by lastInteractedAt descending.
     var visibleThreads: [ThreadModel] {
@@ -267,6 +286,19 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         let sourceChannel = thread.sourceChannel ?? "?"
         let externalChatId = thread.externalChatId ?? "?"
 
+        // Preserve session metadata so we can restore the thread on next activity
+        if let sessionId = thread.sessionId {
+            hiddenSessions[sessionId] = HiddenSessionInfo(
+                sessionId: sessionId,
+                title: thread.title,
+                sourceChannel: thread.sourceChannel,
+                externalChatId: thread.externalChatId,
+                displayName: thread.displayName,
+                username: thread.username
+            )
+            startHiddenSessionMonitorIfNeeded()
+        }
+
         // Stop any active generation and remove the view model
         chatViewModels[id]?.stopGenerating()
         chatViewModels.removeValue(forKey: id)
@@ -423,6 +455,11 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         archivedSessionIds.contains(sessionId)
     }
 
+    /// Returns true if the session was previously hidden locally (in-memory or persisted).
+    func isSessionHidden(_ sessionId: String) -> Bool {
+        hiddenSessions[sessionId] != nil || hiddenSessionTimestamps[sessionId] != nil
+    }
+
     /// Returns true if the session was hidden and has not received new activity
     /// since the hide timestamp. `updatedAt` is the daemon's session timestamp
     /// (milliseconds since epoch); if it exceeds the stored hide time, the session
@@ -443,6 +480,12 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         var hidden = hiddenSessionTimestamps
         hidden.removeValue(forKey: sessionId)
         hiddenSessionTimestamps = hidden
+        // Also clear the in-memory tracker so the monitor task stops watching
+        hiddenSessions.removeValue(forKey: sessionId)
+        if hiddenSessions.isEmpty {
+            hiddenSessionMonitorTask?.cancel()
+            hiddenSessionMonitorTask = nil
+        }
     }
 
     /// Clear the `activeSurfaceId` on a specific thread's ChatViewModel.
@@ -726,6 +769,77 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         } catch {
             log.warning("Title generation failed: \(error.localizedDescription)")
             updateThreadTitle(id: threadId, title: fallback)
+        }
+    }
+
+    // MARK: - Hidden Session Restoration
+
+    /// Restore a previously-hidden thread when activity is detected on its session.
+    /// Creates a new thread with the stored metadata and notifies via `onThreadReconnected`.
+    func restoreHiddenThread(sessionId: String) {
+        guard let info = hiddenSessions.removeValue(forKey: sessionId) else { return }
+
+        // Also clear the persistent hidden-timestamp so session restore
+        // doesn't suppress it on future app launches.
+        clearHiddenSession(sessionId)
+
+        // Avoid duplicates if the thread was already restored by the session restorer
+        if threads.contains(where: { $0.sessionId == sessionId }) {
+            onThreadReconnected?(info.title)
+            return
+        }
+
+        let thread = ThreadModel(
+            title: info.title,
+            sessionId: sessionId,
+            sourceChannel: info.sourceChannel,
+            displayName: info.displayName,
+            username: info.username,
+            externalChatId: info.externalChatId
+        )
+        let viewModel = makeViewModel()
+        viewModel.sessionId = sessionId
+        viewModel.startMessageLoop()
+
+        threads.insert(thread, at: 0)
+        chatViewModels[thread.id] = viewModel
+
+        // Stop monitoring if no hidden sessions remain
+        if hiddenSessions.isEmpty {
+            hiddenSessionMonitorTask?.cancel()
+            hiddenSessionMonitorTask = nil
+        }
+
+        onThreadReconnected?(info.title)
+        log.info("Restored hidden thread for session \(sessionId) (\(info.sourceChannel ?? "?"):\(info.externalChatId ?? "?"))")
+    }
+
+    /// Start a daemon message listener to detect activity on hidden sessions.
+    /// Only one monitor task runs at a time; it cancels itself when no hidden sessions remain.
+    private func startHiddenSessionMonitorIfNeeded() {
+        guard hiddenSessionMonitorTask == nil else { return }
+
+        let stream = daemonClient.subscribe()
+        hiddenSessionMonitorTask = Task { @MainActor [weak self] in
+            for await message in stream {
+                guard let self, !Task.isCancelled else { break }
+                guard !self.hiddenSessions.isEmpty else { break }
+
+                // Extract session ID from messages that indicate activity
+                let messageSessionId: String? = {
+                    switch message {
+                    case .assistantTextDelta(let msg): return msg.sessionId
+                    case .userMessageEcho(let msg): return msg.sessionId
+                    case .messageComplete(let msg): return msg.sessionId
+                    default: return nil
+                    }
+                }()
+
+                if let sid = messageSessionId, self.hiddenSessions[sid] != nil {
+                    self.restoreHiddenThread(sessionId: sid)
+                }
+            }
+            self?.hiddenSessionMonitorTask = nil
         }
     }
 

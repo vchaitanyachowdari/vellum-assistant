@@ -53,6 +53,12 @@ final class MockThreadRestorerDelegate: ThreadRestorerDelegate {
         archivedSessionIds.contains(sessionId)
     }
 
+    var hiddenSessionIds: Set<String> = []
+
+    func isSessionHidden(_ sessionId: String) -> Bool {
+        hiddenSessionIds.contains(sessionId)
+    }
+
     func isSessionHidden(_ sessionId: String, updatedAt: Int) -> Bool {
         guard let hideTime = hiddenSessionTimestamps[sessionId] else { return false }
         if updatedAt > hideTime {
@@ -60,6 +66,11 @@ final class MockThreadRestorerDelegate: ThreadRestorerDelegate {
             return false
         }
         return true
+    }
+
+    func clearHiddenSession(_ sessionId: String) {
+        hiddenSessionIds.remove(sessionId)
+        hiddenSessionTimestamps.removeValue(forKey: sessionId)
     }
 
     func restoreLastActiveThread() {
