@@ -440,7 +440,10 @@ export function handleSlackWebhookConfig(
   }
 }
 
-function computeLocalGatewayTarget(): string {
+function computeGatewayTarget(): string {
+  if (process.env.GATEWAY_INTERNAL_BASE_URL) {
+    return process.env.GATEWAY_INTERNAL_BASE_URL.replace(/\/+$/, '');
+  }
   const portRaw = process.env.GATEWAY_PORT || '7830';
   const port = Number(portRaw) || 7830;
   return `http://127.0.0.1:${port}`;
@@ -452,7 +455,7 @@ function computeLocalGatewayTarget(): string {
  * URL changes, without requiring a gateway restart.
  */
 function triggerGatewayReconcile(ingressPublicBaseUrl: string | undefined): void {
-  const gatewayBase = computeLocalGatewayTarget();
+  const gatewayBase = computeGatewayTarget();
   const token = readHttpToken();
   if (!token) {
     log.debug('Skipping gateway reconcile trigger: no HTTP bearer token available');
@@ -486,7 +489,7 @@ export function handleIngressConfig(
   socket: net.Socket,
   ctx: HandlerContext,
 ): void {
-  const localGatewayTarget = computeLocalGatewayTarget();
+  const localGatewayTarget = computeGatewayTarget();
   try {
     if (msg.action === 'get') {
       const raw = loadRawConfig();
