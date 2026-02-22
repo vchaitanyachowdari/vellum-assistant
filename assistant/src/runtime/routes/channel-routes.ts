@@ -1333,6 +1333,10 @@ let expirySweepTimer: ReturnType<typeof setInterval> | null = null;
  * and notify both the requester and guardian. This runs proactively on a
  * timer so expired approvals are closed without waiting for follow-up
  * traffic from either party.
+ *
+ * Accepts a `gatewayBaseUrl` rather than a fixed delivery URL so that
+ * each approval's notification is routed to the correct channel-specific
+ * endpoint (e.g. `/deliver/telegram`, `/deliver/sms`).
  */
 export function sweepExpiredGuardianApprovals(
   orchestrator: RunOrchestrator,
