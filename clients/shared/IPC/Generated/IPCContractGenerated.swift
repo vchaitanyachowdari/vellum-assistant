@@ -2380,6 +2380,12 @@ public struct IPCRemoveTrustRule: Codable, Sendable {
     }
 }
 
+public struct IPCRideShotgunProgress: Codable, Sendable {
+    public let type: String
+    public let watchId: String
+    public let message: String
+}
+
 public struct IPCRideShotgunResult: Codable, Sendable {
     public let type: String
     public let sessionId: String
