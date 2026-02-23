@@ -13,11 +13,12 @@ struct SlashCommand {
         SlashCommand(name: "commands", description: "List all available commands", icon: "terminal"),
         SlashCommand(name: "model", description: "Switch the active model", icon: "cpu"),
         SlashCommand(name: "models", description: "List all available models", icon: "list.bullet"),
+        SlashCommand(name: "status", description: "Show session status and context usage", icon: "info.circle"),
     ]
 }
 
 enum SlashNavigation {
-    case up, down, select, dismiss
+    case up, down, select, tab, dismiss
 }
 
 struct ComposerView: View {
@@ -66,6 +67,7 @@ struct ComposerView: View {
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
     @State private var slashSelectedIndex = 0
+    @State private var suppressSlashReopen = false
     @State private var avatarSeed: String = "default"
 
     /// The portion of the suggestion that extends beyond the current input.
@@ -489,6 +491,10 @@ struct ComposerView: View {
     }
 
     private func updateSlashState() {
+        if suppressSlashReopen {
+            suppressSlashReopen = false
+            return
+        }
         let text = inputText
 
         if text.hasPrefix("/") && !text.contains(" ") {
@@ -526,6 +532,11 @@ struct ComposerView: View {
                 slashSelectedIndex = (slashSelectedIndex + 1) % filtered.count
             case .select:
                 selectSlashCommand(filtered[slashSelectedIndex])
+            case .tab:
+                let command = filtered[slashSelectedIndex]
+                suppressSlashReopen = true
+                inputText = "/\(command.name)"
+                withAnimation(VAnimation.fast) { showSlashMenu = false }
             case .dismiss:
                 withAnimation(VAnimation.fast) { showSlashMenu = false }
                 inputText = ""
@@ -793,6 +804,12 @@ private final class ComposerNativeTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .control, .option])
+
+        // Tab autocompletes the selected slash command when the menu is open.
+        if event.keyCode == 48, !modifiers.contains(.shift), isSlashMenuOpen {
+            onSlashNavigate?(.tab)
+            return
+        }
 
         // Tab accepts ghost suggestions in-place when available.
         if event.keyCode == 48, !modifiers.contains(.shift), hasGhostSuffix {
