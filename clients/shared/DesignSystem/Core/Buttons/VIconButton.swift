@@ -77,15 +77,15 @@ private struct VIconButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(isActive ? VColor.textPrimary : VColor.textSecondary)
+            .foregroundColor(VColor.iconAccent)
             .padding(.horizontal, VSpacing.md)
             .padding(.vertical, VSpacing.buttonV)
             .background(backgroundColor(isPressed: configuration.isPressed))
-            .clipShape(RoundedRectangle(cornerRadius: VRadius.pill))
-            .contentShape(RoundedRectangle(cornerRadius: VRadius.pill))
+            .clipShape(RoundedRectangle(cornerRadius: VRadius.md))
+            .contentShape(RoundedRectangle(cornerRadius: VRadius.md))
             .overlay(
-                RoundedRectangle(cornerRadius: VRadius.pill)
-                    .stroke(isActive ? VColor.textSecondary : VColor.surfaceBorder.opacity(0.5), lineWidth: 1)
+                RoundedRectangle(cornerRadius: VRadius.md)
+                    .stroke(isActive ? VColor.iconAccent : VColor.surfaceBorder.opacity(0.5), lineWidth: 1)
             )
             .animation(VAnimation.fast, value: configuration.isPressed)
             .animation(VAnimation.fast, value: isHovered)
@@ -95,7 +95,7 @@ private struct VIconButtonStyle: ButtonStyle {
         if isActive {
             if isPressed { return VColor.ghostPressed }
             if isHovered { return VColor.ghostHover }
-            return VColor.surfaceBorder
+            return VColor.buttonTertiaryBackground
         } else {
             if isPressed { return VColor.ghostPressed }
             if isHovered { return VColor.ghostHover }
