@@ -289,9 +289,18 @@ final class AssistantCli {
     }
 
     /// Start a periodic health check that restarts the daemon if it dies.
-    /// No-op in dev mode (no bundled CLI binary).
+    /// No-op in dev mode (no bundled CLI binary) or when the assistant
+    /// is not registered in the lock file.
     func startMonitoring() {
         guard cliBinaryURL != nil else { return }
+
+        // Don't start monitoring if the assistant isn't in the lock file
+        let assistantId = UserDefaults.standard.string(forKey: "connectedAssistantId")
+        if let assistantId, !isAssistantInLockFile(assistantId: assistantId) {
+            log.info("Assistant '\(assistantId)' not in lock file — skipping monitor start")
+            return
+        }
+
         isStopping = false
         hasGivenUp = false
         consecutiveCrashes = 0
@@ -455,6 +464,22 @@ final class AssistantCli {
 
     // MARK: - Private Helpers
 
+    /// Path to the lock file that tracks registered assistants.
+    /// Always at `~/.vellum.lock.json` (home directory), matching the CLI's `getLockfilePath()`.
+    private var lockFileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".vellum.lock.json")
+    }
+
+    /// Returns `true` if the given assistant ID is present in `~/.vellum.lock.json`.
+    private func isAssistantInLockFile(assistantId: String) -> Bool {
+        guard let data = try? Data(contentsOf: lockFileURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let assistants = json["assistants"] as? [[String: Any]] else {
+            return false
+        }
+        return assistants.contains { ($0["assistantId"] as? String) == assistantId }
+    }
+
     /// Returns `true` if the daemon process is alive based on the PID file.
     private func isDaemonAlive() -> Bool {
         let pidData: Data
@@ -474,6 +499,14 @@ final class AssistantCli {
     private func restartDaemon() async {
         guard cliBinaryURL != nil else { return }
         guard !hasGivenUp else { return }
+
+        // Only restart if the assistant is still registered in the lock file
+        let assistantId = UserDefaults.standard.string(forKey: "connectedAssistantId")
+        guard let assistantId, isAssistantInLockFile(assistantId: assistantId) else {
+            log.info("Assistant not found in lock file — skipping restart and stopping monitor")
+            stopMonitoring()
+            return
+        }
 
         // Track consecutive rapid crashes for backoff
         if let lastLaunch = lastLaunchTime,
@@ -498,9 +531,7 @@ final class AssistantCli {
         }
 
         do {
-            // Pass the existing assistant name so the CLI reuses it
-            let existingName = UserDefaults.standard.string(forKey: "connectedAssistantId")
-            try await hatch(name: existingName, daemonOnly: true)
+            try await hatch(name: assistantId, daemonOnly: true)
             log.info("Daemon restarted successfully via CLI")
             onDaemonRestarted?()
         } catch {
