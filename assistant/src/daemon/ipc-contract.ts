@@ -570,6 +570,8 @@ export interface TwilioConfigResponse {
   phoneNumber?: string;
   numbers?: Array<{ phoneNumber: string; friendlyName: string; capabilities: { voice: boolean; sms: boolean } }>;
   error?: string;
+  /** Non-fatal warning message (e.g. webhook sync failure that did not prevent the primary operation). */
+  warning?: string;
 }
 
 export interface GuardianVerificationRequest {
