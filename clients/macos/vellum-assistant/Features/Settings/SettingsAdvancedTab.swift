@@ -1,4 +1,5 @@
 import CryptoKit
+import Foundation
 import SwiftUI
 import VellumAssistantShared
 
@@ -48,10 +49,8 @@ struct SettingsAdvancedTab: View {
             #endif
         }
         .onAppear {
-            let tokenPath = NSHomeDirectory() + "/.vellum/session-token"
-            sessionToken = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let fingerprintPath = NSHomeDirectory() + "/.vellum/tls/fingerprint"
-            fingerprint = (try? String(contentsOfFile: fingerprintPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            refreshSessionToken()
+            refreshFingerprint()
             let flagPath = NSHomeDirectory() + "/.vellum/ios-pairing-enabled"
             iosPairingEnabled = FileManager.default.fileExists(atPath: flagPath)
             lockfileAssistants = LockfileAssistant.loadAll()
@@ -337,8 +336,10 @@ struct SettingsAdvancedTab: View {
                                 .font(VFont.mono)
                                 .foregroundColor(VColor.textSecondary)
                         }
-                    } else {
-                        Text("Session token not found. Restart the daemon to generate one.")
+                    }
+
+                    if fingerprint.isEmpty {
+                        Text("TLS fingerprint not ready. Restart the daemon to generate certificates.")
                             .font(VFont.caption)
                             .foregroundColor(VColor.textMuted)
                     }
@@ -370,7 +371,7 @@ struct SettingsAdvancedTab: View {
                 regenerateSessionToken()
             }
         } message: {
-            Text("This will delete the current token. A new token will be generated on the next daemon restart. Any paired iOS devices will need to re-scan the QR code.\n\nRestart the daemon after regenerating to apply the change.")
+            Text("This will replace the current token and restart the daemon. Any paired iOS devices will need to re-scan the QR code.")
         }
         .sheet(isPresented: $showingPairingQR) {
             PairingQRCodeSheet(
@@ -390,12 +391,46 @@ struct SettingsAdvancedTab: View {
         }
     }
 
+    private func refreshSessionToken() {
+        let tokenPath = NSHomeDirectory() + "/.vellum/session-token"
+        if let existing = try? String(contentsOfFile: tokenPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           existing.count >= 32 {
+            sessionToken = existing
+        } else {
+            // Generate a token so pairing works immediately — the daemon
+            // will reuse this file on its next (re)start.
+            var bytes = [UInt8](repeating: 0, count: 32)
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return }
+            let newToken = bytes.map { String(format: "%02x", $0) }.joined()
+            let dir = (tokenPath as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: tokenPath, contents: Data(newToken.utf8), attributes: [.posixPermissions: 0o600])
+            sessionToken = newToken
+        }
+    }
+
+    private func refreshFingerprint() {
+        let fingerprintPath = NSHomeDirectory() + "/.vellum/tls/fingerprint"
+        fingerprint = (try? String(contentsOfFile: fingerprintPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     private func regenerateSessionToken() {
         let tokenPath = NSHomeDirectory() + "/.vellum/session-token"
+        // Generate new random bytes before deleting the old file so a
+        // SecRandomCopyBytes failure doesn't leave us with no token at all.
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return }
+        let newToken = bytes.map { String(format: "%02x", $0) }.joined()
         try? FileManager.default.removeItem(atPath: tokenPath)
-        sessionToken = ""
-        // The daemon will generate a new token on next start.
-        // For now, just clear the UI. A daemon restart is needed.
+        FileManager.default.createFile(atPath: tokenPath, contents: Data(newToken.utf8), attributes: [.posixPermissions: 0o600])
+        sessionToken = newToken
+        // Kill the daemon so the health monitor restarts it with the new token.
+        // The daemon only reads the token at startup, so a restart is required.
+        let pidPath = NSHomeDirectory() + "/.vellum/vellum.pid"
+        if let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let pid = Int32(pidStr) {
+            kill(pid, SIGTERM)
+        }
     }
 
     private func getTCPPort() -> Int {
