@@ -333,7 +333,6 @@ extension MainWindowView {
         switch panel {
         case .settings:
             SettingsPanel(onClose: { windowState.dismissOverlay() }, store: settingsStore, daemonClient: daemonClient, threadManager: threadManager)
-                .overlay(alignment: .topTrailing) { panelDismissButton }
         case .agent:
             AgentPanel(onClose: { windowState.dismissOverlay() }, onInvokeSkill: { skill in
                 if threadManager.activeViewModel == nil {
@@ -394,17 +393,9 @@ extension MainWindowView {
     }
 
     var panelDismissButton: some View {
-        Button(action: panelDismissAction) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(VColor.textSecondary)
-                .frame(width: 28, height: 28)
-                .background(VColor.surface.opacity(0.8))
-                .clipShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .padding(.top, VSpacing.lg)
-        .padding(.trailing, VSpacing.lg)
+        VIconButton(label: "Close", icon: "xmark", iconOnly: true, action: panelDismissAction)
+            .padding(.top, VSpacing.lg)
+            .padding(.trailing, VSpacing.lg)
     }
 
     // MARK: - Dynamic Workspace
