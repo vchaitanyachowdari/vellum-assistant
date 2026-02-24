@@ -1,11 +1,14 @@
 import SwiftUI
 import VellumAssistantShared
 
-/// Appearance settings tab — theme selection and media embed configuration.
+/// Appearance settings tab — theme selection, keyboard shortcuts, and media embed configuration.
 struct SettingsAppearanceTab: View {
     @ObservedObject var store: SettingsStore
     @AppStorage("themePreference") private var themePreference: String = "system"
     @State private var newAllowlistDomain = ""
+    @State private var isRecordingShortcut = false
+    @State private var shortcutMonitor: Any?
+    @State private var shortcutConflictWarning: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: VSpacing.xl) {
@@ -38,6 +41,72 @@ struct SettingsAppearanceTab: View {
             }
             .padding(VSpacing.lg)
             .vCard(background: VColor.surfaceSubtle)
+
+            // KEYBOARD SHORTCUTS section
+            VStack(alignment: .leading, spacing: VSpacing.md) {
+                Text("Keyboard Shortcuts")
+                    .font(VFont.sectionTitle)
+                    .foregroundColor(VColor.textPrimary)
+
+                // Quick Chat (configurable)
+                HStack {
+                    Text("Quick Chat")
+                        .font(VFont.body)
+                        .foregroundColor(VColor.textSecondary)
+                    Spacer()
+                    Text(ShortcutHelper.displayString(for: store.quickChatShortcut))
+                        .font(VFont.mono)
+                        .foregroundColor(VColor.textPrimary)
+                        .padding(.horizontal, VSpacing.sm)
+                        .padding(.vertical, VSpacing.xs)
+                        .background(VColor.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: VRadius.sm))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: VRadius.sm)
+                                .stroke(VColor.surfaceBorder, lineWidth: 1)
+                        )
+
+                    if isRecordingShortcut {
+                        VButton(label: "Press shortcut...", style: .tertiary) {
+                            stopRecording()
+                        }
+                    } else {
+                        VButton(label: "Record", style: .tertiary) {
+                            startRecording()
+                        }
+                    }
+                }
+
+                if let shortcutConflictWarning {
+                    Text(shortcutConflictWarning)
+                        .font(VFont.caption)
+                        .foregroundColor(VColor.warning)
+                }
+
+                // Open Vellum (fixed, non-editable)
+                HStack {
+                    Text("Open Vellum")
+                        .font(VFont.body)
+                        .foregroundColor(VColor.textSecondary)
+                    Spacer()
+                    Text("\u{2318}\u{21E7}G")
+                        .font(VFont.mono)
+                        .foregroundColor(VColor.textMuted)
+                        .padding(.horizontal, VSpacing.sm)
+                        .padding(.vertical, VSpacing.xs)
+                        .background(VColor.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: VRadius.sm))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: VRadius.sm)
+                                .stroke(VColor.surfaceBorder, lineWidth: 1)
+                        )
+                }
+            }
+            .padding(VSpacing.lg)
+            .vCard(background: VColor.surfaceSubtle)
+            .onDisappear {
+                stopRecording()
+            }
 
             // MEDIA EMBEDS section
             VStack(alignment: .leading, spacing: VSpacing.md) {
@@ -118,4 +187,65 @@ struct SettingsAppearanceTab: View {
             .vCard(background: VColor.surfaceSubtle)
         }
     }
+
+    // MARK: - Shortcut Recording
+
+    /// The fixed "Open Vellum" shortcut in normalized form for conflict detection.
+    private static let openVellumShortcut = "cmd+shift+g"
+
+    private func startRecording() {
+        isRecordingShortcut = true
+        shortcutConflictWarning = nil
+        // Use local monitor so we capture key events while the settings window is focused
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            // Escape cancels recording without changing the shortcut
+            if event.keyCode == 53 {
+                stopRecording()
+                return nil
+            }
+
+            // Require at least one modifier key to form a valid global shortcut
+            let hasModifier = mods.contains(.command) || mods.contains(.control)
+                || mods.contains(.option)
+            guard hasModifier,
+                  let chars = event.charactersIgnoringModifiers, !chars.isEmpty else {
+                return nil
+            }
+
+            let shortcut = ShortcutHelper.shortcutString(
+                from: mods, key: chars, keyCode: event.keyCode
+            )
+
+            // Check for conflict with the fixed "Open Vellum" shortcut
+            if shortcut.lowercased() == Self.openVellumShortcut {
+                shortcutConflictWarning = "This shortcut conflicts with the Open Vellum shortcut (\u{2318}\u{21E7}G). Choose a different shortcut."
+                stopRecording()
+                return nil
+            }
+
+            shortcutConflictWarning = nil
+            store.quickChatShortcut = shortcut
+            stopRecording()
+            return nil // consume the event
+        }
+    }
+
+    private func stopRecording() {
+        isRecordingShortcut = false
+        if let monitor = shortcutMonitor {
+            NSEvent.removeMonitor(monitor)
+            shortcutMonitor = nil
+        }
+    }
+}
+
+#Preview("Appearance Tab") {
+    ZStack {
+        VColor.background.ignoresSafeArea()
+        SettingsAppearanceTab(store: SettingsStore())
+            .padding()
+    }
+    .frame(width: 500, height: 600)
 }
