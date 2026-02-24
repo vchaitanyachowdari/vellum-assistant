@@ -508,6 +508,11 @@ export async function handleChannelInbound(
     ? rawCommandIntent as Record<string, unknown>
     : undefined;
 
+  // Preserve locale from sourceMetadata so the model can greet in the user's language
+  const sourceLanguageCode = typeof sourceMetadata?.languageCode === 'string' && sourceMetadata.languageCode.trim().length > 0
+    ? sourceMetadata.languageCode.trim()
+    : undefined;
+
   const replyCallbackUrl = body.replyCallbackUrl;
 
   // ── Guardian verification command intercept ──
@@ -717,6 +722,7 @@ export async function handleChannelInbound(
         metadataHints,
         metadataUxBrief,
         commandIntent,
+        sourceLanguageCode,
       });
     } else {
       // Fire-and-forget: process the message and deliver the reply in the background.
@@ -733,6 +739,7 @@ export async function handleChannelInbound(
         metadataHints,
         metadataUxBrief,
         commandIntent,
+        sourceLanguageCode,
         replyCallbackUrl,
         bearerToken,
         assistantId,
@@ -762,6 +769,7 @@ interface BackgroundProcessingParams {
   bearerToken?: string;
   assistantId?: string;
   commandIntent?: Record<string, unknown>;
+  sourceLanguageCode?: string;
 }
 
 function processChannelMessageInBackground(params: BackgroundProcessingParams): void {
@@ -780,12 +788,13 @@ function processChannelMessageInBackground(params: BackgroundProcessingParams): 
     bearerToken,
     assistantId,
     commandIntent,
+    sourceLanguageCode,
   } = params;
 
   (async () => {
     try {
       const cmdIntent = commandIntent && typeof commandIntent.type === 'string'
-        ? { type: commandIntent.type as string, ...(typeof commandIntent.payload === 'string' ? { payload: commandIntent.payload } : {}) }
+        ? { type: commandIntent.type as string, ...(typeof commandIntent.payload === 'string' ? { payload: commandIntent.payload } : {}), ...(sourceLanguageCode ? { languageCode: sourceLanguageCode } : {}) }
         : undefined;
       const { messageId: userMessageId } = await processMessage(
         conversationId,
@@ -865,6 +874,7 @@ interface ApprovalProcessingParams {
   metadataHints: string[];
   metadataUxBrief?: string;
   commandIntent?: Record<string, unknown>;
+  sourceLanguageCode?: string;
 }
 
 /**
@@ -895,13 +905,14 @@ function processChannelMessageWithApprovals(params: ApprovalProcessingParams): v
     metadataHints,
     metadataUxBrief,
     commandIntent,
+    sourceLanguageCode,
   } = params;
 
   const isNonGuardian = guardianCtx.actorRole === 'non-guardian';
   const isUnverifiedChannel = guardianCtx.actorRole === 'unverified_channel';
 
   const cmdIntent = commandIntent && typeof commandIntent.type === 'string'
-    ? { type: commandIntent.type as string, ...(typeof commandIntent.payload === 'string' ? { payload: commandIntent.payload } : {}) }
+    ? { type: commandIntent.type as string, ...(typeof commandIntent.payload === 'string' ? { payload: commandIntent.payload } : {}), ...(sourceLanguageCode ? { languageCode: sourceLanguageCode } : {}) }
     : undefined;
 
   (async () => {
