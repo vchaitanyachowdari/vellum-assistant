@@ -65,6 +65,11 @@ struct SettingsView: View {
                     } label: {
                         Label("Media Embeds", systemImage: "play.rectangle")
                     }
+                    NavigationLink {
+                        VoiceSettingsSection()
+                    } label: {
+                        Label("Voice", systemImage: "waveform")
+                    }
                 }
 
                 NavigationLink {
