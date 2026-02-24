@@ -477,6 +477,7 @@ public final class ChatViewModel: ObservableObject {
                 lastFailedMessageText = nil
                 lastFailedMessageAttachments = nil
                 lastFailedSendError = nil
+                connectionDiagnosticHint = nil
                 secretBlockedMessageText = nil
                 secretBlockedAttachments = nil
                 secretBlockedActiveSurfaceId = nil
@@ -523,6 +524,7 @@ public final class ChatViewModel: ObservableObject {
         lastFailedMessageText = nil
         lastFailedMessageAttachments = nil
         lastFailedSendError = nil
+        connectionDiagnosticHint = nil
         secretBlockedMessageText = nil
         secretBlockedAttachments = nil
         secretBlockedActiveSurfaceId = nil
@@ -1311,6 +1313,7 @@ public final class ChatViewModel: ObservableObject {
         lastFailedMessageAttachments = nil
         lastFailedSendError = nil
         errorText = nil
+        connectionDiagnosticHint = nil
 
         if sessionId == nil {
             bootstrapSession(userMessage: text, attachments: attachments)
