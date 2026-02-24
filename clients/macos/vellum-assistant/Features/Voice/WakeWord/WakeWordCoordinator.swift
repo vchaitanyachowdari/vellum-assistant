@@ -88,7 +88,6 @@ final class WakeWordCoordinator: ObservableObject {
         }
 
         log.info("Wake word detected — activating voice mode")
-        activatedViaWakeWord = true
 
         // 1. Play activation chime and show visual indicator
         WakeWordFeedback.playActivationChime()
@@ -107,6 +106,7 @@ final class WakeWordCoordinator: ObservableObject {
             audioMonitor.startMonitoring()
             return
         }
+        activatedViaWakeWord = true
         voiceModeManager.startListening()
     }
 
