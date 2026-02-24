@@ -78,6 +78,12 @@ export async function handleUserMessage(
       }
     }
 
+    const ipcChannel = parseChannelId(msg.channel) ?? 'macos';
+    session.setTurnChannelContext({
+      userMessageChannel: ipcChannel,
+      assistantMessageChannel: ipcChannel,
+    });
+
     session.traceEmitter.emit('request_received', 'User message received', {
       requestId,
       status: 'info',
