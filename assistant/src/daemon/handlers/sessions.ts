@@ -1,5 +1,5 @@
 import * as net from 'node:net';
-import { isChannelId, parseChannelId } from '../../channels/types.js';
+import { isChannelId, parseChannelId, parseInterfaceId, type InterfaceId } from '../../channels/types.js';
 import { silentlyWithLog } from '../../util/silently.js';
 import { v4 as uuid } from 'uuid';
 import * as conversationStore from '../../memory/conversation-store.js';
@@ -86,9 +86,19 @@ export async function handleUserMessage(
     });
 
     const ipcChannel = parseChannelId(msg.channel) ?? 'vellum';
+    const ipcInterface = parseInterfaceId(msg.interface);
+    if (!ipcInterface) {
+      ctx.send(socket, {
+        type: 'error',
+        message: 'Invalid user_message: interface is required and must be valid',
+      });
+      return;
+    }
     const queuedChannelMetadata = {
       userMessageChannel: ipcChannel,
       assistantMessageChannel: ipcChannel,
+      userMessageInterface: ipcInterface,
+      assistantMessageInterface: ipcInterface,
     };
     const result = session.enqueueMessage(
       msg.content ?? '',
@@ -135,6 +145,10 @@ export async function handleUserMessage(
     session.setTurnChannelContext({
       userMessageChannel: ipcChannel,
       assistantMessageChannel: ipcChannel,
+    });
+    session.setTurnInterfaceContext({
+      userMessageInterface: ipcInterface,
+      assistantMessageInterface: ipcInterface,
     });
     session.setAssistantId('self');
     // IPC/desktop user IS the guardian — default to guardian role so messages
@@ -236,6 +250,7 @@ export function handleSessionList(socket: net.Socket, ctx: HandlerContext, offse
     sessions: conversations.map((c) => {
       const binding = bindings.get(c.id);
       const originChannel = parseChannelId(c.originChannel);
+      const originInterface = parseInterfaceId(c.originInterface);
       return {
         id: c.id,
         title: c.title ?? 'Untitled',
@@ -252,6 +267,7 @@ export function handleSessionList(socket: net.Socket, ctx: HandlerContext, offse
           },
         } : {}),
         ...(originChannel ? { conversationOriginChannel: originChannel } : {}),
+        ...(originInterface ? { conversationOriginInterface: originInterface } : {}),
       };
     }),
     hasMore: offset + conversations.length < totalCount,
@@ -329,6 +345,11 @@ export async function handleSessionCreate(
     session.setTurnChannelContext({
       userMessageChannel: transportChannel,
       assistantMessageChannel: transportChannel,
+    });
+    const transportInterface: InterfaceId = parseInterfaceId(msg.transport?.interfaceId) ?? 'vellum';
+    session.setTurnInterfaceContext({
+      userMessageInterface: transportInterface,
+      assistantMessageInterface: transportInterface,
     });
     session.processMessage(msg.initialMessage, [], sendEvent, requestId).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);

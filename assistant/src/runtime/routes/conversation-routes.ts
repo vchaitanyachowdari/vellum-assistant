@@ -1,7 +1,8 @@
 /**
  * Route handlers for conversation messages and suggestions.
  */
-import { CHANNEL_IDS, parseChannelId } from '../../channels/types.js';
+import { CHANNEL_IDS, INTERFACE_IDS, parseChannelId, parseInterfaceId } from '../../channels/types.js';
+import type { InterfaceId } from '../../channels/types.js';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
@@ -211,6 +212,7 @@ export async function handleSendMessage(
     content?: string;
     attachmentIds?: string[];
     sourceChannel?: string;
+    interface?: string;
   };
 
   const { conversationKey, content, attachmentIds } = body;
@@ -225,6 +227,20 @@ export async function handleSendMessage(
   if (!sourceChannel) {
     return Response.json(
       { error: `Invalid sourceChannel: ${body.sourceChannel}. Valid values: ${CHANNEL_IDS.join(', ')}` },
+      { status: 400 },
+    );
+  }
+
+  if (!body.interface || typeof body.interface !== 'string') {
+    return Response.json(
+      { error: 'interface is required' },
+      { status: 400 },
+    );
+  }
+  const sourceInterface = parseInterfaceId(body.interface);
+  if (!sourceInterface) {
+    return Response.json(
+      { error: `Invalid interface: ${body.interface}. Valid values: ${INTERFACE_IDS.join(', ')}` },
       { status: 400 },
     );
   }
@@ -290,6 +306,14 @@ export async function handleSendMessage(
         attachments,
         onEvent,
         requestId,
+        undefined, // activeSurfaceId
+        undefined, // currentPage
+        {
+          userMessageChannel: sourceChannel,
+          assistantMessageChannel: sourceChannel,
+          userMessageInterface: sourceInterface,
+          assistantMessageInterface: sourceInterface,
+        },
       );
       if (result.rejected) {
         return Response.json(
@@ -301,6 +325,14 @@ export async function handleSendMessage(
     }
 
     // Session is idle — persist and fire agent loop immediately
+    session.setTurnChannelContext({
+      userMessageChannel: sourceChannel,
+      assistantMessageChannel: sourceChannel,
+    });
+    session.setTurnInterfaceContext({
+      userMessageInterface: sourceInterface,
+      assistantMessageInterface: sourceInterface,
+    });
     const requestId = crypto.randomUUID();
     const messageId = session.persistUserMessage(content ?? '', attachments, requestId);
 
@@ -325,6 +357,7 @@ export async function handleSendMessage(
       hasAttachments ? attachmentIds : undefined,
       { guardianContext: { actorRole: 'guardian', sourceChannel } },
       sourceChannel,
+      sourceInterface,
     );
     return Response.json({ accepted: true, messageId: result.messageId }, { status: 202 });
   } catch (err) {

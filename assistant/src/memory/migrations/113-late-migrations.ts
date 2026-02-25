@@ -6,6 +6,7 @@ import { migrateMemoryItemsIndexes } from './017-memory-items-indexes.js';
 import { migrateRemainingTableIndexes } from './018-remaining-table-indexes.js';
 import { migrateRenameChannelToVellum } from './020-rename-macos-ios-channel-to-vellum.js';
 import { migrateConversationStatusIndexes } from './021-conversation-status-indexes.js';
+import { migrateAddOriginInterface } from './022-add-origin-interface.js';
 
 /**
  * Late-stage migrations that must run after all tables and indexes exist:
@@ -19,4 +20,5 @@ export function runLateMigrations(database: DrizzleDb): void {
   migrateRemainingTableIndexes(database);
   migrateRenameChannelToVellum(database);
   migrateConversationStatusIndexes(database);
+  migrateAddOriginInterface(database);
 }

@@ -13,8 +13,8 @@
  * status and submit a decision or secret via the respective endpoints.
  */
 
-import type { ChannelId, TurnChannelContext } from '../channels/types.js';
-import { parseChannelId } from '../channels/types.js';
+import type { ChannelId, InterfaceId, TurnChannelContext, TurnInterfaceContext } from '../channels/types.js';
+import { parseChannelId, parseInterfaceId } from '../channels/types.js';
 import * as runsStore from '../memory/runs-store.js';
 import type { Run } from '../memory/runs-store.js';
 import type { Session } from '../daemon/session.js';
@@ -97,6 +97,12 @@ export interface RunStartOptions {
    * default 'vellum'.
    */
   sourceChannel?: ChannelId;
+  /**
+   * The originating interface (e.g. 'macos', 'ios', 'telegram'). When
+   * provided, the session's turn interface context is set to this value
+   * so interface-aware metadata flows through the agent loop.
+   */
+  sourceInterface?: InterfaceId;
   /**
    * Transport hints from sourceMetadata (e.g. reply-context cues).
    * Forwarded to the session so the agent loop can incorporate them.
@@ -239,6 +245,11 @@ export class RunOrchestrator {
       userMessageChannel: parseChannelId(options?.sourceChannel) ?? 'vellum',
       assistantMessageChannel: parseChannelId(options?.sourceChannel) ?? 'vellum',
     });
+    const resolvedInterface = parseInterfaceId(options?.sourceInterface) ?? ('vellum' as InterfaceId);
+    session.setTurnInterfaceContext({
+      userMessageInterface: resolvedInterface,
+      assistantMessageInterface: resolvedInterface,
+    });
 
     const attachments = attachmentIds
       ? this.deps.resolveAttachments(attachmentIds)
@@ -251,7 +262,7 @@ export class RunOrchestrator {
     // Set channel capabilities based on the originating channel so capabilities
     // (e.g. attachment scope) match the actual transport rather than always
     // defaulting to 'vellum'.
-    session.setChannelCapabilities(resolveChannelCapabilities(options?.sourceChannel ?? 'vellum'));
+    session.setChannelCapabilities(resolveChannelCapabilities(options?.sourceChannel ?? 'vellum', resolvedInterface));
     session.setVoiceCallControlPrompt(options?.voiceCallControlPrompt ?? null);
 
     // Serialized publish chain so hub subscribers observe events in order.
@@ -385,6 +396,12 @@ export class RunOrchestrator {
       session.setCommandIntent(null);
       session.setAssistantId('self');
       session.setVoiceCallControlPrompt(null);
+      // Reset turn interface context so a subsequent IPC/desktop session on the
+      // same conversation is not incorrectly treated as an HTTP-API interface.
+      session.setTurnInterfaceContext({
+        userMessageInterface: 'vellum' as InterfaceId,
+        assistantMessageInterface: 'vellum' as InterfaceId,
+      });
       // Reset the session's client callback to a no-op so the stale
       // closure doesn't intercept events from future runs on the same session.
       // Set hasNoClient=true here since the run is done and no HTTP caller

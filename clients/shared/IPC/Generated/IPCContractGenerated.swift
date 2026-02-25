@@ -3476,8 +3476,9 @@ public struct IPCSessionListResponseSession: Codable, Sendable {
     /// Channel binding metadata exposed in session/conversation list APIs.
     public let channelBinding: IPCChannelBinding?
     public let conversationOriginChannel: String?
+    public let conversationOriginInterface: String?
 
-    public init(id: String, title: String, updatedAt: Int, threadType: String? = nil, source: String? = nil, channelBinding: IPCChannelBinding? = nil, conversationOriginChannel: String? = nil) {
+    public init(id: String, title: String, updatedAt: Int, threadType: String? = nil, source: String? = nil, channelBinding: IPCChannelBinding? = nil, conversationOriginChannel: String? = nil, conversationOriginInterface: String? = nil) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
@@ -3485,6 +3486,7 @@ public struct IPCSessionListResponseSession: Codable, Sendable {
         self.source = source
         self.channelBinding = channelBinding
         self.conversationOriginChannel = conversationOriginChannel
+        self.conversationOriginInterface = conversationOriginInterface
     }
 }
 
@@ -3544,13 +3546,16 @@ public struct IPCSessionTitleUpdated: Codable, Sendable {
 public struct IPCSessionTransportMetadata: Codable, Sendable {
     /// Logical channel identifier (e.g. "desktop", "telegram", "mobile").
     public let channelId: String
+    /// Interface identifier for this transport (e.g. "macos", "ios", "cli").
+    public let interfaceId: String?
     /// Optional natural-language hints for channel-specific UX behavior.
     public let hints: [String]?
     /// Optional concise UX brief for this channel.
     public let uxBrief: String?
 
-    public init(channelId: String, hints: [String]? = nil, uxBrief: String? = nil) {
+    public init(channelId: String, interfaceId: String? = nil, hints: [String]? = nil, uxBrief: String? = nil) {
         self.channelId = channelId
+        self.interfaceId = interfaceId
         self.hints = hints
         self.uxBrief = uxBrief
     }
@@ -5394,8 +5399,10 @@ public struct IPCUserMessage: Codable, Sendable {
     public let bypassSecretCheck: Bool?
     /// Originating channel identifier (e.g. 'vellum'). Defaults to 'vellum' when absent.
     public let channel: String?
+    /// Originating interface identifier (e.g. 'macos'). Falls back to channel when absent.
+    public let interface: String?
 
-    public init(type: String, sessionId: String, content: String? = nil, attachments: [IPCUserMessageAttachment]? = nil, activeSurfaceId: String? = nil, currentPage: String? = nil, bypassSecretCheck: Bool? = nil, channel: String? = nil) {
+    public init(type: String, sessionId: String, content: String? = nil, attachments: [IPCUserMessageAttachment]? = nil, activeSurfaceId: String? = nil, currentPage: String? = nil, bypassSecretCheck: Bool? = nil, channel: String? = nil, interface: String? = nil) {
         self.type = type
         self.sessionId = sessionId
         self.content = content
@@ -5404,6 +5411,7 @@ public struct IPCUserMessage: Codable, Sendable {
         self.currentPage = currentPage
         self.bypassSecretCheck = bypassSecretCheck
         self.channel = channel
+        self.interface = interface
     }
 }
 
