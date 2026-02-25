@@ -104,6 +104,23 @@ extension MainWindowView {
             )
         case .assistantInbox:
             AssistantInboxPanel(onClose: { windowState.selection = nil }, daemonClient: daemonClient)
+        case .apps:
+            AppsGridView(
+                appListManager: appListManager,
+                daemonClient: daemonClient,
+                onOpenApp: { appId in
+                    try? daemonClient.sendAppOpen(appId: appId)
+                    windowState.selection = .app(appId)
+                },
+                onOpenHomeBase: {
+                    if let homeBase = appListManager.displayApps.first(where: { $0.name.caseInsensitiveCompare("Home Base") == .orderedSame }) {
+                        try? daemonClient.sendAppOpen(appId: homeBase.id)
+                        windowState.selection = .app(homeBase.id)
+                    } else {
+                        windowState.selection = .panel(.directory)
+                    }
+                }
+            )
         }
     }
 
@@ -294,6 +311,60 @@ extension MainWindowView {
                     .overlay(alignment: .topTrailing) { panelDismissButton }
                     .background(adaptiveColor(light: Moss._50, dark: Moss._950))
                 }
+            } else if panelType == .apps {
+                if isAppChatOpen {
+                    // VSplitView: ChatView (left) + Apps grid (right)
+                    let contentWidth = Double(geometry.size.width) / zoomManager.zoomLevel - Double(VSpacing.sm)
+                    let effectiveWidth = Binding<Double>(
+                        get: { appPanelWidth > 0 ? appPanelWidth : contentWidth * 0.7 },
+                        set: { appPanelWidth = $0 }
+                    )
+                    VSplitView(
+                        panelWidth: effectiveWidth,
+                        showPanel: true,
+                        main: {
+                            chatView
+                        },
+                        panel: {
+                            AppsGridView(
+                                appListManager: appListManager,
+                                daemonClient: daemonClient,
+                                onOpenApp: { appId in
+                                    try? daemonClient.sendAppOpen(appId: appId)
+                                    windowState.selection = .app(appId)
+                                },
+                                onOpenHomeBase: {
+                                    windowState.selection = .panel(.directory)
+                                }
+                            )
+                            .background(adaptiveColor(light: Moss._100, dark: Moss._900))
+                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: VRadius.xl, bottomLeadingRadius: VRadius.xl))
+                        }
+                    )
+                    .onAppear {
+                        if threadManager.activeViewModel == nil {
+                            if let firstThread = threadManager.visibleThreads.first {
+                                threadManager.selectThread(id: firstThread.id)
+                            } else {
+                                threadManager.createThread()
+                            }
+                        }
+                    }
+                } else {
+                    AppsGridView(
+                        appListManager: appListManager,
+                        daemonClient: daemonClient,
+                        onOpenApp: { appId in
+                            try? daemonClient.sendAppOpen(appId: appId)
+                            windowState.selection = .app(appId)
+                        },
+                        onOpenHomeBase: {
+                            windowState.selection = .panel(.directory)
+                        }
+                    )
+                    .overlay(alignment: .topTrailing) { panelDismissButton }
+                    .background(adaptiveColor(light: Moss._50, dark: Moss._950))
+                }
             } else if panelType == .documentEditor {
                 let config = windowState.layoutConfig
                 VSplitView(
@@ -461,6 +532,25 @@ extension MainWindowView {
             AssistantInboxPanel(onClose: { windowState.dismissOverlay() }, daemonClient: daemonClient)
                 .overlay(alignment: .topTrailing) { panelDismissButton }
                 .background(adaptiveColor(light: Moss._50, dark: Moss._950))
+        case .apps:
+            AppsGridView(
+                appListManager: appListManager,
+                daemonClient: daemonClient,
+                onOpenApp: { appId in
+                    try? daemonClient.sendAppOpen(appId: appId)
+                    windowState.selection = .app(appId)
+                },
+                onOpenHomeBase: {
+                    if let homeBase = appListManager.displayApps.first(where: { $0.name.caseInsensitiveCompare("Home Base") == .orderedSame }) {
+                        try? daemonClient.sendAppOpen(appId: homeBase.id)
+                        windowState.selection = .app(homeBase.id)
+                    } else {
+                        windowState.selection = .panel(.directory)
+                    }
+                }
+            )
+            .overlay(alignment: .topTrailing) { panelDismissButton }
+            .background(adaptiveColor(light: Moss._50, dark: Moss._950))
         default:
             EmptyView()
         }
