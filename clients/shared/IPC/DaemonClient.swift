@@ -225,6 +225,9 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
     /// Called when the daemon emits a generic `notification_intent` payload.
     public var onNotificationIntent: ((NotificationIntentMessage) -> Void)?
 
+    /// Called when a notification delivery creates a new vellum conversation thread.
+    public var onNotificationThreadCreated: ((IPCNotificationThreadCreated) -> Void)?
+
     /// Called when a scheduled task completes.
     public var onScheduleComplete: ((ScheduleCompleteMessage) -> Void)?
 
@@ -425,9 +428,6 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
 
     /// Called when a task run creates a conversation so the client can show it as a visible chat thread.
     public var onTaskRunThreadCreated: ((IPCTaskRunThreadCreated) -> Void)?
-
-    /// Called when a guardian action request creates a thread for the mac channel.
-    public var onGuardianRequestThreadCreated: ((IPCGuardianRequestThreadCreated) -> Void)?
 
     /// Called when the daemon wants us to open/focus the tasks window.
     public var onOpenTasksWindow: (() -> Void)?

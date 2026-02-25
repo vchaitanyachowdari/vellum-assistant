@@ -1894,25 +1894,6 @@ public struct IPCGetSigningIdentityResponse: Codable, Sendable {
     }
 }
 
-/// Server push — broadcast when a guardian action request creates a thread for the mac channel.
-public struct IPCGuardianRequestThreadCreated: Codable, Sendable {
-    public let type: String
-    public let conversationId: String
-    public let requestId: String
-    public let callSessionId: String
-    public let title: String
-    public let questionText: String
-
-    public init(type: String, conversationId: String, requestId: String, callSessionId: String, title: String, questionText: String) {
-        self.type = type
-        self.conversationId = conversationId
-        self.requestId = requestId
-        self.callSessionId = callSessionId
-        self.title = title
-        self.questionText = questionText
-    }
-}
-
 public struct IPCGuardianVerificationRequest: Codable, Sendable {
     public let type: String
     public let action: String
@@ -2780,6 +2761,21 @@ public struct IPCNotificationIntent: Codable, Sendable {
         self.title = title
         self.body = body
         self.deepLinkMetadata = deepLinkMetadata
+    }
+}
+
+/// Server push — broadcast when a notification creates a new vellum conversation thread.
+public struct IPCNotificationThreadCreated: Codable, Sendable {
+    public let type: String
+    public let conversationId: String
+    public let title: String
+    public let sourceEventName: String
+
+    public init(type: String, conversationId: String, title: String, sourceEventName: String) {
+        self.type = type
+        self.conversationId = conversationId
+        self.title = title
+        self.sourceEventName = sourceEventName
     }
 }
 
