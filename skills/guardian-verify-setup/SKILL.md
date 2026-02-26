@@ -133,3 +133,4 @@ If not yet bound, offer to resend (Step 4) or generate a new session (Step 3).
 - The resend cooldown is 15 seconds between sends, with a maximum of 5 sends per session.
 - Per-destination rate limiting allows up to 10 sends within a 1-hour rolling window.
 - Guardian verification is identity-bound: the code can only be consumed by the identity matching the destination provided at start time.
+- **Missing `secret` guardrail**: For voice and Telegram chat-ID flows, the API response MUST include a `secret` field. If `secret` is unexpectedly absent from a start or resend response that otherwise indicates success, treat this as a control-plane error. Do NOT fabricate a code or tell the user to proceed without one. Instead, tell the user something went wrong and ask them to retry the start (Step 3) or resend (Step 4).
