@@ -914,6 +914,17 @@ public struct IPCChannelReadinessResponseSnapshotRemoteCheck: Codable, Sendable 
     }
 }
 
+/// Structured command intent — bypasses text parsing when present.
+public struct IPCCommandIntent: Codable, Sendable {
+    public let domain: String
+    public let action: String
+
+    public init(domain: String, action: String) {
+        self.domain = domain
+        self.action = action
+    }
+}
+
 public struct IPCConfirmationRequest: Codable, Sendable {
     public let type: String
     public let requestId: String
@@ -3311,6 +3322,28 @@ public struct IPCRecordingOptions: Codable, Sendable {
     }
 }
 
+/// Server → Client: pause the active recording.
+public struct IPCRecordingPause: Codable, Sendable {
+    public let type: String
+    public let recordingId: String
+
+    public init(type: String, recordingId: String) {
+        self.type = type
+        self.recordingId = recordingId
+    }
+}
+
+/// Server → Client: resume a paused recording.
+public struct IPCRecordingResume: Codable, Sendable {
+    public let type: String
+    public let recordingId: String
+
+    public init(type: String, recordingId: String) {
+        self.type = type
+        self.recordingId = recordingId
+    }
+}
+
 /// Server → Client: start a recording.
 public struct IPCRecordingStart: Codable, Sendable {
     public let type: String
@@ -3318,12 +3351,15 @@ public struct IPCRecordingStart: Codable, Sendable {
     public let attachToConversationId: String?
     /// Recording options shared across standalone and CU recording flows.
     public let options: IPCRecordingOptions?
+    /// Operation token for restart race hardening — stale completions with mismatched tokens are rejected.
+    public let operationToken: String?
 
-    public init(type: String, recordingId: String, attachToConversationId: String? = nil, options: IPCRecordingOptions? = nil) {
+    public init(type: String, recordingId: String, attachToConversationId: String? = nil, options: IPCRecordingOptions? = nil, operationToken: String? = nil) {
         self.type = type
         self.recordingId = recordingId
         self.attachToConversationId = attachToConversationId
         self.options = options
+        self.operationToken = operationToken
     }
 }
 
@@ -3336,8 +3372,10 @@ public struct IPCRecordingStatus: Codable, Sendable {
     public let durationMs: Double?
     public let error: String?
     public let attachToConversationId: String?
+    /// Operation token for restart race hardening — matches the token from RecordingStart.
+    public let operationToken: String?
 
-    public init(type: String, sessionId: String, status: String, filePath: String? = nil, durationMs: Double? = nil, error: String? = nil, attachToConversationId: String? = nil) {
+    public init(type: String, sessionId: String, status: String, filePath: String? = nil, durationMs: Double? = nil, error: String? = nil, attachToConversationId: String? = nil, operationToken: String? = nil) {
         self.type = type
         self.sessionId = sessionId
         self.status = status
@@ -3345,6 +3383,7 @@ public struct IPCRecordingStatus: Codable, Sendable {
         self.durationMs = durationMs
         self.error = error
         self.attachToConversationId = attachToConversationId
+        self.operationToken = operationToken
     }
 }
 
@@ -4626,14 +4665,17 @@ public struct IPCTaskSubmit: Codable, Sendable {
     public let screenHeight: Int
     public let attachments: [IPCUserMessageAttachment]?
     public let source: String?
+    /// Structured command intent — bypasses text parsing when present.
+    public let commandIntent: IPCCommandIntent?
 
-    public init(type: String, task: String, screenWidth: Int, screenHeight: Int, attachments: [IPCUserMessageAttachment]? = nil, source: String? = nil) {
+    public init(type: String, task: String, screenWidth: Int, screenHeight: Int, attachments: [IPCUserMessageAttachment]? = nil, source: String? = nil, commandIntent: IPCCommandIntent? = nil) {
         self.type = type
         self.task = task
         self.screenWidth = screenWidth
         self.screenHeight = screenHeight
         self.attachments = attachments
         self.source = source
+        self.commandIntent = commandIntent
     }
 }
 
@@ -5676,8 +5718,10 @@ public struct IPCUserMessage: Codable, Sendable {
     public let channel: String?
     /// Originating interface identifier (e.g. 'macos').
     public let interface: String
+    /// Structured command intent — bypasses text parsing when present.
+    public let commandIntent: IPCCommandIntent?
 
-    public init(type: String, sessionId: String, content: String? = nil, attachments: [IPCUserMessageAttachment]? = nil, activeSurfaceId: String? = nil, currentPage: String? = nil, bypassSecretCheck: Bool? = nil, channel: String? = nil, interface: String) {
+    public init(type: String, sessionId: String, content: String? = nil, attachments: [IPCUserMessageAttachment]? = nil, activeSurfaceId: String? = nil, currentPage: String? = nil, bypassSecretCheck: Bool? = nil, channel: String? = nil, interface: String, commandIntent: IPCCommandIntent? = nil) {
         self.type = type
         self.sessionId = sessionId
         self.content = content
@@ -5687,6 +5731,7 @@ public struct IPCUserMessage: Codable, Sendable {
         self.bypassSecretCheck = bypassSecretCheck
         self.channel = channel
         self.interface = interface
+        self.commandIntent = commandIntent
     }
 }
 

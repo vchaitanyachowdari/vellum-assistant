@@ -27,6 +27,7 @@ const clientMessages: Record<ClientMessageType, ClientMessage> = {
     sessionId: 'sess-001',
     content: 'Hello, assistant!',
     interface: 'cli',
+    commandIntent: { domain: 'screen_recording', action: 'start' },
   },
   confirmation_response: {
     type: 'confirmation_response',
@@ -153,6 +154,7 @@ const clientMessages: Record<ClientMessageType, ClientMessage> = {
     task: 'Open Safari and search for weather',
     screenWidth: 1920,
     screenHeight: 1080,
+    commandIntent: { domain: 'screen_recording', action: 'start' },
   },
   ui_surface_action: {
     type: 'ui_surface_action',
@@ -1951,6 +1953,14 @@ const serverMessages: Record<ServerMessageType, ServerMessage> = {
   approved_device_remove_response: {
     type: 'approved_device_remove_response',
     success: true,
+  },
+  recording_pause: {
+    type: 'recording_pause',
+    recordingId: 'rec-001',
+  },
+  recording_resume: {
+    type: 'recording_resume',
+    recordingId: 'rec-001',
   },
   recording_start: {
     type: 'recording_start',

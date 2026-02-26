@@ -416,6 +416,16 @@ final class ScreenRecorder: NSObject {
     /// RecordingManager sets this to react to stream failures (update state, send IPC, clean up).
     var onStreamError: ((RecorderError) -> Void)?
 
+    /// When true, incoming sample buffers are silently dropped instead of being
+    /// appended to the writer. The SCStream keeps running so resume is instant.
+    /// Thread-safe: read on the output queue, written from MainActor.
+    nonisolated var isPaused: Bool {
+        get { pauseLock.withLock { _isPaused } }
+        set { pauseLock.withLock { _isPaused = newValue } }
+    }
+    private nonisolated(unsafe) var _isPaused = false
+    private nonisolated(unsafe) let pauseLock = NSLock()
+
     /// Background queue for processing sample buffers from ScreenCaptureKit.
     private let outputQueue = DispatchQueue(label: "com.vellum.screen-recorder.output", qos: .userInitiated)
 
@@ -1094,7 +1104,25 @@ final class ScreenRecorder: NSObject {
             durationMs = 0
         }
 
+        // Verify the output file exists and has non-zero size before
+        // reporting success. A zero-length file indicates a silent write
+        // failure that the writer status check above may not catch.
+        guard FileManager.default.fileExists(atPath: finalURL.path) else {
+            log.error("Stop: output file missing after finalization — \(finalURL.path, privacy: .public)")
+            cleanUpWriter()
+            clearTelemetryState()
+            throw RecorderError.invalidOutputFile
+        }
+
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: finalURL.path)[.size] as? Int) ?? 0
+
+        guard fileSize > 0 else {
+            log.error("Stop: output file is zero-length — discarding as invalid")
+            try? FileManager.default.removeItem(at: finalURL)
+            cleanUpWriter()
+            clearTelemetryState()
+            throw RecorderError.invalidOutputFile
+        }
 
         RecordingTelemetry.logStop(durationMs: durationMs, fileSize: fileSize, status: .success)
 
@@ -1111,6 +1139,9 @@ final class ScreenRecorder: NSObject {
     /// call during `applicationWillTerminate` where async work cannot complete.
     func cancelRecording() {
         guard isRecordingActive else { return }
+
+        // Reset pause flag so it doesn't leak into a future recording.
+        isPaused = false
 
         // Emit cancel telemetry before tearing down state
         let durationMs: Int
@@ -1184,6 +1215,9 @@ final class ScreenRecorder: NSObject {
             guard isRecordingActive else { return }
 
             log.error("Stream error during active recording — cleaning up (error=\(recorderError.localizedDescription, privacy: .public))")
+
+            // Reset pause flag so it doesn't leak into a future recording.
+            self.isPaused = false
 
             // Store for attemptStartWithConfig to propagate typed errors
             // instead of collapsing them to .noFramesReceived.
@@ -1347,6 +1381,8 @@ private final class StreamOutputDelegate: NSObject, SCStreamOutput, SCStreamDele
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        // Drop frames while paused — the stream keeps running so resume is instant
+        guard !recorder.isPaused else { return }
         writerContext.processSampleBuffer(sampleBuffer, ofType: type)
     }
 

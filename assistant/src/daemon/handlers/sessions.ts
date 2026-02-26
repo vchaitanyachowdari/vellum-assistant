@@ -35,10 +35,12 @@ import type {
   UserMessage,
 } from '../ipc-protocol.js';
 import { normalizeThreadType } from '../ipc-protocol.js';
-import { classifyRecordingIntent, detectRecordingIntent, detectStopRecordingIntent, hasSubstantiveContent, isInterrogative, stripRecordingIntent, stripStopRecordingIntent } from '../recording-intent.js';
+import { executeRecordingIntent } from '../recording-executor.js';
+import { classifyRecordingIntentFallback, containsRecordingKeywords } from '../recording-intent-fallback.js';
+import { resolveRecordingIntent } from '../recording-intent.js';
 import { buildSessionErrorMessage,classifySessionError } from '../session-error.js';
 import { generateVideoThumbnail } from '../video-thumbnail.js';
-import { handleRecordingStart, handleRecordingStop } from './recording.js';
+import { handleRecordingPause, handleRecordingRestart, handleRecordingResume, handleRecordingStart, handleRecordingStop } from './recording.js';
 import {
   defineHandlers,
   type HandlerContext,
@@ -175,7 +177,7 @@ export async function handleUserMessage(
     };
 
     const config = getConfig();
-    const messageText = msg.content ?? '';
+    let messageText = msg.content ?? '';
 
     // Block inbound messages that contain secrets and redirect to secure prompt
     if (!msg.bypassSecretCheck) {
@@ -227,85 +229,157 @@ export async function handleUserMessage(
       }
     }
 
+    // ── Structured command intent (bypasses text parsing) ──────────────────
+    if (config.daemon.standaloneRecording && msg.commandIntent?.domain === 'screen_recording') {
+      const action = msg.commandIntent.action;
+      rlog.info({ action, source: 'commandIntent' }, 'Recording command intent received in user_message');
+      if (action === 'start') {
+        const recordingId = handleRecordingStart(msg.sessionId, { promptForSource: true }, socket, ctx);
+        ctx.send(socket, {
+          type: 'assistant_text_delta',
+          text: recordingId ? 'Starting screen recording.' : 'A recording is already active.',
+          sessionId: msg.sessionId,
+        });
+        ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+        return;
+      } else if (action === 'stop') {
+        const stopped = handleRecordingStop(msg.sessionId, ctx) !== undefined;
+        ctx.send(socket, {
+          type: 'assistant_text_delta',
+          text: stopped ? 'Stopping the recording.' : 'No active recording to stop.',
+          sessionId: msg.sessionId,
+        });
+        ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+        return;
+      } else if (action === 'restart') {
+        const restartResult = handleRecordingRestart(msg.sessionId, socket, ctx);
+        ctx.send(socket, {
+          type: 'assistant_text_delta',
+          text: restartResult.responseText,
+          sessionId: msg.sessionId,
+        });
+        ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+        return;
+      } else if (action === 'pause') {
+        const paused = handleRecordingPause(msg.sessionId, ctx) !== undefined;
+        ctx.send(socket, {
+          type: 'assistant_text_delta',
+          text: paused ? 'Pausing the recording.' : 'No active recording to pause.',
+          sessionId: msg.sessionId,
+        });
+        ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+        return;
+      } else if (action === 'resume') {
+        const resumed = handleRecordingResume(msg.sessionId, ctx) !== undefined;
+        ctx.send(socket, {
+          type: 'assistant_text_delta',
+          text: resumed ? 'Resuming the recording.' : 'No active recording to resume.',
+          sessionId: msg.sessionId,
+        });
+        ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+        return;
+      } else {
+        // Unrecognized action — fall through to normal text handling
+        rlog.warn({ action, source: 'commandIntent' }, 'Unrecognized screen_recording action, falling through to text handling');
+      }
+    }
+
     // ── Standalone recording intent interception ──────────────────────────
     if (config.daemon.standaloneRecording && messageText) {
       const name = getAssistantName();
       const dynamicNames = [name].filter(Boolean) as string[];
-      const intentClass = classifyRecordingIntent(messageText, dynamicNames);
+      const intentResult = resolveRecordingIntent(messageText, dynamicNames);
 
-      switch (intentClass) {
-        case 'stop_only': {
-          const stopped = handleRecordingStop(msg.sessionId, ctx) !== undefined;
-          rlog.info('Recording stop intent intercepted in user_message');
+      if (intentResult.kind === 'start_only' || intentResult.kind === 'stop_only' ||
+          intentResult.kind === 'start_and_stop_only' ||
+          intentResult.kind === 'restart_only' || intentResult.kind === 'pause_only' ||
+          intentResult.kind === 'resume_only') {
+        const execResult = executeRecordingIntent(intentResult, {
+          conversationId: msg.sessionId,
+          socket,
+          ctx,
+        });
+
+        if (execResult.handled) {
+          rlog.info({ kind: intentResult.kind }, 'Recording intent intercepted in user_message');
           ctx.send(socket, {
             type: 'assistant_text_delta',
-            text: stopped ? 'Stopping the recording.' : 'No active recording to stop.',
+            text: execResult.responseText!,
             sessionId: msg.sessionId,
           });
           ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
           return;
         }
-        case 'start_only': {
-          const recordingId = handleRecordingStart(msg.sessionId, { promptForSource: true }, socket, ctx);
-          rlog.info('Recording-only intent intercepted in user_message');
+      }
 
-          if (recordingId) {
-            ctx.send(socket, { type: 'assistant_text_delta', text: 'Starting screen recording.', sessionId: msg.sessionId });
-          } else {
-            ctx.send(socket, { type: 'assistant_text_delta', text: 'A recording is already active.', sessionId: msg.sessionId });
-          }
-          ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
-          return;
+      if (intentResult.kind === 'start_with_remainder' || intentResult.kind === 'stop_with_remainder' ||
+          intentResult.kind === 'start_and_stop_with_remainder' || intentResult.kind === 'restart_with_remainder') {
+        const execResult = executeRecordingIntent(intentResult, {
+          conversationId: msg.sessionId,
+          socket,
+          ctx,
+        });
+
+        // Continue with stripped text for downstream processing
+        msg.content = execResult.remainderText ?? messageText;
+        messageText = msg.content;
+
+        // Execute the recording side effects that executeRecordingIntent deferred
+        if (intentResult.kind === 'stop_with_remainder') {
+          handleRecordingStop(msg.sessionId, ctx);
         }
-        case 'mixed': {
-          // Skip recording side effects for questions about recording
-          // (e.g., "how do I stop recording?") — let the model answer instead.
-          if (isInterrogative(messageText, dynamicNames)) {
-            rlog.info('Mixed recording intent is interrogative — skipping side effects');
-            break;
+        if (intentResult.kind === 'start_with_remainder') {
+          handleRecordingStart(msg.sessionId, { promptForSource: true }, socket, ctx);
+        }
+        // start_and_stop_with_remainder / restart_with_remainder — route through
+        // handleRecordingRestart which properly cleans up maps between stop and start.
+        if (intentResult.kind === 'restart_with_remainder' || intentResult.kind === 'start_and_stop_with_remainder') {
+          const restartResult = handleRecordingRestart(msg.sessionId, socket, ctx);
+          // Only fall back to plain start for start_and_stop_with_remainder.
+          // restart_with_remainder should NOT silently start a new recording when idle.
+          if (!restartResult.initiated && restartResult.reason === 'no_active_recording'
+              && intentResult.kind === 'start_and_stop_with_remainder') {
+            handleRecordingStart(msg.sessionId, { promptForSource: true }, socket, ctx);
           }
+        }
 
-          // Mixed = recording intent embedded in broader text.
-          // Handle the recording action, then check if remaining text is substantive.
-          const hasStart = detectRecordingIntent(messageText);
-          const hasStop = detectStopRecordingIntent(messageText);
+        rlog.info({ remaining: msg.content, kind: intentResult.kind }, 'Recording intent with remainder — continuing with remaining text');
+      }
 
-          if (hasStop) {
-            handleRecordingStop(msg.sessionId, ctx);
-            rlog.info('Mixed intent — stopping recording');
-          }
-          const startResult = hasStart ? handleRecordingStart(msg.sessionId, { promptForSource: true }, socket, ctx) : null;
-          if (hasStart) {
-            rlog.info({ started: !!startResult }, 'Mixed intent — starting recording');
-          }
+      // 'none' — deterministic resolver found nothing; try LLM fallback
+      // if the text contains recording-related keywords.
+      if (intentResult.kind === 'none' && containsRecordingKeywords(messageText)) {
+        const fallback = await classifyRecordingIntentFallback(messageText);
+        rlog.info({ fallbackAction: fallback.action, fallbackConfidence: fallback.confidence }, 'Recording intent LLM fallback result');
 
-          // Strip recording clauses from the message
-          let remaining = messageText;
-          if (hasStart) remaining = stripRecordingIntent(remaining);
-          if (hasStop) remaining = stripStopRecordingIntent(remaining);
+        if (fallback.action !== 'none' && fallback.confidence === 'high') {
+          const kindMap: Record<string, import('../recording-intent.js').RecordingIntentResult> = {
+            start: { kind: 'start_only' },
+            stop: { kind: 'stop_only' },
+            restart: { kind: 'restart_only' },
+            pause: { kind: 'pause_only' },
+            resume: { kind: 'resume_only' },
+          };
+          const mapped = kindMap[fallback.action];
+          if (mapped) {
+            const execResult = executeRecordingIntent(mapped, {
+              conversationId: msg.sessionId,
+              socket,
+              ctx,
+            });
 
-          // If nothing substantive remains (just fillers, names, punctuation), complete now
-          if (!hasSubstantiveContent(remaining, dynamicNames)) {
-            let text: string;
-            if (hasStart && startResult) {
-              text = hasStop ? 'Stopping current recording and starting a new one.' : 'Starting screen recording.';
-            } else if (hasStart) {
-              text = 'A recording is already active.';
-            } else {
-              text = 'Stopping the recording.';
+            if (execResult.handled) {
+              rlog.info({ kind: mapped.kind, source: 'llm_fallback' }, 'Recording intent intercepted via LLM fallback');
+              ctx.send(socket, {
+                type: 'assistant_text_delta',
+                text: execResult.responseText!,
+                sessionId: msg.sessionId,
+              });
+              ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
+              return;
             }
-            ctx.send(socket, { type: 'assistant_text_delta', text, sessionId: msg.sessionId });
-            ctx.send(socket, { type: 'message_complete', sessionId: msg.sessionId });
-            return;
           }
-
-          // Continue with stripped text for downstream processing
-          msg.content = remaining;
-          rlog.info({ remaining }, 'Mixed recording intent — recording handled, continuing with remaining text');
-          break;
         }
-        case 'none':
-          break;
       }
     }
 
