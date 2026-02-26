@@ -396,21 +396,22 @@ describe('guardian service challenge validation', () => {
     expect(result.ttlSeconds).toBe(600);
     expect(result.instruction).toBeDefined();
     expect(result.instruction.length).toBeGreaterThan(0);
-    expect(result.instruction).toContain('code you were given');
+    // Hex codes use generic "send the code:" format
+    expect(result.instruction).toContain(`the code: ${result.secret}`);
   });
 
   test('createVerificationChallenge produces a non-empty instruction for telegram channel', () => {
     const result = createVerificationChallenge('asst-1', 'telegram');
     expect(result.instruction).toBeDefined();
     expect(result.instruction.length).toBeGreaterThan(0);
-    expect(result.instruction).toContain('code you were given');
+    expect(result.instruction).toContain(`the code: ${result.secret}`);
   });
 
   test('createVerificationChallenge produces a non-empty instruction for sms channel', () => {
     const result = createVerificationChallenge('asst-1', 'sms');
     expect(result.instruction).toBeDefined();
     expect(result.instruction.length).toBeGreaterThan(0);
-    expect(result.instruction).toContain('code you were given');
+    expect(result.instruction).toContain(`the code: ${result.secret}`);
   });
 
   test('validateAndConsumeChallenge succeeds with correct secret', () => {
