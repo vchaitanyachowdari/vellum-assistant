@@ -260,6 +260,7 @@ extension AppDelegate {
     /// app is active. All notification types get a fallback native alert when
     /// backgrounded to guarantee delivery if the notification_intent IPC is late.
     func handleNotificationThreadCreated(_ msg: IPCNotificationThreadCreated) {
+        ensureMainWindowExists()
         mainWindow?.threadManager.createNotificationThread(
             conversationId: msg.conversationId,
             title: msg.title,
@@ -303,6 +304,12 @@ extension AppDelegate {
                 return false
             }
             threadManager.activeThreadId = thread.id
+            // Clear unseen state and notify the daemon when deep-linking into a
+            // conversation. selectThread's unseen-clear is guarded by
+            // id != previousActiveId, which is false when activeThreadId was
+            // already set above, so we call markConversationSeen explicitly to
+            // keep both the local flag and the daemon's server-side state in sync.
+            threadManager.markConversationSeen(threadId: thread.id)
             return true
         }
 

@@ -95,6 +95,12 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         }
     }
 
+    /// Count of visible (non-archived, non-private) threads with unseen assistant messages.
+    /// Used by AppDelegate to drive the dock badge.
+    var unseenVisibleConversationCount: Int {
+        threads.filter { !$0.isArchived && $0.kind != .private && $0.hasUnseenLatestAssistantMessage }.count
+    }
+
     var archivedThreads: [ThreadModel] {
         threads.filter { $0.isArchived }
     }
@@ -696,6 +702,18 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             if let idx = threads.firstIndex(where: { $0.id == id }) {
                 threads[idx].hasUnseenLatestAssistantMessage = false
             }
+        }
+    }
+
+    /// Clear the local unseen flag and notify the daemon that the conversation
+    /// has been seen. Use this from call-sites that bypass `selectThread` (e.g.
+    /// deep-link navigation in `openConversationThread`) where the `id != previousActiveId`
+    /// guard would skip the signal.
+    internal func markConversationSeen(threadId: UUID) {
+        guard let idx = threads.firstIndex(where: { $0.id == threadId }) else { return }
+        threads[idx].hasUnseenLatestAssistantMessage = false
+        if let sessionId = threads[idx].sessionId {
+            emitConversationSeenSignal(conversationId: sessionId)
         }
     }
 
