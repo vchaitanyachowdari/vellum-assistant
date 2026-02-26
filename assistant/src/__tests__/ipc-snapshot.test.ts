@@ -692,6 +692,17 @@ const clientMessages: Record<ClientMessageType, ClientMessage> = {
     deliveryId: 'delivery-001',
     success: true,
   },
+  conversation_seen_signal: {
+    type: 'conversation_seen_signal',
+    conversationId: 'conv-001',
+    sourceChannel: 'vellum',
+    signalType: 'macos_notification_view',
+    confidence: 'explicit',
+    source: 'notification-action',
+    evidenceText: 'User clicked View on notification',
+    observedAt: 1700000000000,
+    metadata: { notificationCategory: 'NOTIFICATION_INTENT' },
+  },
   recording_status: {
     type: 'recording_status',
     sessionId: 'rec-001',
@@ -827,7 +838,7 @@ const serverMessages: Record<ServerMessageType, ServerMessage> = {
     type: 'session_list_response',
     sessions: [
       { id: 'sess-001', title: 'First session', updatedAt: 1700000000, threadType: 'standard' },
-      { id: 'sess-002', title: 'Second session', updatedAt: 1700001000, threadType: 'standard' },
+      { id: 'sess-002', title: 'Second session', updatedAt: 1700001000, threadType: 'standard', assistantAttention: { hasUnseenLatestAssistantMessage: true, latestAssistantMessageAt: 1700001000, lastSeenConfidence: 'explicit', lastSeenSignalType: 'macos_notification_view' } },
     ],
   },
   sessions_clear_response: {

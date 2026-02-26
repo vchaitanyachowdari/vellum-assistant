@@ -198,7 +198,9 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             return
         }
 
-        let thread = ThreadModel(title: title, sessionId: conversationId)
+        var thread = ThreadModel(title: title, sessionId: conversationId)
+        thread.source = "notification"
+        thread.hasUnseenLatestAssistantMessage = true
         let viewModel = makeViewModel()
         viewModel.sessionId = conversationId
         // Start the message loop so the view model receives streamed messages
@@ -362,7 +364,8 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
                 sessionId: session.id,
                 isArchived: isSessionArchived(session.id),
                 kind: session.threadType == "private" ? .private : .standard,
-                source: session.source
+                source: session.source,
+                hasUnseenLatestAssistantMessage: session.assistantAttention?.hasUnseenLatestAssistantMessage ?? false
             )
             // VM creation is lazy — getOrCreateViewModel() will instantiate
             // when the thread is first accessed (e.g. selected by the user).
@@ -385,6 +388,7 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
     func selectThread(id: UUID) {
         guard let thread = threads.first(where: { $0.id == id }) else { return }
 
+        let previousActiveId = activeThreadId
         trimPreviousThreadIfNeeded(nextThreadId: id)
 
         // Re-create the ViewModel if it was LRU-evicted.
@@ -401,6 +405,17 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         // Switching threads is a natural point to shed cached render
         // artefacts from the previous conversation.
         Self.clearRenderCaches()
+
+        // Emit explicit seen signal for user-initiated thread selection.
+        // Skip if this thread was already active to avoid duplicate signals
+        // (e.g. when openConversationThread sets activeThreadId directly and
+        // SwiftUI's onChange cycle calls selectThread with the same id).
+        if id != previousActiveId, let sessionId = thread.sessionId {
+            emitConversationSeenSignal(conversationId: sessionId)
+            if let idx = threads.firstIndex(where: { $0.id == id }) {
+                threads[idx].hasUnseenLatestAssistantMessage = false
+            }
+        }
     }
 
     // MARK: - Render Cache Management
@@ -646,11 +661,41 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
     }
 
     func activateThread(_ id: UUID) {
+        let previousActiveId = activeThreadId
         trimPreviousThreadIfNeeded(nextThreadId: id)
         activeThreadId = id
+
+        // Emit explicit seen signal for user-initiated thread activation.
+        // Skip during session restoration to avoid false "seen" signals on bootstrap.
+        if !isRestoringThreads,
+           id != previousActiveId,
+           let thread = threads.first(where: { $0.id == id }),
+           let sessionId = thread.sessionId {
+            emitConversationSeenSignal(conversationId: sessionId)
+            if let idx = threads.firstIndex(where: { $0.id == id }) {
+                threads[idx].hasUnseenLatestAssistantMessage = false
+            }
+        }
     }
 
     // MARK: - Private
+
+    /// Send a `conversation_seen_signal` IPC message to the daemon.
+    private func emitConversationSeenSignal(conversationId: String) {
+        let signal = IPCConversationSeenSignal(
+            conversationId: conversationId,
+            sourceChannel: "vellum",
+            signalType: "macos_conversation_opened",
+            confidence: "explicit",
+            source: "ui-navigation",
+            evidenceText: "User opened conversation in app"
+        )
+        do {
+            try daemonClient.send(signal)
+        } catch {
+            log.warning("Failed to send conversation_seen_signal for \(conversationId): \(error.localizedDescription)")
+        }
+    }
 
     /// Trim the previously active thread's view model to shed memory before
     /// switching to a different thread. Skipped when the VM hasn't loaded

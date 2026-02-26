@@ -851,7 +851,7 @@ struct MainWindowView: View {
             }
         }) {
             HStack(spacing: VSpacing.xs) {
-                // Leading icon: spinner (busy) > pin indicator (pinned) > spacer
+                // Leading icon: spinner (busy) > pin indicator (pinned) > unseen dot > spacer
                 // The interactive pin button is in .overlay(alignment: .leading) below
                 // to avoid nesting a Button inside this outer Button's label.
                 if isBusy {
@@ -866,6 +866,11 @@ struct MainWindowView: View {
                         .frame(width: 20, height: 20)
                         .background(VColor.backgroundSubtle)
                         .clipShape(Circle())
+                } else if thread.source == "notification" && thread.hasUnseenLatestAssistantMessage {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .frame(width: 20, height: 20)
                 } else {
                     Color.clear
                         .frame(width: 20, height: 20)
