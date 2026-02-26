@@ -106,13 +106,16 @@ import {
 import { handleSubscribeAssistantEvents } from './routes/events-routes.js';
 import { handleGetIdentity,handleHealth } from './routes/identity-routes.js';
 import {
+  handleCancelOutbound,
   handleClearTelegramConfig,
   handleCreateGuardianChallenge,
   handleGetGuardianStatus,
   handleGetTelegramConfig,
+  handleResendOutbound,
   handleSetTelegramCommands,
   handleSetTelegramConfig,
   handleSetupTelegram,
+  handleStartOutbound,
 } from './routes/integration-routes.js';
 import type { PairingHandlerContext } from './routes/pairing-routes.js';
 // Extracted route handlers
@@ -634,6 +637,9 @@ export class RuntimeHttpServer {
       // Integrations — Guardian verification
       if (endpoint === 'integrations/guardian/challenge' && req.method === 'POST') return await handleCreateGuardianChallenge(req);
       if (endpoint === 'integrations/guardian/status' && req.method === 'GET') return handleGetGuardianStatus(url);
+      if (endpoint === 'integrations/guardian/outbound/start' && req.method === 'POST') return await handleStartOutbound(req);
+      if (endpoint === 'integrations/guardian/outbound/resend' && req.method === 'POST') return await handleResendOutbound(req);
+      if (endpoint === 'integrations/guardian/outbound/cancel' && req.method === 'POST') return await handleCancelOutbound(req);
 
       if (endpoint === 'attachments' && req.method === 'POST') return await handleUploadAttachment(req);
       if (endpoint === 'attachments' && req.method === 'DELETE') return await handleDeleteAttachment(req);
