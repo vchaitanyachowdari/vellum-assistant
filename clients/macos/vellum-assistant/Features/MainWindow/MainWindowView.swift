@@ -733,7 +733,7 @@ struct MainWindowView: View {
                     break
                 }
             }
-            if case .panel(.identity) = windowState.selection {
+            if case .panel(.intelligence) = windowState.selection {
                 windowState.selection = nil
             }
             // Clear subagent detail panel on thread switch
@@ -1104,11 +1104,8 @@ struct MainWindowView: View {
             SidebarNavRow(icon: "house.fill", label: "Home Base", isActive: homeBaseIsActive) {
                 openHomeBaseApp()
             }
-            SidebarNavRow(icon: "person.crop.circle", label: "Identity", isActive: windowState.activePanel == .identity) {
-                windowState.togglePanel(.identity)
-            }
-            SidebarNavRow(icon: "sparkles", label: "Skills", isActive: windowState.activePanel == .agent) {
-                windowState.togglePanel(.agent)
+            SidebarNavRow(icon: "brain.head.profile", label: "Intelligence", isActive: windowState.activePanel == .intelligence) {
+                windowState.togglePanel(.intelligence)
             }
             SidebarNavRow(icon: "square.grid.2x2", label: "Apps", isActive: windowState.activePanel == .apps) {
                 windowState.togglePanel(.apps)
@@ -1218,11 +1215,8 @@ struct MainWindowView: View {
             SidebarNavRow(icon: "house.fill", label: "Home Base", isActive: homeBaseIsActive, isExpanded: false) {
                 openHomeBaseApp()
             }
-            SidebarNavRow(icon: "person.crop.circle", label: "Identity", isActive: windowState.activePanel == .identity, isExpanded: false) {
-                windowState.togglePanel(.identity)
-            }
-            SidebarNavRow(icon: "sparkles", label: "Skills", isActive: windowState.activePanel == .agent, isExpanded: false) {
-                windowState.togglePanel(.agent)
+            SidebarNavRow(icon: "brain.head.profile", label: "Intelligence", isActive: windowState.activePanel == .intelligence, isExpanded: false) {
+                windowState.togglePanel(.intelligence)
             }
             SidebarNavRow(icon: "square.grid.2x2", label: "Apps", isActive: windowState.activePanel == .apps, isExpanded: false) {
                 windowState.togglePanel(.apps)
