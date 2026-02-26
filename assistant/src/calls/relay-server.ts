@@ -700,6 +700,7 @@ export class RelayConnection {
             successSession.initiatedFromConversationId,
             'guardian_verification_succeeded',
             successSession.toNumber,
+            { channel: 'voice' },
           );
         }
 
@@ -754,20 +755,20 @@ export class RelayConnection {
           lastError: 'Guardian voice verification failed — max attempts exceeded',
         });
 
-        const session = getCallSession(this.callSessionId);
-        if (session) {
+        const failSession = getCallSession(this.callSessionId);
+        if (failSession) {
           expirePendingQuestions(this.callSessionId);
-          persistCallCompletionMessage(session.conversationId, this.callSessionId);
-          fireCallCompletionNotifier(session.conversationId, this.callSessionId);
+          persistCallCompletionMessage(failSession.conversationId, this.callSessionId);
+          fireCallCompletionNotifier(failSession.conversationId, this.callSessionId);
 
           // Emit a pointer message to the origin conversation so the
           // requesting chat sees a deterministic failure notice.
-          if (isOutbound && session.initiatedFromConversationId) {
+          if (isOutbound && failSession.initiatedFromConversationId) {
             addPointerMessage(
-              session.initiatedFromConversationId,
+              failSession.initiatedFromConversationId,
               'guardian_verification_failed',
-              session.toNumber,
-              { reason: 'Max verification attempts exceeded' },
+              failSession.toNumber,
+              { channel: 'voice', reason: 'Max verification attempts exceeded' },
             );
           }
         }

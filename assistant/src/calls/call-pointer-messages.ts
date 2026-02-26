@@ -12,7 +12,7 @@ export function addPointerMessage(
   conversationId: string,
   event: PointerEvent,
   phoneNumber: string,
-  extra?: { duration?: string; reason?: string; verificationCode?: string },
+  extra?: { duration?: string; reason?: string; verificationCode?: string; channel?: string },
 ): void {
   let text: string;
   switch (event) {
@@ -31,14 +31,18 @@ export function addPointerMessage(
         ? `\u{1F4DE} Call to ${phoneNumber} failed: ${extra.reason}.`
         : `\u{1F4DE} Call to ${phoneNumber} failed.`;
       break;
-    case 'guardian_verification_succeeded':
-      text = `\u{2705} Guardian verification for ${phoneNumber} succeeded.`;
+    case 'guardian_verification_succeeded': {
+      const ch = extra?.channel ?? 'voice';
+      text = `\u{2705} Guardian verification (${ch}) for ${phoneNumber} succeeded.`;
       break;
-    case 'guardian_verification_failed':
+    }
+    case 'guardian_verification_failed': {
+      const ch = extra?.channel ?? 'voice';
       text = extra?.reason
-        ? `\u{274C} Guardian verification for ${phoneNumber} failed: ${extra.reason}.`
-        : `\u{274C} Guardian verification for ${phoneNumber} failed.`;
+        ? `\u{274C} Guardian verification (${ch}) for ${phoneNumber} failed: ${extra.reason}.`
+        : `\u{274C} Guardian verification (${ch}) for ${phoneNumber} failed.`;
       break;
+    }
   }
 
   // Pointer messages are assistant-generated status updates in the initiating
