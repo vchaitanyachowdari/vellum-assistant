@@ -7,6 +7,8 @@
  * same approval flow can be reused across transports.
  */
 
+import type { GuardianDecisionAction } from './guardian-decision-types.js';
+
 // ---------------------------------------------------------------------------
 // Approval actions
 // ---------------------------------------------------------------------------
@@ -20,12 +22,20 @@ export interface ApprovalActionOption {
   label: string;
 }
 
-/** Default action options presented to users across all channels. */
-export const DEFAULT_APPROVAL_ACTIONS: readonly ApprovalActionOption[] = [
-  { id: 'approve_once', label: 'Approve once' },
-  { id: 'approve_always', label: 'Approve always' },
-  { id: 'reject', label: 'Reject' },
-] as const;
+/**
+ * Map `GuardianDecisionAction[]` to `ApprovalActionOption[]` so channel
+ * prompt payloads can be derived from the unified decision action set.
+ * The `action` field from GuardianDecisionAction maps to the `id` field
+ * on ApprovalActionOption (both are canonical action identifiers).
+ */
+export function toApprovalActionOptions(
+  actions: GuardianDecisionAction[],
+): ApprovalActionOption[] {
+  return actions.map(a => ({
+    id: a.action as ApprovalAction,
+    label: a.label,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Approval prompt

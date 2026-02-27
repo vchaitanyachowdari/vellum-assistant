@@ -455,6 +455,9 @@ extension ChatViewModel {
                 onSessionCreated?(info.sessionId)
                 log.info("Chat session created: \(info.sessionId)")
 
+                // Fetch pending guardian prompts for this conversation
+                refreshGuardianPrompts()
+
                 // Send the queued user message, or finalize a message-less
                 // session create by clearing the bootstrap sending state.
                 if let pending = pendingUserMessage {
@@ -688,6 +691,8 @@ extension ChatViewModel {
                 }
             }
             dispatchPendingSendDirect()
+            // Refresh guardian prompts on message completion (cheap consistency check)
+            refreshGuardianPrompts()
             // Skip follow-up suggestions for workspace refinements
             if !isSending && !wasRefinement {
                 fetchSuggestion()
@@ -1517,6 +1522,12 @@ extension ChatViewModel {
             if degraded {
                 log.warning("Memory is temporarily unavailable – reason: \(status.reason ?? "unknown", privacy: .public)")
             }
+
+        case .guardianActionsPendingResponse(let response):
+            handleGuardianActionsPendingResponse(response)
+
+        case .guardianActionDecisionResponse(let response):
+            handleGuardianActionDecisionResponse(response)
 
         default:
             break

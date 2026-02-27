@@ -1,0 +1,91 @@
+/**
+ * Shared types for the guardian decision primitive.
+ *
+ * All decision entrypoints (callback buttons, conversational engine, legacy
+ * parser, requester self-cancel) use these types to route through the
+ * unified `applyGuardianDecision` primitive.
+ */
+
+// ---------------------------------------------------------------------------
+// Guardian decision prompt
+// ---------------------------------------------------------------------------
+
+/** Structured model for prompts shown to guardians. */
+export interface GuardianDecisionPrompt {
+  requestId: string;
+  /** Short human-readable code for the request. */
+  requestCode: string;
+  state: 'pending' | 'followup_awaiting_choice' | 'expired_superseded_with_active_call';
+  questionText: string;
+  toolName: string | null;
+  actions: GuardianDecisionAction[];
+  expiresAt: number;
+  conversationId: string;
+  callSessionId: string | null;
+}
+
+export interface GuardianDecisionAction {
+  /** Canonical action identifier. */
+  action: string;
+  /** Human-readable label for the action. */
+  label: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shared decision action constants
+// ---------------------------------------------------------------------------
+
+/** Canonical set of all guardian decision actions with their labels. */
+export const GUARDIAN_DECISION_ACTIONS = {
+  approve_once:   { action: 'approve_once',   label: 'Approve once' },
+  approve_always: { action: 'approve_always', label: 'Approve always' },
+  reject:         { action: 'reject',         label: 'Reject' },
+} as const satisfies Record<string, GuardianDecisionAction>;
+
+/**
+ * Build the set of `GuardianDecisionAction` items appropriate for a prompt,
+ * respecting whether persistent decisions (approve_always) are allowed.
+ *
+ * When `persistentDecisionsAllowed` is `false`, the `approve_always` action
+ * is excluded. When `forGuardianOnBehalf` is `true` (guardian acting on behalf
+ * of a requester), `approve_always` is also excluded since guardians cannot
+ * permanently allowlist tools on behalf of others.
+ */
+export function buildDecisionActions(opts?: {
+  persistentDecisionsAllowed?: boolean;
+  forGuardianOnBehalf?: boolean;
+}): GuardianDecisionAction[] {
+  const showAlways = opts?.persistentDecisionsAllowed !== false && !opts?.forGuardianOnBehalf;
+  return [
+    GUARDIAN_DECISION_ACTIONS.approve_once,
+    ...(showAlways ? [GUARDIAN_DECISION_ACTIONS.approve_always] : []),
+    GUARDIAN_DECISION_ACTIONS.reject,
+  ];
+}
+
+/**
+ * Build the plain-text fallback instruction string that matches the given
+ * set of decision actions. Ensures the text always includes parser-compatible
+ * keywords (yes/always/no) so text-based fallback remains actionable.
+ */
+export function buildPlainTextFallback(
+  promptText: string,
+  actions: GuardianDecisionAction[],
+): string {
+  const hasAlways = actions.some(a => a.action === 'approve_always');
+  return hasAlways
+    ? `${promptText}\n\nReply "yes" to approve once, "always" to approve always, or "no" to reject.`
+    : `${promptText}\n\nReply "yes" to approve or "no" to reject.`;
+}
+
+// ---------------------------------------------------------------------------
+// Apply decision result
+// ---------------------------------------------------------------------------
+
+export interface ApplyGuardianDecisionResult {
+  applied: boolean;
+  reason?: 'stale' | 'identity_mismatch' | 'invalid_action' | 'not_found' | 'expired';
+  requestId?: string;
+  /** Feedback text when the action was parsed from user text. */
+  userText?: string;
+}
