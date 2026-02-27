@@ -80,6 +80,12 @@ public func resolveHttpTokenPath(environment: [String: String]? = nil) -> String
     return resolveVellumDir(environment: environment) + "/http-token"
 }
 
+/// Resolve the feature-flag bearer token path.
+/// Uses BASE_DATA_DIR when set to match daemon root resolution.
+public func resolveFeatureFlagTokenPath(environment: [String: String]? = nil) -> String {
+    return resolveVellumDir(environment: environment) + "/feature-flag-token"
+}
+
 /// Resolve the daemon PID file path, honoring `BASE_DATA_DIR`.
 public func resolvePidPath(environment: [String: String]? = nil) -> String {
     return resolveVellumDir(environment: environment) + "/vellum.pid"
@@ -94,6 +100,25 @@ public func readHttpToken(environment: [String: String]? = nil) -> String? {
         data = try Data(contentsOf: URL(fileURLWithPath: tokenPath))
     } catch {
         log.error("Failed to read HTTP token from \(tokenPath, privacy: .private): \(error)")
+        return nil
+    }
+    guard let token = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+          !token.isEmpty else {
+        return nil
+    }
+    return token
+}
+
+/// Read the feature-flag bearer token from disk.
+/// Used to authenticate PATCH /v1/feature-flags/:flagKey requests.
+public func readFeatureFlagToken(environment: [String: String]? = nil) -> String? {
+    let tokenPath = resolveFeatureFlagTokenPath(environment: environment)
+    let data: Data
+    do {
+        data = try Data(contentsOf: URL(fileURLWithPath: tokenPath))
+    } catch {
+        log.error("Failed to read feature-flag token from \(tokenPath, privacy: .private): \(error)")
         return nil
     }
     guard let token = String(data: data, encoding: .utf8)?
@@ -1504,6 +1529,88 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
     /// Clear all approved devices.
     public func sendApprovedDevicesClear() throws {
         try send(ApprovedDevicesClearMessage())
+    }
+
+    // MARK: - Feature Flags
+
+    /// Toggle a feature flag via the gateway's PATCH /v1/feature-flags/:flagKey endpoint.
+    /// Uses the dedicated feature-flag token (not the runtime bearer token) for auth.
+    ///
+    /// On macOS: if `httpTransport` targets a **remote** gateway (non-localhost baseURL),
+    /// delegates to it. Otherwise (socket transport or local HTTP via `localHttpEnabled`),
+    /// calls the local gateway directly on port 7830 because the runtime HTTP server
+    /// doesn't serve feature-flag routes.
+    /// On iOS, always delegates to `httpTransport` which targets the remote gateway.
+    public func setFeatureFlag(key: String, enabled: Bool) async throws {
+        guard let token = config.featureFlagToken, !token.isEmpty else {
+            throw FeatureFlagError.missingToken
+        }
+
+        #if os(macOS)
+        // Remote mode: httpTransport targets a non-local gateway (e.g. cloud).
+        // Delegate to it directly. When localHttpEnabled is on, httpTransport
+        // points at localhost (the runtime), which does NOT serve feature-flag
+        // routes — so we must fall through to the local gateway path below.
+        if let httpTransport = self.httpTransport, !Self.isLocalBaseURL(httpTransport.baseURL) {
+            try await httpTransport.setFeatureFlag(key: key, enabled: enabled, featureFlagToken: token)
+            return
+        }
+
+        // Local mode (socket, TCP, or local HTTP): call the gateway directly.
+        let gatewayPort = ProcessInfo.processInfo.environment["GATEWAY_PORT"]
+            .flatMap(Int.init) ?? 7830
+        let baseURL = "http://127.0.0.1:\(gatewayPort)"
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        guard let url = URL(string: "\(baseURL)/v1/feature-flags/\(encoded)") else {
+            throw FeatureFlagError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        let body: [String: Any] = ["enabled": enabled]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw FeatureFlagError.requestFailed(statusCode)
+        }
+        #else
+        // iOS: httpTransport targets the remote gateway, which serves feature-flag routes.
+        guard let httpTransport else {
+            throw FeatureFlagError.requestFailed(0)
+        }
+        try await httpTransport.setFeatureFlag(key: key, enabled: enabled, featureFlagToken: token)
+        #endif
+    }
+
+    /// Returns true if the given base URL points to localhost / 127.0.0.1.
+    private static func isLocalBaseURL(_ urlString: String) -> Bool {
+        guard let comps = URLComponents(string: urlString), let host = comps.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+    }
+
+    public enum FeatureFlagError: Error, LocalizedError {
+        case missingToken
+        case invalidURL
+        case requestFailed(Int)
+
+        public var errorDescription: String? {
+            switch self {
+            case .missingToken:
+                return "Feature-flag token not available"
+            case .invalidURL:
+                return "Invalid feature-flag endpoint URL"
+            case .requestFailed(let code):
+                return "Feature-flag request failed (HTTP \(code))"
+            }
+        }
     }
 
 }
