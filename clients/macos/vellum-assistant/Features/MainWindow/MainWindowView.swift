@@ -32,6 +32,13 @@ final class SidebarInteractionState {
     var showAllScheduleThreads: Bool = false
     var showAllApps: Bool = false
     var showControlCenterDrawer: Bool = false
+    /// Thread ID that is currently the drop target during a drag-and-drop reorder.
+    var dropTargetThreadId: UUID?
+    /// Thread ID currently being dragged (set on drag start, cleared on drop).
+    var draggingThreadId: UUID?
+    /// Whether the drop indicator should appear at the bottom of the target (true)
+    /// or the top (false). Set based on drag direction.
+    var dropIndicatorAtBottom: Bool = false
 }
 
 /// Copy-thread confirmation state.
@@ -739,17 +746,9 @@ struct MainWindowView: View {
         // Reserve trailing space when hovered for archive button overlay.
         let hasTrailingIcon = isHovered || sidebar.threadPendingDeletion == thread.id
         // Always reserve 20pt leading slot so text never shifts.
-        Button(action: {
-            if case .appEditing(let appId, _) = windowState.selection {
-                // Stay in editing mode, just switch the thread
-                windowState.selection = .appEditing(appId: appId, threadId: thread.id)
-                threadManager.selectThread(id: thread.id)
-            } else {
-                // Normal thread selection
-                windowState.selection = .thread(thread.id)
-                threadManager.selectThread(id: thread.id)
-            }
-        }) {
+        // Use a tap gesture instead of Button so .draggable() can coexist —
+        // Button captures mouse-down and prevents drag initiation on macOS.
+        Group {
             HStack(spacing: VSpacing.xs) {
                 // Leading icon: interaction state > idle fallback (unread dot > pin > spacer).
                 // The interactive pin button is in .overlay(alignment: .leading) below
@@ -821,7 +820,14 @@ struct MainWindowView: View {
             .contentShape(Rectangle())
             .animation(VAnimation.fast, value: isHovered)
         }
-        .buttonStyle(.plain)
+        .onTapGesture {
+            selectThread(thread)
+        }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Thread: \(thread.title)")
+        .accessibilityAction(.default) {
+            selectThread(thread)
+        }
         .overlay(alignment: .leading) {
             if isHovered {
                 Button {
@@ -921,7 +927,42 @@ struct MainWindowView: View {
                 NSCursor.pop()
             }
         }
-        .draggable(thread.id.uuidString)
+        .onDrag {
+            sidebar.draggingThreadId = thread.id
+            return NSItemProvider(object: thread.id.uuidString as NSString)
+        } preview: {
+            HStack(spacing: VSpacing.xs) {
+                if thread.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(VColor.textMuted)
+                        .rotationEffect(.degrees(-45))
+                        .frame(width: 20, height: 20)
+                } else {
+                    Color.clear.frame(width: 20, height: 20)
+                }
+                Text(thread.title)
+                    .font(.system(size: 13))
+                    .foregroundColor(VColor.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.leading, VSpacing.xs)
+            .padding(.trailing, VSpacing.sm)
+            .padding(.vertical, VSpacing.sm)
+            .frame(width: 220, alignment: .leading)
+            .background(VColor.surface.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: VRadius.md))
+        }
+    }
+
+    private func selectThread(_ thread: ThreadModel) {
+        if case .appEditing(let appId, _) = windowState.selection {
+            windowState.selection = .appEditing(appId: appId, threadId: thread.id)
+            threadManager.selectThread(id: thread.id)
+        } else {
+            windowState.selection = .thread(thread.id)
+            threadManager.selectThread(id: thread.id)
+        }
     }
 
     private var regularThreads: [ThreadModel] {
@@ -1173,12 +1214,34 @@ struct MainWindowView: View {
                     ForEach(displayedThreads) { thread in
                         threadItem(thread)
                             .padding(.bottom, VSpacing.xxs)
+                            .overlay(alignment: sidebar.dropIndicatorAtBottom ? .bottom : .top) {
+                                if sidebar.dropTargetThreadId == thread.id {
+                                    Rectangle()
+                                        .fill(adaptiveColor(light: Forest._500, dark: Forest._400))
+                                        .frame(height: 2)
+                                        .transition(.opacity)
+                                }
+                            }
                             .dropDestination(for: String.self) { items, _ in
+                                sidebar.dropTargetThreadId = nil
+                                sidebar.draggingThreadId = nil
                                 guard let droppedId = items.first,
                                       let sourceUUID = UUID(uuidString: droppedId),
                                       sourceUUID != thread.id else { return false }
-                                return threadManager.moveThread(sourceId: sourceUUID, beforeId: thread.id)
-                            } isTargeted: { _ in }
+                                return threadManager.moveThread(sourceId: sourceUUID, targetId: thread.id)
+                            } isTargeted: { isTargeted in
+                                if isTargeted && thread.id != sidebar.draggingThreadId {
+                                    sidebar.dropTargetThreadId = thread.id
+                                    if let dragId = sidebar.draggingThreadId {
+                                        let visible = threadManager.visibleThreads
+                                        let sIdx = visible.firstIndex(where: { $0.id == dragId }) ?? 0
+                                        let tIdx = visible.firstIndex(where: { $0.id == thread.id }) ?? 0
+                                        sidebar.dropIndicatorAtBottom = sIdx < tIdx
+                                    }
+                                } else if !isTargeted && sidebar.dropTargetThreadId == thread.id {
+                                    sidebar.dropTargetThreadId = nil
+                                }
+                            }
                     }
 
                     if regularThreads.count > 5 {
@@ -1212,12 +1275,45 @@ struct MainWindowView: View {
                         ForEach(displayedScheduleThreads) { thread in
                             threadItem(thread)
                                 .padding(.bottom, VSpacing.xxs)
+                                .overlay(alignment: sidebar.dropIndicatorAtBottom ? .bottom : .top) {
+                                    if sidebar.dropTargetThreadId == thread.id {
+                                        Rectangle()
+                                            .fill(adaptiveColor(light: Forest._500, dark: Forest._400))
+                                            .frame(height: 2)
+                                            .transition(.opacity)
+                                    }
+                                }
                                 .dropDestination(for: String.self) { items, _ in
+                                    sidebar.dropTargetThreadId = nil
+                                    sidebar.draggingThreadId = nil
                                     guard let droppedId = items.first,
                                           let sourceUUID = UUID(uuidString: droppedId),
                                           sourceUUID != thread.id else { return false }
-                                    return threadManager.moveThread(sourceId: sourceUUID, beforeId: thread.id)
-                                } isTargeted: { _ in }
+                                    return threadManager.moveThread(sourceId: sourceUUID, targetId: thread.id)
+                                } isTargeted: { isTargeted in
+                                    if isTargeted && thread.id != sidebar.draggingThreadId {
+                                        if let dragId = sidebar.draggingThreadId {
+                                            let sourceIsSchedule = threadManager.visibleThreads.first(where: { $0.id == dragId })?.isScheduleThread ?? false
+                                            if !sourceIsSchedule {
+                                                // Cross-section drag (regular → scheduled): insertion goes
+                                                // to the section boundary, so show indicator at top of
+                                                // the first schedule thread to match actual insertion point.
+                                                sidebar.dropTargetThreadId = displayedScheduleThreads.first?.id ?? thread.id
+                                                sidebar.dropIndicatorAtBottom = false
+                                            } else {
+                                                sidebar.dropTargetThreadId = thread.id
+                                                let visible = threadManager.visibleThreads
+                                                let sIdx = visible.firstIndex(where: { $0.id == dragId }) ?? 0
+                                                let tIdx = visible.firstIndex(where: { $0.id == thread.id }) ?? 0
+                                                sidebar.dropIndicatorAtBottom = sIdx < tIdx
+                                            }
+                                        } else {
+                                            sidebar.dropTargetThreadId = thread.id
+                                        }
+                                    } else if !isTargeted && (sidebar.dropTargetThreadId == thread.id || sidebar.dropTargetThreadId == displayedScheduleThreads.first?.id) {
+                                        sidebar.dropTargetThreadId = nil
+                                    }
+                                }
                         }
 
                         if scheduleThreads.count > 3 {

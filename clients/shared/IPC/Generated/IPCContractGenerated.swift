@@ -3545,6 +3545,28 @@ public struct IPCRemoveTrustRule: Codable, Sendable {
     }
 }
 
+public struct IPCReorderThreadsRequest: Codable, Sendable {
+    public let type: String
+    public let updates: [IPCReorderThreadsRequestUpdate]
+
+    public init(type: String, updates: [IPCReorderThreadsRequestUpdate]) {
+        self.type = type
+        self.updates = updates
+    }
+}
+
+public struct IPCReorderThreadsRequestUpdate: Codable, Sendable {
+    public let sessionId: String
+    public let displayOrder: Double?
+    public let isPinned: Bool
+
+    public init(sessionId: String, displayOrder: Double?, isPinned: Bool) {
+        self.sessionId = sessionId
+        self.displayOrder = displayOrder
+        self.isPinned = isPinned
+    }
+}
+
 public struct IPCRideShotgunProgress: Codable, Sendable {
     public let type: String
     public let watchId: String
@@ -3860,8 +3882,10 @@ public struct IPCSessionListResponseSession: Codable, Sendable {
     public let conversationOriginInterface: String?
     /// Attention state metadata for a conversation's latest assistant message.
     public let assistantAttention: IPCAssistantAttention?
+    public let displayOrder: Double?
+    public let isPinned: Bool?
 
-    public init(id: String, title: String, createdAt: Int? = nil, updatedAt: Int, threadType: String? = nil, source: String? = nil, channelBinding: IPCChannelBinding? = nil, conversationOriginChannel: String? = nil, conversationOriginInterface: String? = nil, assistantAttention: IPCAssistantAttention? = nil) {
+    public init(id: String, title: String, createdAt: Int? = nil, updatedAt: Int, threadType: String? = nil, source: String? = nil, channelBinding: IPCChannelBinding? = nil, conversationOriginChannel: String? = nil, conversationOriginInterface: String? = nil, assistantAttention: IPCAssistantAttention? = nil, displayOrder: Double? = nil, isPinned: Bool? = nil) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
@@ -3872,6 +3896,8 @@ public struct IPCSessionListResponseSession: Codable, Sendable {
         self.conversationOriginChannel = conversationOriginChannel
         self.conversationOriginInterface = conversationOriginInterface
         self.assistantAttention = assistantAttention
+        self.displayOrder = displayOrder
+        self.isPinned = isPinned
     }
 }
 

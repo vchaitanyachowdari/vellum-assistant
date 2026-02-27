@@ -105,6 +105,10 @@ declare -a SAFE_LINE_PATTERNS=(
     "(let|var|val)[[:space:]]+([a-z][a-zA-Z0-9]*)?(([Ss]torage|[Cc]ache|[Ll]ookup|[Ss]ort|[Pp]rimary|[Ff]oreign|[Ii]ndex|[Pp]artition|[Aa]ttribute|[Pp]reference|[Dd]efaults|[Ss]ettings|[Ll]ocale|[Bb]undle|[Rr]esource|[Nn]otification|[Oo]bserver|[Ss]ubscription|[Rr]egistration|[Cc]onfig|[Tt]heme|[Ff]ont|[Cc]olor|[Ll]ayout|[Cc]onstraint|[Pp]ersistence|[Mm]igration|[Pp]osition|[Ss]ize|[Cc]onversation|[Bb]ootstrap|[Cc]onnected|[Dd]ate|[Cc]ount)s?[Kk]ey)[[:space:]]*=[[:space:]]*['\"][a-zA-Z][a-zA-Z0-9_.]*['\"]"
     # AWS well-known example key used in documentation
     "AKIAIOSFODNN7EXAMPLE"
+    # Swift let/var constants used as UserDefaults key names (not secrets).
+    # Only whitelist specific known key-name constants — a broad `*Key` pattern
+    # would let real credentials like `let apiKey = "sk_live_..."` slip through.
+    "(private[[:space:]]+)?(let|var)[[:space:]]+(archivedSessionsKey)[[:space:]]*[:=][[:space:]]*['\"][a-zA-Z][a-zA-Z0-9_]*['\"]"
 )
 
 matches_safe_line_pattern() {
@@ -119,9 +123,13 @@ matches_safe_line_pattern() {
             # check that the full variable name doesn't contain a sensitive keyword.
             # This prevents e.g. `let apiStorageKey = "..."` from being whitelisted
             # even though its suffix (Storage) is in the safe list.
+            # Skip the guard for explicitly-allowlisted variable names that contain
+            # sensitive substrings but are known UserDefaults/storage key constants.
             if printf '%s\n' "$text" | grep -iE "(let|var|val)[[:space:]]+[a-zA-Z0-9_]*[Kk]ey[[:space:]]*=" >/dev/null 2>&1; then
-                if printf '%s\n' "$text" | grep -iE "(let|var|val)[[:space:]]+[a-zA-Z0-9_]*(api|access|private|secret|client|encryption|encrypt|jwt|signing|sign|auth|hmac|master|symmetric|asymmetric|shared|session|verification|verify|decryption|decrypt|service|deploy|registry|webhook|database|db)[a-zA-Z0-9_]*[Kk]ey" >/dev/null 2>&1; then
-                    continue
+                if ! printf '%s\n' "$text" | grep -E "(let|var|val)[[:space:]]+(archivedSessionsKey)[[:space:]]*[:=]" >/dev/null 2>&1; then
+                    if printf '%s\n' "$text" | grep -iE "(let|var|val)[[:space:]]+[a-zA-Z0-9_]*(api|access|private|secret|client|encryption|encrypt|jwt|signing|sign|auth|hmac|master|symmetric|asymmetric|shared|session|verification|verify|decryption|decrypt|service|deploy|registry|webhook|database|db)[a-zA-Z0-9_]*[Kk]ey" >/dev/null 2>&1; then
+                        continue
+                    fi
                 fi
             fi
             return 0

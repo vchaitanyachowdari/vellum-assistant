@@ -92,7 +92,8 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
     private var pendingSeenSignalTask: Task<Void, Never>?
 
     /// Threads that are not archived — used by the UI to populate the sidebar.
-    /// Sorted: pinned first (by pinnedOrder ascending), then unpinned by lastInteractedAt descending.
+    /// Sorted: pinned first (by pinnedOrder ascending), then threads with explicit
+    /// displayOrder ascending, then remaining threads by lastInteractedAt descending.
     /// Threads move to the top when messages are sent or received, but NOT when clicked/selected.
     var visibleThreads: [ThreadModel] {
         threads.filter { !$0.isArchived && $0.kind != .private }.sorted { a, b in
@@ -101,7 +102,15 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             }
             if a.isPinned { return true }
             if b.isPinned { return false }
-            return a.lastInteractedAt > b.lastInteractedAt
+            // Threads without explicit displayOrder (nil) sort by recency and
+            // appear ABOVE explicitly-ordered threads so new/active threads are
+            // never buried below stale manual ordering.
+            if a.displayOrder == nil && b.displayOrder == nil {
+                return a.lastInteractedAt > b.lastInteractedAt
+            }
+            if a.displayOrder == nil { return true }
+            if b.displayOrder == nil { return false }
+            return a.displayOrder! < b.displayOrder!
         }
     }
 
@@ -305,6 +314,21 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
     func archiveThread(id: UUID) {
         guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
 
+        // Clear ordering state before archiving so stale is_pinned/display_order
+        // values don't affect DB pagination (which sorts by is_pinned DESC).
+        // Send the update BEFORE setting isArchived, because sendReorderThreads()
+        // only serializes visibleThreads (non-archived).
+        let wasPinned = threads[index].isPinned
+        let hadOrder = threads[index].displayOrder != nil
+        threads[index].isPinned = false
+        threads[index].pinnedOrder = nil
+        threads[index].displayOrder = nil
+        if wasPinned {
+            recompactPinnedOrders()
+        }
+        if wasPinned || hadOrder {
+            sendReorderThreads()
+        }
         threads[index].isArchived = true
 
         if let sessionId = threads[index].sessionId {
@@ -411,21 +435,43 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             $0.threadType != "private" && $0.channelBinding?.sourceChannel == nil
         }
 
-        for session in recentSessions {
-            // Skip sessions that already have a thread
-            guard !threads.contains(where: { $0.sessionId == session.id }) else { continue }
+        // Compute the next pinnedOrder based on existing pinned threads AND
+        // persisted displayOrder values in the incoming batch, so legacy threads
+        // (nil displayOrder) don't collide with explicit or already-loaded ones.
+        let existingMax = threads.compactMap(\.pinnedOrder).max() ?? -1
+        let batchMax = recentSessions
+            .filter { $0.isPinned ?? false }
+            .compactMap { $0.displayOrder.map { Int($0) } }
+            .max() ?? -1
+        var nextPinnedOrder = max(existingMax, batchMax) + 1
 
+        for session in recentSessions {
+            // If a local thread already exists, merge server pin/order metadata.
+            if let existingIdx = threads.firstIndex(where: { $0.sessionId == session.id }) {
+                let isPinned = session.isPinned ?? false
+                threads[existingIdx].isPinned = isPinned
+                threads[existingIdx].pinnedOrder = isPinned ? (session.displayOrder.map { Int($0) } ?? nextPinnedOrder) : nil
+                threads[existingIdx].displayOrder = session.displayOrder.map { Int($0) }
+                if isPinned && session.displayOrder == nil { nextPinnedOrder += 1 }
+                continue
+            }
+
+            let isPinned = session.isPinned ?? false
             let effectiveCreatedAt = session.createdAt ?? session.updatedAt
             let thread = ThreadModel(
                 title: session.title,
                 createdAt: Date(timeIntervalSince1970: TimeInterval(effectiveCreatedAt) / 1000.0),
                 sessionId: session.id,
                 isArchived: isSessionArchived(session.id),
+                isPinned: isPinned,
+                pinnedOrder: isPinned ? (session.displayOrder.map { Int($0) } ?? nextPinnedOrder) : nil,
+                displayOrder: session.displayOrder.map { Int($0) },
                 lastInteractedAt: Date(timeIntervalSince1970: TimeInterval(session.updatedAt) / 1000.0),
                 kind: session.threadType == "private" ? .private : .standard,
                 source: session.source,
                 hasUnseenLatestAssistantMessage: session.assistantAttention?.hasUnseenLatestAssistantMessage ?? false
             )
+            if isPinned && session.displayOrder == nil { nextPinnedOrder += 1 }
             // VM creation is lazy — getOrCreateViewModel() will instantiate
             // when the thread is first accessed (e.g. selected by the user).
             threads.append(thread)
@@ -531,13 +577,16 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         let nextOrder = (threads.compactMap(\.pinnedOrder).max() ?? -1) + 1
         threads[index].isPinned = true
         threads[index].pinnedOrder = nextOrder
+        sendReorderThreads()
     }
 
     func unpinThread(id: UUID) {
         guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
         threads[index].isPinned = false
         threads[index].pinnedOrder = nil
+        threads[index].displayOrder = nil
         recompactPinnedOrders()
+        sendReorderThreads()
     }
 
     func reorderPinnedThreads(from source: IndexSet, to destination: Int) {
@@ -548,38 +597,125 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
                 threads[idx].pinnedOrder = order
             }
         }
+        sendReorderThreads()
     }
 
     func updateLastInteracted(threadId: UUID) {
         guard let index = threads.firstIndex(where: { $0.id == threadId }) else { return }
         threads[index].lastInteractedAt = Date()
+        // Clear explicit displayOrder so the thread reverts to recency-based sorting.
+        // This ensures actively-used threads float to the top naturally and new threads
+        // aren't permanently stuck below explicitly-ordered threads.
+        if threads[index].displayOrder != nil {
+            threads[index].displayOrder = nil
+            sendReorderThreads()
+        }
     }
 
     /// Move a thread to a new position in the visible list (for drag-and-drop reorder).
-    /// If the source thread is pinned, reorder among pinned items.
-    /// If unpinned, pin it and insert at the target position.
+    /// Works for any thread: pinned-to-pinned reorders among pinned items,
+    /// unpinned-to-pinned pins the source, and unpinned-to-unpinned reorders
+    /// using displayOrder. When the target is a schedule thread, the source is
+    /// inserted at the end of the unpinned regular threads list (the boundary
+    /// between regular and scheduled threads).
+    ///
+    /// Only assigns displayOrder to the dragged thread and threads that already
+    /// had an explicit displayOrder. Threads without explicit ordering (sorted
+    /// by recency) keep nil displayOrder so new threads continue to appear at top.
     @discardableResult
-    func moveThread(sourceId: UUID, beforeId: UUID) -> Bool {
+    func moveThread(sourceId: UUID, targetId: UUID) -> Bool {
         guard let sourceIdx = threads.firstIndex(where: { $0.id == sourceId }),
-              let targetIdx = threads.firstIndex(where: { $0.id == beforeId }) else { return false }
+              let targetIdx = threads.firstIndex(where: { $0.id == targetId }) else { return false }
         let targetThread = threads[targetIdx]
 
-        // Only reorder when the drop target is pinned
-        guard targetThread.isPinned else { return false }
+        if targetThread.isPinned {
+            // Dropping onto a pinned thread — pin the source if needed and reorder
+            let sourceWasPinned = threads[sourceIdx].isPinned
+            if !sourceWasPinned {
+                threads[sourceIdx].isPinned = true
+            }
+            let targetOrder = targetThread.pinnedOrder ?? 0
+            let sourceOrder = sourceWasPinned ? (threads[sourceIdx].pinnedOrder ?? Int.max) : Int.max
 
-        if !threads[sourceIdx].isPinned {
-            threads[sourceIdx].isPinned = true
-        }
-        // Set pinnedOrder to place before the target
-        let targetOrder = targetThread.pinnedOrder ?? 0
-        threads[sourceIdx].pinnedOrder = targetOrder
-        // Bump all pinned items at or after targetOrder (except source)
-        for i in threads.indices where threads[i].isPinned && threads[i].id != sourceId {
-            if let order = threads[i].pinnedOrder, order >= targetOrder {
-                threads[i].pinnedOrder = order + 1
+            // Direction-aware: if source is above target (lower order), insert after target
+            let insertOrder = sourceOrder < targetOrder ? targetOrder + 1 : targetOrder
+
+            threads[sourceIdx].pinnedOrder = insertOrder
+            for i in threads.indices where threads[i].isPinned && threads[i].id != sourceId {
+                if let order = threads[i].pinnedOrder, order >= insertOrder {
+                    threads[i].pinnedOrder = order + 1
+                }
+            }
+            recompactPinnedOrders()
+        } else {
+            // Dropping onto an unpinned thread — reorder using displayOrder.
+            // Capture pinned state BEFORE modifications so direction detection
+            // isn't affected by the unpin changing the source's list position.
+            let sourceWasPinned = threads[sourceIdx].isPinned
+
+            if sourceWasPinned {
+                threads[sourceIdx].isPinned = false
+                threads[sourceIdx].pinnedOrder = nil
+                threads[sourceIdx].displayOrder = nil
+                recompactPinnedOrders()
+            }
+
+            // Build the unpinned list in sidebar display order: regular threads first,
+            // then schedule threads. This matches the UI sections and prevents dropping
+            // onto a schedule thread from inserting the source among regular threads
+            // at the wrong position.
+            let allUnpinned = visibleThreads.filter { !$0.isPinned }
+            let regularUnpinned = allUnpinned.filter { !$0.isScheduleThread }
+            let scheduleUnpinned = allUnpinned.filter { $0.isScheduleThread }
+            let unpinned = regularUnpinned + scheduleUnpinned
+
+            var reordered = unpinned.filter { $0.id != sourceId }
+
+            let insertPos: Int
+            let sourceThread = threads[sourceIdx]
+            if targetThread.isScheduleThread && !sourceThread.isScheduleThread {
+                // Cross-section drag: insert at section boundary
+                insertPos = reordered.firstIndex(where: { $0.isScheduleThread }) ?? reordered.endIndex
+            } else {
+                // Direction-aware: if source was visually above target (dragging down),
+                // insert AFTER target; if below (dragging up), insert BEFORE target.
+                // Pinned threads are always visually above unpinned ones, so a
+                // pinned→unpinned drag is always "dragging down".
+                let draggingDown: Bool
+                if sourceWasPinned {
+                    draggingDown = true
+                } else {
+                    let sourceVisualIdx = unpinned.firstIndex(where: { $0.id == sourceId })
+                    let targetVisualIdx = unpinned.firstIndex(where: { $0.id == targetId })
+                    draggingDown = (sourceVisualIdx ?? 0) < (targetVisualIdx ?? 0)
+                }
+
+                if draggingDown {
+                    let targetInFiltered = reordered.firstIndex(where: { $0.id == targetId }) ?? reordered.endIndex
+                    insertPos = min(targetInFiltered + 1, reordered.endIndex)
+                } else {
+                    insertPos = reordered.firstIndex(where: { $0.id == targetId }) ?? reordered.endIndex
+                }
+            }
+
+            if let movedThread = unpinned.first(where: { $0.id == sourceId }) ?? [threads[sourceIdx]].first {
+                reordered.insert(movedThread, at: insertPos)
+            }
+
+            // Assign displayOrder to ALL threads in the reordered list. When a
+            // user drags a thread they are explicitly defining an ordering, so every
+            // thread in the affected section needs a concrete displayOrder. Without
+            // this, dragging between recency-sorted threads (nil displayOrder) would
+            // only assign an order to the source, causing it to jump to the top of
+            // the list since visibleThreads sorts non-nil displayOrder above nil.
+            for (order, item) in reordered.enumerated() {
+                if let idx = threads.firstIndex(where: { $0.id == item.id }) {
+                    threads[idx].displayOrder = order
+                }
             }
         }
-        recompactPinnedOrders()
+
+        sendReorderThreads()
         return true
     }
 
@@ -589,6 +725,41 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             .sorted { ($0.element.pinnedOrder ?? 0) < ($1.element.pinnedOrder ?? 0) }
         for (order, item) in pinned.enumerated() {
             threads[item.offset].pinnedOrder = order
+        }
+    }
+
+    /// Send the current thread ordering to the daemon so it persists across restarts.
+    /// For pinned threads, derives a deterministic displayOrder from pinnedOrder so
+    /// the pinned ordering survives restarts. For unpinned threads that have been
+    /// explicitly reordered (non-nil displayOrder), sends their displayOrder. For
+    /// unpinned threads without explicit ordering, sends nil so they sort by recency.
+    private func sendReorderThreads() {
+        let visible = visibleThreads
+        var updates: [IPCReorderThreadsRequestUpdate] = []
+        for thread in visible {
+            guard let sessionId = thread.sessionId else { continue }
+            let order: Double?
+            if thread.isPinned {
+                // Pinned threads always need a persisted displayOrder derived from
+                // their pinnedOrder so their user-defined order survives restarts.
+                order = Double(thread.pinnedOrder ?? 0)
+            } else {
+                order = thread.displayOrder.map { Double($0) }
+            }
+            updates.append(IPCReorderThreadsRequestUpdate(
+                sessionId: sessionId,
+                displayOrder: order,
+                isPinned: thread.isPinned
+            ))
+        }
+        guard !updates.isEmpty else { return }
+        do {
+            try daemonClient.send(IPCReorderThreadsRequest(
+                type: "reorder_threads",
+                updates: updates
+            ))
+        } catch {
+            log.error("Failed to send reorder_threads: \(error.localizedDescription)")
         }
     }
 
@@ -889,6 +1060,11 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
             threadInteractionStates.removeValue(forKey: threadId)
             vmAccessOrder.removeAll { $0 == threadId }
         }
+        // Re-send ordering now that this thread has a session ID.
+        // Any drag/pin actions performed before the daemon assigned
+        // a session would have been skipped by sendReorderThreads()
+        // because it filters out threads without a sessionId.
+        sendReorderThreads()
     }
 
     // MARK: - Lazy VM Creation
