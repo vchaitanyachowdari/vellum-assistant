@@ -498,7 +498,6 @@ extension AppDelegate {
         let markedIds = threadManager.markAllThreadsSeen()
         guard !markedIds.isEmpty else { return }
         let count = markedIds.count
-        threadManager.schedulePendingSeenSignals()
         mainWindow?.windowState.showToast(
             message: "Marked \(count) thread\(count == 1 ? "" : "s") as seen",
             style: .success,
@@ -510,6 +509,9 @@ extension AppDelegate {
                 self?.mainWindow?.threadManager.commitPendingSeenSignals()
             }
         )
+        threadManager.schedulePendingSeenSignals { [weak self] in
+            self?.mainWindow?.windowState.dismissToast()
+        }
     }
 
     public func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
