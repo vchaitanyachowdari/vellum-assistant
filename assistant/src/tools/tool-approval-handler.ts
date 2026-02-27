@@ -50,7 +50,7 @@ export class ToolApprovalHandler {
    * Returns the resolved Tool if all gates pass, or an early-return
    * ToolExecutionResult if any gate blocks execution.
    */
-  checkPreExecutionGates(
+  async checkPreExecutionGates(
     name: string,
     input: Record<string, unknown>,
     context: ToolContext,
@@ -58,7 +58,7 @@ export class ToolApprovalHandler {
     riskLevel: string,
     startTime: number,
     emitLifecycleEvent: (event: ToolLifecycleEvent) => void,
-  ): PreExecutionGateResult {
+  ): Promise<PreExecutionGateResult> {
     // Bail out immediately if the session was aborted before this tool started.
     if (context.signal?.aborted) {
       const durationMs = Date.now() - startTime;
@@ -246,8 +246,17 @@ export class ToolApprovalHandler {
     // required. Deferring consumption to this point ensures a downstream
     // rejection (allowedToolNames, task-run preflight, registry lookup)
     // does not waste the one-time-use grant.
+    //
+    // Retry polling is scoped to the voice channel where a race condition
+    // exists between fire-and-forget turn execution and LLM fallback grant
+    // minting (2-5s). Non-voice channels get an instant sync lookup so
+    // normal denials are not delayed.
     if (needsGrantConsumption && deferredConsumeParams) {
-      const grantResult = consumeGrantForInvocation(deferredConsumeParams);
+      const isVoice = context.executionChannel === 'voice';
+      const grantResult = await consumeGrantForInvocation(
+        deferredConsumeParams,
+        isVoice ? { signal: context.signal } : { maxWaitMs: 0 },
+      );
 
       if (grantResult.ok) {
         log.info({
@@ -260,6 +269,31 @@ export class ToolApprovalHandler {
         }, 'Scoped grant consumed — allowing untrusted actor tool invocation');
 
         return { allowed: true, tool, grantConsumed: true };
+      }
+
+      // Treat abort as a cancellation — not a grant denial. This matches
+      // the abort check at the top of checkPreExecutionGates so the caller
+      // sees a consistent "Cancelled" result instead of a spurious
+      // guardian_approval_required denial during voice barge-in.
+      if (grantResult.reason === 'aborted') {
+        const durationMs = Date.now() - startTime;
+        emitLifecycleEvent({
+          type: 'error',
+          toolName: name,
+          executionTarget,
+          input,
+          workingDir: context.workingDir,
+          sessionId: context.sessionId,
+          conversationId: context.conversationId,
+          requestId: context.requestId,
+          riskLevel,
+          decision: 'error',
+          durationMs,
+          errorMessage: 'Cancelled',
+          isExpected: true,
+          errorCategory: 'tool_failure',
+        });
+        return { allowed: false, result: { content: 'Cancelled', isError: true } };
       }
 
       // No matching grant or race condition — deny.
