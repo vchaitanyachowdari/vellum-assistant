@@ -33,6 +33,8 @@ export { migrateGuardianActionFollowup } from './030-guardian-action-followup.js
 export { migrateGuardianVerificationPurpose } from './030-guardian-verification-purpose.js';
 export { migrateConversationsThreadTypeIndex } from './031-conversations-thread-type-index.js';
 export { migrateGuardianDeliveryConversationIndex } from './032-guardian-delivery-conversation-index.js';
+export { createScopedApprovalGrantsTable } from './033-scoped-approval-grants.js';
+export { migrateGuardianActionToolMetadata } from './034-guardian-action-tool-metadata.js';
 export { migrateNotificationDeliveryThreadDecision } from './032-notification-delivery-thread-decision.js';
 export { createCoreTables } from './100-core-tables.js';
 export { createWatchersAndLogsTables } from './101-watchers-and-logs.js';
