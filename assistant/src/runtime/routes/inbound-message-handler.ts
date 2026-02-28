@@ -14,7 +14,6 @@ import * as attachmentsStore from '../../memory/attachments-store.js';
 import * as channelDeliveryStore from '../../memory/channel-delivery-store.js';
 import {
   createCanonicalGuardianRequest,
-  listCanonicalGuardianRequests,
 } from '../../memory/canonical-guardian-store.js';
 import { recordConversationSeenSignal } from '../../memory/conversation-attention-store.js';
 import * as conversationStore from '../../memory/conversation-store.js';
@@ -22,9 +21,11 @@ import * as externalConversationStore from '../../memory/external-conversation-s
 import { findMember, updateLastSeen, upsertMember } from '../../memory/ingress-member-store.js';
 import { emitNotificationSignal } from '../../notifications/emit-signal.js';
 import { checkIngressForSecrets } from '../../security/secret-ingress.js';
+import { canonicalizeInboundIdentity } from '../../util/canonicalize-identity.js';
 import { IngressBlockedError } from '../../util/errors.js';
 import { getLogger } from '../../util/logger.js';
 import { readHttpToken } from '../../util/platform.js';
+import { notifyGuardianOfAccessRequest } from '../access-request-helper.js';
 import {
   buildApprovalUIMetadata,
   getApprovalInfoByConversation,
@@ -184,6 +185,28 @@ export async function handleChannelInbound(
     log.debug({ raw: assistantId, canonical: canonicalAssistantId }, 'Canonicalized channel assistant ID');
   }
 
+  // Coerce senderExternalUserId to a string at the boundary — the field
+  // comes from unvalidated JSON and may be a number, object, or other
+  // non-string type. Non-string truthy values would throw inside
+  // canonicalizeInboundIdentity when it calls .trim().
+  const rawSenderId = body.senderExternalUserId != null
+    ? String(body.senderExternalUserId)
+    : undefined;
+
+  // Canonicalize the sender identity so all trust lookups, member matching,
+  // and guardian binding comparisons use a normalized form. Phone-like
+  // channels (sms, voice, whatsapp) are normalized to E.164; non-phone
+  // channels pass through the platform-stable ID unchanged.
+  const canonicalSenderId = rawSenderId
+    ? canonicalizeInboundIdentity(sourceChannel, rawSenderId)
+    : null;
+
+  // Track whether the original payload included a sender identity. A
+  // whitespace-only senderExternalUserId canonicalizes to null but still
+  // represents an explicit (malformed) identity claim that must enter the
+  // ACL deny path rather than bypassing it.
+  const hasSenderIdentityClaim = rawSenderId !== undefined;
+
   // ── Ingress ACL enforcement ──
   // Track the resolved member so the escalate branch can reference it after
   // recordInbound (where we have a conversationId).
@@ -217,13 +240,18 @@ export async function handleChannelInbound(
     sourceMetadata: body.sourceMetadata,
   });
 
-  if (body.senderExternalUserId) {
-    resolvedMember = findMember({
-      assistantId: canonicalAssistantId,
-      sourceChannel,
-      externalUserId: body.senderExternalUserId,
-      externalChatId,
-    });
+  if (canonicalSenderId || hasSenderIdentityClaim) {
+    // Only perform member lookup when we have a usable canonical ID.
+    // Whitespace-only senders (hasSenderIdentityClaim=true but
+    // canonicalSenderId=null) skip the lookup and fall into the deny path.
+    if (canonicalSenderId) {
+      resolvedMember = findMember({
+        assistantId: canonicalAssistantId,
+        sourceChannel,
+        externalUserId: canonicalSenderId,
+        externalChatId,
+      });
+    }
 
     if (!resolvedMember) {
       // Determine whether a verification-code bypass is warranted: only allow
@@ -270,7 +298,7 @@ export async function handleChannelInbound(
           sourceChannel,
           externalChatId,
           externalMessageId,
-          senderExternalUserId: body.senderExternalUserId,
+          senderExternalUserId: canonicalSenderId ?? rawSenderId,
           senderName: body.senderName,
           senderUsername: body.senderUsername,
           replyCallbackUrl: body.replyCallbackUrl,
@@ -282,21 +310,22 @@ export async function handleChannelInbound(
       }
 
       if (denyNonMember) {
-        log.info({ sourceChannel, externalUserId: body.senderExternalUserId }, 'Ingress ACL: no member record, denying');
+        log.info({ sourceChannel, externalUserId: canonicalSenderId }, 'Ingress ACL: no member record, denying');
 
         // Notify the guardian about the access request so they can approve/deny.
-        // Only fires when a guardian binding exists and no duplicate pending
-        // request already exists for this requester.
+        // Uses the shared helper which handles guardian binding lookup,
+        // deduplication, canonical request creation, and notification emission.
         let guardianNotified = false;
         try {
-          guardianNotified = notifyGuardianOfAccessRequest({
+          const accessResult = notifyGuardianOfAccessRequest({
             canonicalAssistantId,
             sourceChannel,
             externalChatId,
-            senderExternalUserId: body.senderExternalUserId,
+            senderExternalUserId: canonicalSenderId ?? rawSenderId,
             senderName: body.senderName,
             senderUsername: body.senderUsername,
           });
+          guardianNotified = accessResult.notified;
         } catch (err) {
           log.error({ err, sourceChannel, externalChatId }, 'Failed to notify guardian of access request');
         }
@@ -355,7 +384,7 @@ export async function handleChannelInbound(
             sourceChannel,
             externalChatId,
             externalMessageId,
-            senderExternalUserId: body.senderExternalUserId,
+            senderExternalUserId: canonicalSenderId ?? rawSenderId,
             senderName: body.senderName,
             senderUsername: body.senderUsername,
             replyCallbackUrl: body.replyCallbackUrl,
@@ -375,14 +404,15 @@ export async function handleChannelInbound(
           let guardianNotified = false;
           if (resolvedMember.status !== 'blocked') {
             try {
-              guardianNotified = notifyGuardianOfAccessRequest({
+              const accessResult = notifyGuardianOfAccessRequest({
                 canonicalAssistantId,
                 sourceChannel,
                 externalChatId,
-                senderExternalUserId: body.senderExternalUserId,
+                senderExternalUserId: canonicalSenderId ?? rawSenderId,
                 senderName: body.senderName,
                 senderUsername: body.senderUsername,
               });
+              guardianNotified = accessResult.notified;
             } catch (err) {
               log.error({ err, sourceChannel, externalChatId }, 'Failed to notify guardian of access request');
             }
@@ -552,7 +582,7 @@ export async function handleChannelInbound(
       conversationId: result.conversationId,
       sourceChannel,
       externalChatId,
-      externalUserId: body.senderExternalUserId ?? null,
+      externalUserId: canonicalSenderId ?? rawSenderId ?? null,
       displayName: body.senderName ?? null,
       username: body.senderUsername ?? null,
     });
@@ -587,7 +617,7 @@ export async function handleChannelInbound(
       sourceType: 'channel',
       sourceChannel,
       conversationId: result.conversationId,
-      requesterExternalUserId: body.senderExternalUserId ?? undefined,
+      requesterExternalUserId: canonicalSenderId ?? rawSenderId ?? undefined,
       guardianExternalUserId: binding.guardianExternalUserId,
       toolName: 'ingress_message',
       questionText: 'Ingress policy requires guardian approval',
@@ -612,7 +642,7 @@ export async function handleChannelInbound(
         conversationId: result.conversationId,
         sourceChannel,
         externalChatId,
-        senderIdentifier: body.senderName || body.senderUsername || body.senderExternalUserId || 'Unknown sender',
+        senderIdentifier: body.senderName || body.senderUsername || rawSenderId || 'Unknown sender',
         eventId: result.eventId,
       },
       dedupeKey: `escalation:${result.eventId}`,
@@ -658,14 +688,14 @@ export async function handleChannelInbound(
     commandIntent?.type === 'start' &&
     typeof commandIntent.payload === 'string' &&
     (commandIntent.payload as string).startsWith('gv_') &&
-    body.senderExternalUserId
+    rawSenderId
   ) {
     const bootstrapToken = (commandIntent.payload as string).slice(3);
     const bootstrapSession = resolveBootstrapToken(canonicalAssistantId, sourceChannel, bootstrapToken);
 
     if (bootstrapSession && bootstrapSession.status === 'pending_bootstrap') {
       // Bind the pending_bootstrap session to the sender's identity
-      bindSessionIdentity(bootstrapSession.id, body.senderExternalUserId, externalChatId);
+      bindSessionIdentity(bootstrapSession.id, rawSenderId!, externalChatId);
 
       // Transition bootstrap session to awaiting_response
       updateSessionStatus(bootstrapSession.id, 'awaiting_response');
@@ -675,7 +705,7 @@ export async function handleChannelInbound(
       const newSession = createOutboundSession({
         assistantId: canonicalAssistantId,
         channel: sourceChannel,
-        expectedExternalUserId: body.senderExternalUserId,
+        expectedExternalUserId: rawSenderId!,
         expectedChatId: externalChatId,
         identityBindingStatus: 'bound',
         destinationAddress: externalChatId,
@@ -727,13 +757,13 @@ export async function handleChannelInbound(
     !result.duplicate &&
     shouldInterceptVerification &&
     guardianVerifyCode !== undefined &&
-    body.senderExternalUserId
+    rawSenderId
   ) {
     const verifyResult = validateAndConsumeChallenge(
       canonicalAssistantId,
       sourceChannel,
       guardianVerifyCode,
-      body.senderExternalUserId,
+      canonicalSenderId ?? rawSenderId!,
       externalChatId,
       body.senderUsername,
       body.senderName,
@@ -745,7 +775,7 @@ export async function handleChannelInbound(
       upsertMember({
         assistantId: canonicalAssistantId,
         sourceChannel,
-        externalUserId: body.senderExternalUserId,
+        externalUserId: canonicalSenderId ?? rawSenderId!,
         externalChatId,
         status: 'active',
         policy: 'allow',
@@ -756,7 +786,7 @@ export async function handleChannelInbound(
       const verifyLogLabel = verifyResult.verificationType === 'trusted_contact'
         ? 'Trusted contact verified'
         : 'Guardian verified';
-      log.info({ sourceChannel, externalUserId: body.senderExternalUserId, verificationType: verifyResult.verificationType }, `${verifyLogLabel}: auto-upserted ingress member`);
+      log.info({ sourceChannel, externalUserId: canonicalSenderId, verificationType: verifyResult.verificationType }, `${verifyLogLabel}: auto-upserted ingress member`);
 
       // Emit activated signal when a trusted contact completes verification.
       // Member record is persisted above before this event fires, satisfying
@@ -775,12 +805,12 @@ export async function handleChannelInbound(
           },
           contextPayload: {
             sourceChannel,
-            externalUserId: body.senderExternalUserId,
+            externalUserId: canonicalSenderId ?? rawSenderId!,
             externalChatId,
             senderName: body.senderName ?? null,
             senderUsername: body.senderUsername ?? null,
           },
-          dedupeKey: `trusted-contact:activated:${canonicalAssistantId}:${sourceChannel}:${body.senderExternalUserId}`,
+          dedupeKey: `trusted-contact:activated:${canonicalAssistantId}:${sourceChannel}:${canonicalSenderId ?? rawSenderId!}`,
         });
       }
     }
@@ -864,7 +894,7 @@ export async function handleChannelInbound(
     assistantId: canonicalAssistantId,
     sourceChannel,
     externalChatId,
-    senderExternalUserId: body.senderExternalUserId,
+    senderExternalUserId: rawSenderId,
     senderUsername: body.senderUsername,
   });
 
@@ -877,14 +907,14 @@ export async function handleChannelInbound(
     !result.duplicate &&
     replyCallbackUrl &&
     (trimmedContent.length > 0 || hasCallbackData) &&
-    body.senderExternalUserId &&
+    rawSenderId &&
     guardianCtx.actorRole === 'guardian'
   ) {
     const routerResult = await routeGuardianReply({
       messageText: trimmedContent,
       channel: sourceChannel,
       actor: {
-        externalUserId: body.senderExternalUserId,
+        externalUserId: canonicalSenderId ?? rawSenderId!,
         channel: sourceChannel,
         isTrusted: false,
       },
@@ -935,7 +965,7 @@ export async function handleChannelInbound(
       content: trimmedContent,
       externalChatId,
       sourceChannel,
-      senderExternalUserId: body.senderExternalUserId,
+      senderExternalUserId: canonicalSenderId ?? rawSenderId,
       replyCallbackUrl,
       bearerToken,
       guardianCtx,
@@ -1224,106 +1254,6 @@ async function handleInviteTokenIntercept(params: {
   // Failed redemption — inform the user and deny
   channelDeliveryStore.markProcessed(dedupResult.eventId);
   return Response.json({ accepted: true, eventId: dedupResult.eventId, denied: true, inviteRedemption: outcome.reason });
-}
-
-// ---------------------------------------------------------------------------
-// Non-member access request notification
-// ---------------------------------------------------------------------------
-
-/**
- * Fire-and-forget: look up the guardian binding and, if present, create an
- * approval request + emit a notification signal so the guardian can
- * approve/deny the unknown user. Deduplicates by checking for an existing
- * pending approval for the same (requester, assistant, channel).
- */
-function notifyGuardianOfAccessRequest(params: {
-  canonicalAssistantId: string;
-  sourceChannel: ChannelId;
-  externalChatId: string;
-  senderExternalUserId?: string;
-  senderName?: string;
-  senderUsername?: string;
-}): boolean {
-  const {
-    canonicalAssistantId,
-    sourceChannel,
-    externalChatId,
-    senderExternalUserId,
-    senderName,
-    senderUsername,
-  } = params;
-
-  if (!senderExternalUserId) return false;
-
-  const binding = getGuardianBinding(canonicalAssistantId, sourceChannel);
-  if (!binding) {
-    log.debug({ sourceChannel, canonicalAssistantId }, 'No guardian binding for access request notification');
-    return false;
-  }
-
-  // Deduplicate: skip if there is already a pending canonical request for
-  // the same requester on this channel.  Still return true — the guardian
-  // was already notified for this request.
-  const existingCanonical = listCanonicalGuardianRequests({
-    status: 'pending',
-    requesterExternalUserId: senderExternalUserId,
-    sourceChannel,
-    kind: 'access_request',
-  });
-  if (existingCanonical.length > 0) {
-    log.debug(
-      { sourceChannel, senderExternalUserId, existingId: existingCanonical[0].id },
-      'Skipping duplicate access request notification',
-    );
-    return true;
-  }
-
-  const senderIdentifier = senderName || senderUsername || senderExternalUserId;
-  const requestId = `access-req-${canonicalAssistantId}-${sourceChannel}-${senderExternalUserId}-${Date.now()}`;
-
-  const canonicalRequest = createCanonicalGuardianRequest({
-    id: requestId,
-    kind: 'access_request',
-    sourceType: 'channel',
-    sourceChannel,
-    conversationId: `access-req-${sourceChannel}-${senderExternalUserId}`,
-    requesterExternalUserId: senderExternalUserId,
-    requesterChatId: externalChatId,
-    guardianExternalUserId: binding.guardianExternalUserId,
-    toolName: 'ingress_access_request',
-    questionText: `${senderIdentifier} is requesting access to the assistant`,
-    expiresAt: new Date(Date.now() + GUARDIAN_APPROVAL_TTL_MS).toISOString(),
-  });
-
-  void emitNotificationSignal({
-    sourceEventName: 'ingress.access_request',
-    sourceChannel,
-    sourceSessionId: `access-req-${sourceChannel}-${senderExternalUserId}`,
-    assistantId: canonicalAssistantId,
-    attentionHints: {
-      requiresAction: true,
-      urgency: 'high',
-      isAsyncBackground: false,
-      visibleInSourceNow: false,
-    },
-    contextPayload: {
-      requestId,
-      sourceChannel,
-      externalChatId,
-      senderExternalUserId,
-      senderName: senderName ?? null,
-      senderUsername: senderUsername ?? null,
-      senderIdentifier,
-    },
-    dedupeKey: `access-request:${canonicalRequest.id}`,
-  });
-
-  log.info(
-    { sourceChannel, senderExternalUserId, senderIdentifier },
-    'Guardian notified of non-member access request',
-  );
-
-  return true;
 }
 
 // ---------------------------------------------------------------------------

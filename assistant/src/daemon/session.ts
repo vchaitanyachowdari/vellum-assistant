@@ -227,6 +227,7 @@ export class Session {
       '<channel_turn_context>',
       '<temporal_context>',
       '<guardian_context>',
+      '<inbound_actor_context>',
       '<voice_call_control>',
       '<workspace_top_level>',
       '<active_workspace>',

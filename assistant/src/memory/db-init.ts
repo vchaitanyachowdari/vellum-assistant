@@ -5,6 +5,7 @@ import {
   createCallSessionsTables,
   createCanonicalGuardianTables,
   migrateCanonicalGuardianRequesterChatId,
+  migrateNormalizePhoneIdentities,
   createChannelGuardianTables,
   createContactsAndTriageTables,
   createConversationAttentionTables,
@@ -152,6 +153,9 @@ export function initializeDb(): void {
 
   // 24b. Add requester_chat_id to canonical_guardian_requests (chat ID != user ID on some channels)
   migrateCanonicalGuardianRequesterChatId(database);
+
+  // 25. Normalize phone-like identity fields to E.164 across guardian and ingress tables
+  migrateNormalizePhoneIdentities(database);
 
   validateMigrationState(database);
 }
