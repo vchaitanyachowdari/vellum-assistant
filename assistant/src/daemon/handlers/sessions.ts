@@ -780,11 +780,11 @@ export async function handleSessionCreate(
 
   // Auto-send the initial message if provided, kick-starting the skill.
   if (msg.initialMessage) {
-    // Queue title generation immediately (matches all other creation paths).
-    // The agent loop success path will also attempt title generation, but
-    // queueGenerateConversationTitle is safe to call redundantly — the
-    // replaceability check prevents double-writes. This ensures the title
-    // is generated even if the agent loop fails or is cancelled.
+    // Queue title generation eagerly — some processMessage paths (guardian
+    // replies, unknown slash commands) bypass the agent loop entirely, so
+    // we can't rely on the agent loop's early title generation alone.
+    // The agent loop also queues title generation, but isReplaceableTitle
+    // prevents double-writes since the first to complete sets a real title.
     if (title === GENERATING_TITLE) {
       queueGenerateConversationTitle({
         conversationId: conversation.id,
