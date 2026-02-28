@@ -85,6 +85,12 @@ export interface GuardianReplyResult {
   requestId?: string;
   /** Detailed result from the canonical decision primitive (when a decision was attempted). */
   canonicalResult?: CanonicalDecisionResult;
+  /**
+   * When true, the caller should skip legacy approval interception for this
+   * message. Set by the invite handoff bypass so that "open invite flow"
+   * reaches the assistant even when other legacy guardian approvals are pending.
+   */
+  skipApprovalInterception?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +325,30 @@ export async function routeGuardianReply(
     }
   }
 
-  // ── 2.5. Deterministic plain-text decisions for known pending targets ──
+  // ── 2.5. Invite handoff bypass for access requests ──
+  // When the guardian sends "open invite flow" and there is at least one
+  // pending access_request, return not_consumed so the message falls through
+  // to the normal assistant turn and can invoke the Trusted Contacts skill.
+  if (messageText.length > 0 && pendingRequests.length > 0) {
+    const normalized = messageText.trim().toLowerCase().replace(/[.!?]+$/g, '');
+    if (normalized === 'open invite flow') {
+      const hasAccessRequest = pendingRequests.some(r => r.kind === 'access_request');
+      if (hasAccessRequest) {
+        log.info(
+          { event: 'router_invite_handoff', pendingCount: pendingRequests.length },
+          'Guardian sent "open invite flow" with pending access_request — passing through to assistant',
+        );
+        return {
+          consumed: false,
+          decisionApplied: false,
+          type: 'not_consumed' as const,
+          skipApprovalInterception: true,
+        };
+      }
+    }
+  }
+
+  // ── 2.6. Deterministic plain-text decisions for known pending targets ──
   // Desktop sessions intentionally do not enable NL classification; when the
   // caller has exactly one known pending request and sends an explicit
   // approve/reject phrase ("approve", "yes", "reject", "no"), apply the
