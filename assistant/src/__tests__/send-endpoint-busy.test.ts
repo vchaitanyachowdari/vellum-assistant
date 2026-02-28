@@ -38,6 +38,8 @@ mock.module('../util/logger.js', () => ({
 
 mock.module('../config/loader.js', () => ({
   getConfig: () => ({
+    ui: {},
+    
     model: 'test',
     provider: 'test',
     apiKeys: {},
@@ -83,6 +85,7 @@ function makeCompletingSession(): Session {
     },
     handleConfirmationResponse: () => {},
     handleSecretResponse: () => {},
+    hasAnyPendingConfirmation: () => false,
   } as unknown as Session;
 }
 
@@ -114,6 +117,7 @@ function makeHangingSession(): Session {
     },
     handleConfirmationResponse: () => {},
     handleSecretResponse: () => {},
+    hasAnyPendingConfirmation: () => false,
     _enqueuedMessages: enqueuedMessages,
   } as unknown as Session;
 }

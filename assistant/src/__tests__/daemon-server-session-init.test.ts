@@ -203,6 +203,8 @@ mock.module('../providers/ratelimit.js', () => ({
 
 mock.module('../config/loader.js', () => ({
   getConfig: () => ({
+    ui: {},
+    
     provider: 'mock-provider',
     providerOrder: ['mock-provider'],
     maxTokens: 4096,
@@ -243,7 +245,31 @@ mock.module('../memory/external-conversation-store.js', () => ({
   getBindingsForConversations: () => new Map(),
 }));
 
+mock.module('../memory/conversation-attention-store.js', () => ({
+  getAttentionStateByConversationIds: () => new Map(),
+  recordAttentionSignal: () => {},
+  recordConversationSeenSignal: () => {},
+}));
+
+mock.module('../memory/canonical-guardian-store.js', () => ({
+  generateCanonicalRequestCode: () => 'mock-code-0000',
+  createCanonicalGuardianRequest: () => ({ requestCode: 'mock-code-0000', status: 'pending' }),
+  submitCanonicalRequest: () => ({ requestCode: 'mock-code-0000', status: 'pending' }),
+  getCanonicalRequest: () => null,
+  resolveCanonicalRequest: () => false,
+  listPendingCanonicalRequests: () => [],
+}));
+
 mock.module('../memory/conversation-store.js', () => ({
+  setConversationOriginChannelIfUnset: () => {},
+  updateConversationContextWindow: () => {},
+  deleteMessageById: () => {},
+  updateConversationTitle: () => {},
+  updateConversationUsage: () => {},
+  addMessage: () => ({ id: 'mock-msg-id' }),
+  provenanceFromGuardianContext: () => ({ source: 'user', guardianContext: undefined }),
+  getConversationOriginInterface: () => null,
+  getConversationOriginChannel: () => null,
   getLatestConversation: () => conversation,
   createConversation: (titleOrOpts?: string | { title?: string; threadType?: string }) => {
     lastCreateConversationArgs = titleOrOpts;
@@ -266,6 +292,7 @@ mock.module('../memory/conversation-store.js', () => ({
   getMessages: () => [],
   listConversations: () => [conversation],
   countConversations: () => 1,
+  getDisplayMetaForConversations: () => new Map(),
 }));
 
 mock.module('../daemon/session.js', () => ({
