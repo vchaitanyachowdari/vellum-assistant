@@ -14,6 +14,8 @@ import * as attachmentsStore from '../../memory/attachments-store.js';
 import * as channelDeliveryStore from '../../memory/channel-delivery-store.js';
 import {
   createCanonicalGuardianRequest,
+  listCanonicalGuardianRequests,
+  listPendingCanonicalGuardianRequestsByDestinationChat,
 } from '../../memory/canonical-guardian-store.js';
 import { recordConversationSeenSignal } from '../../memory/conversation-attention-store.js';
 import * as conversationStore from '../../memory/conversation-store.js';
@@ -910,6 +912,35 @@ export async function handleChannelInbound(
     rawSenderId &&
     guardianCtx.actorRole === 'guardian'
   ) {
+    // Compute destination-scoped pending request hints so the router can
+    // discover canonical requests delivered to this chat even when the
+    // request lacks a guardianExternalUserId (e.g. voice-originated
+    // pending_question requests).
+    //
+    // When delivery-scoped matches exist, union them with any identity-
+    // based pending requests so that requests without delivery rows (e.g.
+    // tool_approval requests created inline) are not silently excluded.
+    // Pass undefined (not []) when there are zero combined results so the
+    // router's own identity-based fallback stays active.
+    const deliveryScopedPendingRequests = listPendingCanonicalGuardianRequestsByDestinationChat(
+      sourceChannel,
+      externalChatId,
+    );
+    let pendingRequestIds: string[] | undefined;
+    if (deliveryScopedPendingRequests.length > 0) {
+      const deliveryIds = new Set(deliveryScopedPendingRequests.map(r => r.id));
+      // Also include identity-based pending requests so we don't hide them
+      const identityId = canonicalSenderId ?? rawSenderId!;
+      const identityPending = listCanonicalGuardianRequests({
+        status: 'pending',
+        guardianExternalUserId: identityId,
+      });
+      for (const r of identityPending) {
+        deliveryIds.add(r.id);
+      }
+      pendingRequestIds = [...deliveryIds];
+    }
+
     const routerResult = await routeGuardianReply({
       messageText: trimmedContent,
       channel: sourceChannel,
@@ -920,6 +951,7 @@ export async function handleChannelInbound(
       },
       conversationId: result.conversationId,
       callbackData: body.callbackData,
+      pendingRequestIds,
       approvalConversationGenerator,
       channelDeliveryContext: {
         replyCallbackUrl,
