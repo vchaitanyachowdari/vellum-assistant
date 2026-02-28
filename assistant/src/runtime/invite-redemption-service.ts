@@ -7,9 +7,11 @@
  * persisted, or returned in the outcome.
  */
 
+import type { ChannelId } from '../channels/types.js';
 import { getSqlite } from '../memory/db.js';
 import { findByTokenHash, hashToken, markInviteExpired, recordInviteUse, redeemInvite as storeRedeemInvite, findActiveVoiceInvites } from '../memory/ingress-invite-store.js';
 import { findMember, upsertMember } from '../memory/ingress-member-store.js';
+import { canonicalizeInboundIdentity } from '../util/canonicalize-identity.js';
 import { hashVoiceCode } from '../util/voice-code.js';
 
 // ---------------------------------------------------------------------------
@@ -119,7 +121,10 @@ export function redeemInvite(params: {
     // Sentinel error used to trigger a transaction rollback when the invite
     // was concurrently revoked/expired between pre-validation and write time.
     const STALE_INVITE = Symbol('stale_invite');
-    const preservedDisplayName = existingMember.displayName?.trim().length
+    const canonicalMemberId = existingMember.externalUserId ? canonicalizeInboundIdentity(sourceChannel as ChannelId, existingMember.externalUserId) : null;
+    const canonicalCallerId = externalUserId ? canonicalizeInboundIdentity(sourceChannel as ChannelId, externalUserId) : null;
+    const memberMatchesSender = !!(canonicalMemberId && canonicalCallerId && canonicalMemberId === canonicalCallerId);
+    const preservedDisplayName = memberMatchesSender && existingMember.displayName?.trim().length
       ? existingMember.displayName
       : displayName;
 
