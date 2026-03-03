@@ -18,7 +18,8 @@ import { isHttpAuthDisabled } from '../../config/env.js';
 import {
   type CanonicalGuardianRequest,
   getCanonicalGuardianRequest,
-  listCanonicalGuardianRequests,
+  isRequestInConversationScope,
+  listPendingRequestsByConversationScope,
 } from '../../memory/canonical-guardian-store.js';
 import { getActiveBinding } from '../../memory/guardian-bindings.js';
 import { DAEMON_INTERNAL_ASSISTANT_ID } from '../assistant-scope.js';
@@ -47,7 +48,7 @@ export function handleGuardianActionsPending(url: URL, _authContext: AuthContext
     return httpError('BAD_REQUEST', 'conversationId query parameter is required', 400);
   }
 
-  const prompts = listGuardianDecisionPrompts({ conversationId });
+  const prompts = listGuardianDecisionPrompts({ conversationId, channel: 'vellum' });
   return Response.json({ conversationId, prompts });
 }
 
@@ -113,10 +114,13 @@ export async function handleGuardianActionDecision(req: Request, authContext: Au
   }
 
   // Verify conversationId scoping before applying the canonical decision.
-  // A caller must not be able to cross-resolve requests from a different conversation.
+  // The decision is allowed when the conversationId matches the request's
+  // source conversation OR a recorded delivery destination conversation.
+  // Channel is scoped to 'vellum' to prevent cross-channel approval when
+  // conversation ID namespaces overlap.
   if (conversationId) {
     const canonicalRequest = getCanonicalGuardianRequest(requestId);
-    if (canonicalRequest && canonicalRequest.conversationId && canonicalRequest.conversationId !== conversationId) {
+    if (canonicalRequest && canonicalRequest.conversationId && !isRequestInConversationScope(requestId, conversationId, 'vellum')) {
       return httpError('NOT_FOUND', 'No pending guardian action found for this requestId', 404);
     }
   }
@@ -172,20 +176,22 @@ export async function handleGuardianActionDecision(req: Request, authContext: Au
 /**
  * Build a list of GuardianDecisionPrompt objects for the given conversation.
  *
- * Reads exclusively from the canonical guardian requests store. All request
- * kinds (tool_approval, pending_question, access_request, etc.) that have
- * been created as canonical requests will appear here.
+ * Uses the conversation scope helper to union requests whose source
+ * `conversationId` matches AND requests delivered to this conversation.
+ * This allows guardian destination threads (including macOS Vellum threads)
+ * to surface prompts for all canonical kinds.
+ *
+ * The returned prompts normalize `conversationId` to the queried thread ID
+ * for client rendering stability.
  */
 export function listGuardianDecisionPrompts(params: {
   conversationId: string;
+  channel?: string;
 }): GuardianDecisionPrompt[] {
-  const { conversationId } = params;
+  const { conversationId, channel } = params;
   const prompts: GuardianDecisionPrompt[] = [];
 
-  const canonicalRequests = listCanonicalGuardianRequests({
-    conversationId,
-    status: 'pending',
-  });
+  const canonicalRequests = listPendingRequestsByConversationScope(conversationId, channel);
 
   for (const req of canonicalRequests) {
     // Skip expired canonical requests
@@ -205,20 +211,23 @@ export function listGuardianDecisionPrompts(params: {
 /**
  * Map a canonical guardian request to the client-facing prompt format.
  *
- * Generates an appropriate questionText based on the request kind, and
- * determines which actions are available. Pending questions surface as
- * informational prompts since they may require text input rather than
- * simple approve/reject buttons.
+ * Generates kind-specific questionText and action sets:
+ * - `tool_approval`: "Approve tool: <name>" with approve/reject actions
+ * - `pending_question`: voice-originated question with approve/reject actions
+ * - `access_request`: explicit "Access Request" label with approve/reject actions
+ *   and text fallback instructions (request code + "open invite flow")
+ *
+ * All kinds use `forGuardianOnBehalf: true` (no approve_always) since the
+ * guardian is acting on behalf of a requester.
  */
 function mapCanonicalRequestToPrompt(
   req: CanonicalGuardianRequest,
   conversationId: string,
 ): GuardianDecisionPrompt {
-  const questionText = req.questionText
-    ?? (req.toolName ? `Approve tool: ${req.toolName}` : `Guardian request: ${req.kind}`);
+  const questionText = buildKindAwareQuestionText(req);
 
-  // pending_question requests are typically voice-originated and need
-  // approve/reject only (no approve_always -- guardian-on-behalf invariant).
+  // All guardian-on-behalf prompts use approve_once + reject only
+  // (no approve_always, no temporary modes).
   const actions = buildDecisionActions({ forGuardianOnBehalf: true });
 
   const expiresAt = req.expiresAt
@@ -233,8 +242,33 @@ function mapCanonicalRequestToPrompt(
     toolName: req.toolName ?? null,
     actions,
     expiresAt,
-    conversationId: req.conversationId ?? conversationId,
+    // Normalize to the queried thread ID for client rendering stability.
+    // The canonical request's source conversationId may differ from the
+    // guardian destination thread the client is viewing.
+    conversationId,
     callSessionId: req.callSessionId ?? null,
     kind: req.kind,
   };
+}
+
+/**
+ * Build kind-aware question text for the guardian prompt.
+ *
+ * For `access_request`, appends deterministic text fallback instructions
+ * (request-code approve/reject + "open invite flow") so the prompt remains
+ * actionable even when buttons are unavailable or not used.
+ */
+function buildKindAwareQuestionText(req: CanonicalGuardianRequest): string {
+  const baseText = req.questionText
+    ?? (req.toolName ? `Approve tool: ${req.toolName}` : `Guardian request: ${req.kind}`);
+
+  if (req.kind === 'access_request') {
+    const code = req.requestCode ?? req.id.slice(0, 6).toUpperCase();
+    const lines = [baseText];
+    lines.push(`\nReply "${code} approve" to grant access or "${code} reject" to deny.`);
+    lines.push('Reply "open invite flow" to start Trusted Contacts invite flow.');
+    return lines.join('\n');
+  }
+
+  return baseText;
 }

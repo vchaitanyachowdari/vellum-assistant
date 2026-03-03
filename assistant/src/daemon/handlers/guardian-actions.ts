@@ -1,7 +1,7 @@
 import {
   applyCanonicalGuardianDecision,
 } from '../../approvals/guardian-decision-primitive.js';
-import { getCanonicalGuardianRequest } from '../../memory/canonical-guardian-store.js';
+import { getCanonicalGuardianRequest, isRequestInConversationScope } from '../../memory/canonical-guardian-store.js';
 import type { ApprovalAction } from '../../runtime/channel-approval-types.js';
 import { resolveLocalIpcTrustContext } from '../../runtime/local-actor-identity.js';
 import { listGuardianDecisionPrompts } from '../../runtime/routes/guardian-action-routes.js';
@@ -12,7 +12,7 @@ const VALID_ACTIONS = new Set<string>(['approve_once', 'approve_10m', 'approve_t
 
 export const guardianActionsHandlers = defineHandlers({
   guardian_actions_pending_request: (msg: GuardianActionsPendingRequest, socket, ctx) => {
-    const prompts = listGuardianDecisionPrompts({ conversationId: msg.conversationId });
+    const prompts = listGuardianDecisionPrompts({ conversationId: msg.conversationId, channel: 'vellum' });
     ctx.send(socket, { type: 'guardian_actions_pending_response', conversationId: msg.conversationId, prompts });
   },
 
@@ -31,11 +31,12 @@ export const guardianActionsHandlers = defineHandlers({
     }
 
     // Verify conversationId scoping before applying the canonical decision.
-    // A caller must not be able to cross-resolve requests from a different conversation.
+    // The decision is allowed when the conversationId matches the request's
+    // source conversation OR a recorded delivery destination conversation.
     if (msg.conversationId) {
       const canonicalRequest = getCanonicalGuardianRequest(msg.requestId);
-      if (canonicalRequest && canonicalRequest.conversationId && canonicalRequest.conversationId !== msg.conversationId) {
-        log.warn({ requestId: msg.requestId, expected: canonicalRequest.conversationId, got: msg.conversationId }, 'conversationId mismatch');
+      if (canonicalRequest && canonicalRequest.conversationId && !isRequestInConversationScope(msg.requestId, msg.conversationId, 'vellum')) {
+        log.warn({ requestId: msg.requestId, expected: canonicalRequest.conversationId, got: msg.conversationId }, 'conversationId not in scope');
         ctx.send(socket, {
           type: 'guardian_action_decision_response',
           applied: false,

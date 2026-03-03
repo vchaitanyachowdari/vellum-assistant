@@ -58,6 +58,7 @@ mock.module("../approvals/guardian-decision-primitive.js", () => ({
 
 import { guardianActionsHandlers } from "../daemon/handlers/guardian-actions.js";
 import {
+  createCanonicalGuardianDelivery,
   createCanonicalGuardianRequest,
   generateCanonicalRequestCode,
 } from "../memory/canonical-guardian-store.js";
@@ -99,6 +100,7 @@ function ensureConversation(id: string): void {
 
 function resetTables(): void {
   const db = getDb();
+  db.run("DELETE FROM canonical_guardian_deliveries");
   db.run("DELETE FROM canonical_guardian_requests");
   db.run("DELETE FROM channel_guardian_approval_requests");
   db.run("DELETE FROM conversations");
@@ -277,6 +279,37 @@ describe("HTTP handleGuardianActionDecision", () => {
         requestId: "req-scope-2",
         action: "reject",
         conversationId: "conv-match",
+      }),
+    });
+    const res = await handleGuardianActionDecision(req, mockAuthContext);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.applied).toBe(true);
+  });
+
+  test("allows decision when conversationId matches a delivery destination", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-source-http",
+      requestId: "req-dest-scope-http",
+      kind: "pending_question",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-dest-scope-http",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-thread",
+    });
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: true,
+      requestId: "req-dest-scope-http",
+      grantMinted: false,
+    });
+
+    const req = new Request("http://localhost/v1/guardian-actions/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "req-dest-scope-http",
+        action: "approve_once",
+        conversationId: "conv-guardian-thread",
       }),
     });
     const res = await handleGuardianActionDecision(req, mockAuthContext);
@@ -567,7 +600,12 @@ describe("listGuardianDecisionPrompts", () => {
     });
     expect(prompts).toHaveLength(1);
     expect(prompts[0].kind).toBe("access_request");
-    expect(prompts[0].questionText).toBe("User wants access");
+    // buildKindAwareQuestionText appends request-code fallback instructions
+    // for access_request kind, so use partial matching
+    expect(prompts[0].questionText).toContain("User wants access");
+    expect(prompts[0].questionText).toContain("approve");
+    expect(prompts[0].questionText).toContain("reject");
+    expect(prompts[0].questionText).toContain("open invite flow");
   });
 
   test("only returns requests for the given conversationId", () => {
@@ -587,6 +625,67 @@ describe("listGuardianDecisionPrompts", () => {
     const promptsB = listGuardianDecisionPrompts({ conversationId: "conv-b" });
     expect(promptsB).toHaveLength(1);
     expect(promptsB[0].requestId).toBe("req-b");
+  });
+
+  test("includes requests delivered to the queried destination conversation", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-source",
+      requestId: "req-dest-1",
+      kind: "pending_question",
+      questionText: "What should I do?",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-dest-1",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-dest",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-guardian-dest",
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestId).toBe("req-dest-1");
+    expect(prompts[0].questionText).toBe("What should I do?");
+  });
+
+  test("normalizes prompt conversationId to the queried thread ID", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-source-norm",
+      requestId: "req-norm-1",
+      kind: "access_request",
+      questionText: "Grant access?",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-norm-1",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-dest-norm",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-dest-norm",
+    });
+    expect(prompts).toHaveLength(1);
+    // conversationId should be normalized to the queried thread, not the source
+    expect(prompts[0].conversationId).toBe("conv-dest-norm");
+  });
+
+  test("deduplicates requests found by both source and destination", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-same",
+      requestId: "req-dedup-1",
+    });
+    // Deliver to the same conversation (source == destination)
+    createCanonicalGuardianDelivery({
+      requestId: "req-dedup-1",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-same",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-same",
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestId).toBe("req-dedup-1");
   });
 });
 
@@ -705,6 +804,38 @@ describe("IPC guardian_action_decision", () => {
         requestId: "req-ipc-match",
         action: "reject",
         conversationId: "conv-ipc-match",
+      } as any,
+      socket as any,
+      ctx as any,
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0].applied).toBe(true);
+  });
+
+  test("allows decision when conversationId matches a delivery destination", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-ipc-source",
+      requestId: "req-ipc-dest-scope",
+      kind: "pending_question",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-ipc-dest-scope",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-ipc-guardian-thread",
+    });
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: true,
+      requestId: "req-ipc-dest-scope",
+      grantMinted: false,
+    });
+
+    const { socket, ctx, sent } = createIpcStub();
+    await handler(
+      {
+        type: "guardian_action_decision",
+        requestId: "req-ipc-dest-scope",
+        action: "approve_once",
+        conversationId: "conv-ipc-guardian-thread",
       } as any,
       socket as any,
       ctx as any,
@@ -848,5 +979,398 @@ describe("IPC guardian_actions_pending_request", () => {
     expect(sent).toHaveLength(1);
     const prompts = sent[0].prompts as unknown[];
     expect(prompts).toHaveLength(0);
+  });
+
+  test("returns prompts delivered to the queried destination conversation", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-ipc-source-list",
+      requestId: "req-ipc-dest-list",
+      kind: "pending_question",
+      questionText: "Voice question?",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-ipc-dest-list",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-ipc-dest-list",
+    });
+
+    const { socket, ctx, sent } = createIpcStub();
+    handler(
+      {
+        type: "guardian_actions_pending_request",
+        conversationId: "conv-ipc-dest-list",
+      } as any,
+      socket as any,
+      ctx as any,
+    );
+    expect(sent).toHaveLength(1);
+    const prompts = sent[0].prompts as Array<{
+      requestId: string;
+      questionText: string;
+      conversationId: string;
+    }>;
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestId).toBe("req-ipc-dest-list");
+    expect(prompts[0].questionText).toBe("Voice question?");
+    expect(prompts[0].conversationId).toBe("conv-ipc-dest-list");
+  });
+});
+
+// =========================================================================
+// Integration: pending_question visible/actionable in guardian thread
+// =========================================================================
+
+describe("integration: pending_question visible and actionable in guardian thread", () => {
+  beforeEach(resetTables);
+
+  test("pending_question delivered to guardian thread is visible via pending endpoint", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-voice-source",
+      requestId: "req-pq-visible-1",
+      kind: "pending_question",
+      questionText: "What time works best for the appointment?",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-pq-visible-1",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-macos",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-guardian-macos",
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestId).toBe("req-pq-visible-1");
+    expect(prompts[0].kind).toBe("pending_question");
+    expect(prompts[0].questionText).toBe(
+      "What time works best for the appointment?",
+    );
+    expect(prompts[0].conversationId).toBe("conv-guardian-macos");
+  });
+
+  test("pending_question prompt has approve/reject actions (guardian-on-behalf)", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-voice-src-2",
+      requestId: "req-pq-actions-1",
+      kind: "pending_question",
+      questionText: "Should I confirm the meeting?",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-voice-src-2",
+    });
+    expect(prompts).toHaveLength(1);
+    const actions = prompts[0].actions.map((a: { action: string }) => a.action);
+    expect(actions).toContain("approve_once");
+    expect(actions).toContain("reject");
+    // Guardian-on-behalf: no approve_always or temporary modes
+    expect(actions).not.toContain("approve_always");
+    expect(actions).not.toContain("approve_10m");
+    expect(actions).not.toContain("approve_thread");
+  });
+
+  test("pending_question is actionable via HTTP decision endpoint", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-voice-src-3",
+      requestId: "req-pq-action-http",
+      kind: "pending_question",
+      questionText: "Allow email to bob@example.com?",
+      toolName: "send_email",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-pq-action-http",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-thread-pq",
+    });
+
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: true,
+      requestId: "req-pq-action-http",
+      grantMinted: false,
+    });
+
+    const req = new Request("http://localhost/v1/guardian-actions/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "req-pq-action-http",
+        action: "approve_once",
+        conversationId: "conv-guardian-thread-pq",
+      }),
+    });
+    const res = await handleGuardianActionDecision(req, mockAuthContext);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.applied).toBe(true);
+    expect(mockApplyCanonicalGuardianDecision).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =========================================================================
+// Integration: access_request visible/actionable in guardian thread
+// =========================================================================
+
+describe("integration: access_request visible and actionable in guardian thread", () => {
+  beforeEach(resetTables);
+
+  test("access_request delivered to guardian thread is visible via pending endpoint", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-access-src-1",
+      requestId: "req-ar-visible-1",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      questionText: "Alice via Telegram is requesting access to the assistant",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-ar-visible-1",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-macos-ar",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-guardian-macos-ar",
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestId).toBe("req-ar-visible-1");
+    expect(prompts[0].kind).toBe("access_request");
+    expect(prompts[0].conversationId).toBe("conv-guardian-macos-ar");
+  });
+
+  test("access_request prompt includes text fallback instructions with request code", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-access-src-2",
+      requestId: "req-ar-fallback-1",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      questionText: "Bob via WhatsApp is requesting access to the assistant",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-access-src-2",
+    });
+    expect(prompts).toHaveLength(1);
+    const qt = prompts[0].questionText;
+    // Must contain original question text
+    expect(qt).toContain(
+      "Bob via WhatsApp is requesting access to the assistant",
+    );
+    // Must contain request-code-based approve/reject directive
+    expect(qt).toContain("approve");
+    expect(qt).toContain("reject");
+    // Must contain invite flow directive
+    expect(qt).toContain("open invite flow");
+  });
+
+  test("access_request prompt has approve/reject actions (guardian-on-behalf)", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-access-src-3",
+      requestId: "req-ar-actions-1",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      questionText: "Carol is requesting access",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-access-src-3",
+    });
+    expect(prompts).toHaveLength(1);
+    const actions = prompts[0].actions.map((a: { action: string }) => a.action);
+    expect(actions).toContain("approve_once");
+    expect(actions).toContain("reject");
+    expect(actions).not.toContain("approve_always");
+  });
+
+  test("access_request is actionable via HTTP decision endpoint from guardian thread", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-access-src-4",
+      requestId: "req-ar-action-http",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      guardianExternalUserId: "guardian-88",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-ar-action-http",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-thread-ar",
+    });
+
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: true,
+      requestId: "req-ar-action-http",
+      grantMinted: false,
+    });
+
+    const req = new Request("http://localhost/v1/guardian-actions/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "req-ar-action-http",
+        action: "approve_once",
+        conversationId: "conv-guardian-thread-ar",
+      }),
+    });
+    const res = await handleGuardianActionDecision(req, mockAuthContext);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.applied).toBe(true);
+    expect(mockApplyCanonicalGuardianDecision).toHaveBeenCalledTimes(1);
+  });
+
+  test("access_request reject is actionable via HTTP decision endpoint", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-access-src-5",
+      requestId: "req-ar-reject-http",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+    });
+
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: true,
+      requestId: "req-ar-reject-http",
+      grantMinted: false,
+    });
+
+    const req = new Request("http://localhost/v1/guardian-actions/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "req-ar-reject-http",
+        action: "reject",
+      }),
+    });
+    const res = await handleGuardianActionDecision(req, mockAuthContext);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.applied).toBe(true);
+  });
+});
+
+// =========================================================================
+// Integration: text/code fallback routing when buttons are not used
+// =========================================================================
+
+describe("integration: text/code fallback routing remains functional", () => {
+  beforeEach(resetTables);
+
+  test("requestCode is always present in prompt for text-based fallback", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-fallback-1",
+      requestId: "req-fallback-code-1",
+      kind: "tool_approval",
+      toolName: "bash",
+      questionText: "Run bash: rm -rf /tmp/test",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-fallback-1",
+    });
+    expect(prompts).toHaveLength(1);
+    // requestCode must be a non-empty string for text-based fallback
+    expect(prompts[0].requestCode).toBeTruthy();
+    expect(prompts[0].requestCode.length).toBeGreaterThanOrEqual(6);
+  });
+
+  test("pending_question prompt includes requestCode for text fallback", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-fallback-pq",
+      requestId: "req-fallback-pq-1",
+      kind: "pending_question",
+      questionText: "When should I schedule the delivery?",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-fallback-pq",
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].requestCode).toBeTruthy();
+    expect(prompts[0].kind).toBe("pending_question");
+  });
+
+  test("access_request prompt includes requestCode and text directives for fallback", () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-fallback-ar",
+      requestId: "req-fallback-ar-1",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      questionText: "Dave is requesting access",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-fallback-ar",
+    });
+    expect(prompts).toHaveLength(1);
+    const prompt = prompts[0];
+    // requestCode present for code-based text fallback
+    expect(prompt.requestCode).toBeTruthy();
+    // questionText includes explicit text fallback instructions
+    const code = prompt.requestCode;
+    expect(prompt.questionText).toContain(`"${code} approve"`);
+    expect(prompt.questionText).toContain(`"${code} reject"`);
+    expect(prompt.questionText).toContain('"open invite flow"');
+  });
+
+  test("mixed pending_question and access_request visible in same guardian thread", () => {
+    // Create a pending_question delivered to guardian thread
+    createTestCanonicalRequest({
+      conversationId: "conv-src-mixed-1",
+      requestId: "req-mixed-pq",
+      kind: "pending_question",
+      questionText: "What time works?",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-mixed-pq",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-mixed",
+    });
+
+    // Create an access_request delivered to same guardian thread
+    createTestCanonicalRequest({
+      conversationId: "conv-src-mixed-2",
+      requestId: "req-mixed-ar",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+      questionText: "Eve is requesting access",
+    });
+    createCanonicalGuardianDelivery({
+      requestId: "req-mixed-ar",
+      destinationChannel: "vellum",
+      destinationConversationId: "conv-guardian-mixed",
+    });
+
+    const prompts = listGuardianDecisionPrompts({
+      conversationId: "conv-guardian-mixed",
+    });
+    expect(prompts).toHaveLength(2);
+    const kinds = prompts.map((p: { kind?: string }) => p.kind).sort();
+    expect(kinds).toEqual(["access_request", "pending_question"]);
+
+    // Both prompts have requestCodes for text fallback
+    for (const prompt of prompts) {
+      expect(prompt.requestCode).toBeTruthy();
+      expect(prompt.actions.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("stale access_request decision returns reason without regression", async () => {
+    createTestCanonicalRequest({
+      conversationId: "conv-stale-ar",
+      requestId: "req-stale-ar-1",
+      kind: "access_request",
+      toolName: "ingress_access_request",
+    });
+    mockApplyCanonicalGuardianDecision.mockResolvedValueOnce({
+      applied: false,
+      reason: "already_resolved",
+    });
+
+    const req = new Request("http://localhost/v1/guardian-actions/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "req-stale-ar-1",
+        action: "approve_once",
+      }),
+    });
+    const res = await handleGuardianActionDecision(req, mockAuthContext);
+    const body = await res.json();
+    expect(body.applied).toBe(false);
+    expect(body.reason).toBe("already_resolved");
+    expect(body.requestId).toBe("req-stale-ar-1");
   });
 });
