@@ -1025,6 +1025,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObjec
                 assistantCli.stop()
                 self.removeLockfileEntry(assistantId: name)
             }
+
+            // Stop processes after retire succeeds (or user chose Force Remove).
+            // This keeps the daemon alive if the user cancels a failed retire.
+            daemonClient.disconnect()
+            assistantCli.stop()
         } else {
             assistantCli.stop()
         }
