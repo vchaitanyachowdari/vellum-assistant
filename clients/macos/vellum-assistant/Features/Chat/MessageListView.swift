@@ -51,6 +51,9 @@ struct MessageListView: View {
     var loadPreviousMessagePage: (() async -> Bool)?
 
     var threadId: UUID?
+    /// When set, scroll to this message ID and clear the binding.
+    /// Used by notification deep links to anchor the view to a specific message.
+    @Binding var anchorMessageId: UUID?
     @Binding var isNearBottom: Bool
     @Environment(\.conversationZoomScale) private var conversationZoomScale
     @AppStorage("hasEverSentMessage") private var hasEverSentMessage: Bool = false
@@ -494,7 +497,17 @@ struct MessageListView: View {
             }
             .onAppear {
                 isAppActive = NSApp.isActive
-                proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
+                if let id = anchorMessageId, messages.contains(where: { $0.id == id }) {
+                    // Anchor is already set and the target message is loaded —
+                    // scroll to it immediately instead of falling through to bottom.
+                    proxy.scrollTo(id, anchor: .center)
+                    anchorMessageId = nil
+                } else if anchorMessageId == nil {
+                    proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
+                }
+                // When anchorMessageId is set but the target message isn't loaded
+                // yet, skip scrolling entirely — onChange(of: messages.count) will
+                // retry once history finishes loading.
             }
             .onDisappear {
                 hoverExitDebounceTask?.cancel()
@@ -583,7 +596,39 @@ struct MessageListView: View {
                 }
                 isThreadContentHovered = false
                 DispatchQueue.main.async {
-                    proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
+                    // Skip scroll-to-bottom when an anchor message is pending —
+                    // the anchorMessageId onChange handler will scroll to the
+                    // specific message instead. Stale anchors from other threads
+                    // are cleared by ThreadManager.activeThreadId.didSet, so
+                    // anchorMessageId here always belongs to the current thread.
+                    if anchorMessageId == nil {
+                        proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: anchorMessageId) {
+                guard let id = anchorMessageId else { return }
+                // Only scroll and clear if the target message is already loaded;
+                // otherwise leave the anchor set so the messages-change handler
+                // can retry once history finishes loading.
+                if messages.contains(where: { $0.id == id }) {
+                    withAnimation {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                    anchorMessageId = nil
+                }
+            }
+            .onChange(of: messages.count) {
+                // Retry anchor scroll when new messages arrive (e.g., history
+                // loads after a thread switch triggered by a notification
+                // deep-link). Uses messages.count instead of messages to avoid
+                // O(n) array equality checks on every streaming token.
+                guard let id = anchorMessageId else { return }
+                if messages.contains(where: { $0.id == id }) {
+                    withAnimation {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                    anchorMessageId = nil
                 }
             }
             .onChange(of: currentPendingRequestId) {
