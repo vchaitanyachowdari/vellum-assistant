@@ -6,6 +6,9 @@
  *   POST   /v1/ingress/invites        — create an invite (supports voice)
  *   DELETE /v1/ingress/invites/:id    — revoke an invite
  *   POST   /v1/ingress/invites/redeem — redeem an invite (token or voice code)
+ *
+ * Member/contact operations have been migrated to the /v1/contacts and
+ * /v1/contacts/channels endpoints.
  */
 
 import {
