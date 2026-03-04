@@ -512,6 +512,7 @@ extension ChatViewModel {
         case .assistantTextDelta(let delta):
             guard belongsToSession(delta.sessionId) else { return }
             guard !isCancelling else { return }
+            guard !isLoadingHistory else { return }
             if isWorkspaceRefinementInFlight {
                 refinementTextBuffer += delta.text
                 // Throttle refinement streaming updates with 100ms coalescing
@@ -1052,6 +1053,7 @@ extension ChatViewModel {
             }
 
         case .confirmationRequest(let msg):
+            guard !isLoadingHistory else { return }
             // Flush buffered text before inserting the confirmation message.
             flushStreamingBuffer()
             // Route using sessionId when available (daemon >= v1.x includes
@@ -1098,6 +1100,7 @@ extension ChatViewModel {
         case .toolUseStart(let msg):
             guard belongsToSession(msg.sessionId) else { return }
             guard !isCancelling else { return }
+            guard !isLoadingHistory else { return }
             guard !isWorkspaceRefinementInFlight else { return }
             // Flush buffered text so it lands before the tool call in content order.
             flushStreamingBuffer()
@@ -1160,6 +1163,7 @@ extension ChatViewModel {
         case .toolInputDelta(let msg):
             guard belongsToSession(msg.sessionId) else { return }
             guard !isCancelling else { return }
+            guard !isLoadingHistory else { return }
             let preview = Self.extractCodePreview(from: msg.content, toolName: msg.toolName)
             if let existingId = currentAssistantMessageId,
                let msgIndex = messages.firstIndex(where: { $0.id == existingId }) {
@@ -1176,6 +1180,7 @@ extension ChatViewModel {
         case .toolOutputChunk(let msg):
             guard !isCancelling else { return }
             guard belongsToSession(msg.sessionId) else { return }
+            guard !isLoadingHistory else { return }
             // Handle structured progress events from claude_code sub-tools
             if let subType = msg.subType, !subType.isEmpty,
                let existingId = currentAssistantMessageId,
@@ -1221,6 +1226,7 @@ extension ChatViewModel {
         case .toolResult(let msg):
             guard belongsToSession(msg.sessionId) else { return }
             guard !isCancelling else { return }
+            guard !isLoadingHistory else { return }
             guard !isWorkspaceRefinementInFlight else { return }
             // Find the most recent pending (incomplete) tool call.
             // First check currentAssistantMessageId, then fall back to searching
