@@ -7,6 +7,8 @@ import {
   type RuntimeAttachmentMeta,
 } from "../../runtime/client.js";
 import { classifySlackError } from "../../slack/errors.js";
+import type { Block } from "../../slack/block-kit-builder.js";
+import { textToBlocks } from "../../slack/text-to-blocks.js";
 
 const log = getLogger("slack-deliver");
 const MAX_RATE_LIMIT_RETRIES = 3;
@@ -24,7 +26,7 @@ type SlackApiResult = {
  */
 async function callSlackApiWithRetries(
   url: string,
-  slackBody: Record<string, string>,
+  slackBody: Record<string, unknown>,
   botToken: string,
   chatId: string,
   tlog: Pick<ReturnType<typeof getLogger>, "error" | "warn" | "info">,
@@ -316,6 +318,7 @@ export function createSlackDeliverHandler(
       chatId?: string;
       to?: string;
       text?: string;
+      blocks?: Block[];
       assistantId?: string;
       attachments?: RuntimeAttachmentMeta[];
       ephemeral?: boolean;
@@ -404,6 +407,12 @@ export function createSlackDeliverHandler(
     const messageTs = body.messageTs ?? updateTs;
     const isUpdate = typeof messageTs === "string" && messageTs.length > 0;
 
+    // Resolve Block Kit blocks: use provided blocks, or auto-format text
+    const blocks: Block[] =
+      Array.isArray(body.blocks) && body.blocks.length > 0
+        ? body.blocks
+        : textToBlocks(text);
+
     try {
       // Typing indicator: post a placeholder message that the runtime can
       // later update via `updateTs` when the real response is ready.
@@ -458,10 +467,17 @@ export function createSlackDeliverHandler(
       }
 
       if (text && typeof text === "string") {
-        const slackBody: Record<string, string> = {
+        const slackBody: Record<string, unknown> = {
           channel: chatId,
+          // `text` is always required as a fallback for notifications and accessibility
           text,
         };
+
+        // Add Block Kit blocks for rich formatting
+        if (blocks.length > 0) {
+          slackBody.blocks = blocks;
+        }
+
         if (threadTs) {
           slackBody.thread_ts = threadTs;
         }

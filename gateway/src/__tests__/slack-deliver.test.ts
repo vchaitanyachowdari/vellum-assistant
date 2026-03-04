@@ -380,6 +380,67 @@ describe("slack-deliver endpoint", () => {
     expect((slackCall!.body as any).thread_ts).toBeUndefined();
   });
 
+  test("auto-formats text into Block Kit blocks when blocks are not provided", async () => {
+    const handler = createSlackDeliverHandler(makeConfig());
+    const req = makeRequest({ chatId: "C123", text: "# Hello\n\nWorld" });
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const slackCall = fetchCalls.find((c) =>
+      c.url.includes("chat.postMessage"),
+    );
+    expect(slackCall).toBeDefined();
+    const body = slackCall!.body as any;
+    // text fallback is always present
+    expect(body.text).toBe("# Hello\n\nWorld");
+    // blocks should be auto-generated
+    expect(body.blocks).toBeDefined();
+    expect(Array.isArray(body.blocks)).toBe(true);
+    expect(body.blocks.length).toBeGreaterThan(0);
+    // First block should be a header from "# Hello"
+    expect(body.blocks[0].type).toBe("header");
+    expect(body.blocks[0].text.text).toBe("Hello");
+  });
+
+  test("uses provided blocks when passed in request body", async () => {
+    const handler = createSlackDeliverHandler(makeConfig());
+    const customBlocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Custom block" } },
+    ];
+    const req = makeRequest({
+      chatId: "C123",
+      text: "fallback text",
+      blocks: customBlocks,
+    });
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const slackCall = fetchCalls.find((c) =>
+      c.url.includes("chat.postMessage"),
+    );
+    expect(slackCall).toBeDefined();
+    const body = slackCall!.body as any;
+    expect(body.text).toBe("fallback text");
+    expect(body.blocks).toEqual(customBlocks);
+  });
+
+  test("always includes text as fallback alongside blocks", async () => {
+    const handler = createSlackDeliverHandler(makeConfig());
+    const req = makeRequest({ chatId: "C123", text: "Simple message" });
+    const res = await handler(req);
+    expect(res.status).toBe(200);
+
+    const slackCall = fetchCalls.find((c) =>
+      c.url.includes("chat.postMessage"),
+    );
+    expect(slackCall).toBeDefined();
+    const body = slackCall!.body as any;
+    // text must always be present for notifications/accessibility
+    expect(body.text).toBe("Simple message");
+    // blocks are also present from auto-formatting
+    expect(body.blocks).toBeDefined();
+  });
+
   test("returns 400 when text is a non-string truthy value", async () => {
     const handler = createSlackDeliverHandler(makeConfig());
     const req = makeRequest({ chatId: "C123", text: { x: 1 } });
@@ -819,5 +880,6 @@ describe("slack attachment delivery", () => {
     );
     expect(completeCall).toBeDefined();
     expect((completeCall!.body as any).thread_ts).toBe("1700000000.000050");
+>>>>>>> origin/main
   });
 });
