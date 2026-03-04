@@ -1211,6 +1211,19 @@ export class RelayConnection {
         "Guardian voice verification succeeded",
       );
 
+      // Create the guardian binding now that verification succeeded.
+      if (result.verificationType === "guardian") {
+        revokeGuardianBinding(this.guardianChallengeAssistantId, "voice");
+        createGuardianBinding({
+          assistantId: this.guardianChallengeAssistantId,
+          channel: "voice",
+          guardianExternalUserId: this.guardianVerificationFromNumber,
+          guardianDeliveryChatId: this.guardianVerificationFromNumber,
+          guardianPrincipalId: this.guardianVerificationFromNumber,
+          verifiedVia: "challenge",
+        });
+      }
+
       if (isOutbound) {
         // Outbound guardian verification: play success and hang up.
         // There is no normal conversation to transition to.
