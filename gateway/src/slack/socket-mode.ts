@@ -17,6 +17,7 @@ import {
   type SlackReactionAddedEvent,
   type NormalizedSlackEvent,
 } from "./normalize.js";
+import { publishAppHome, type AppHomeContext } from "./app-home.js";
 
 const log = getLogger("slack-socket-mode");
 
@@ -218,6 +219,14 @@ export class SlackSocketModeClient {
     return data.url;
   }
 
+  private getAppHomeContext(): AppHomeContext {
+    return {
+      connected: true,
+      botUsername: this.config.botUsername,
+      workspaceName: this.config.teamName,
+    };
+  }
+
   private handleMessage(raw: string): void {
     let envelope: {
       envelope_id?: string;
@@ -277,24 +286,9 @@ export class SlackSocketModeClient {
       return;
     }
 
-    // Handle interactive envelopes (block_actions from Block Kit buttons, menus, etc.)
+    // Handle interactive payloads (block_actions from Block Kit buttons, App Home, etc.)
     if (envelope.type === "interactive") {
-      const interactivePayload = envelope.payload;
-      if (interactivePayload?.type === "block_actions") {
-        const normalized = normalizeSlackBlockActions(
-          interactivePayload as unknown as SlackBlockActionsPayload,
-          envelope.envelope_id ?? "unknown",
-          this.config.gatewayConfig,
-        );
-        if (normalized) {
-          this.onEvent(normalized);
-        } else {
-          log.info(
-            { envelopeId: envelope.envelope_id },
-            "Slack block_actions dropped by normalization/routing",
-          );
-        }
-      }
+      this.handleInteractive(envelope.payload);
       return;
     }
 
@@ -302,9 +296,33 @@ export class SlackSocketModeClient {
     if (envelope.type !== "events_api") return;
 
     const eventPayload = envelope.payload;
-    if (!eventPayload?.event || !eventPayload.event_id) return;
+    if (!eventPayload?.event) return;
 
+    // Handle app_home_opened: publish the App Home view for the user
     const event = eventPayload.event;
+    if (event.type === "app_home_opened") {
+      const homeEvent = event as {
+        type: "app_home_opened";
+        user: string;
+        tab?: string;
+      };
+      if (homeEvent.tab === "home" || !homeEvent.tab) {
+        publishAppHome(
+          this.config.botToken,
+          homeEvent.user,
+          this.getAppHomeContext(),
+        ).catch((err) => {
+          log.error(
+            { err, userId: homeEvent.user },
+            "Failed to publish App Home",
+          );
+        });
+      }
+      return;
+    }
+
+    if (!eventPayload.event_id) return;
+
     const dmEvent = event as SlackDirectMessageEvent;
     const channelEvent = event as SlackChannelMessageEvent;
     const messageChangedEvent = event as SlackMessageChangedEvent;
@@ -429,6 +447,49 @@ export class SlackSocketModeClient {
     }
 
     this.onEvent(normalized);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private handleInteractive(payload: Record<string, any> | undefined): void {
+    if (!payload) return;
+
+    // Only handle block_actions (from Block Kit buttons, App Home buttons, etc.)
+    if (payload.type !== "block_actions") return;
+
+    // First try to normalize as a channel-scoped block_actions event
+    const normalized = normalizeSlackBlockActions(
+      payload as unknown as SlackBlockActionsPayload,
+      payload.envelope_id ?? "unknown",
+      this.config.gatewayConfig,
+    );
+    if (normalized) {
+      this.onEvent(normalized);
+      return;
+    }
+
+    // Fall back to App Home interaction handling
+    const userId = payload.user?.id as string | undefined;
+    const actions = payload.actions as
+      | Array<{ action_id: string; value?: string }>
+      | undefined;
+    if (!userId || !actions?.length) return;
+
+    log.info(
+      {
+        userId,
+        actionIds: actions.map((a) => a.action_id),
+      },
+      "Received App Home block_actions",
+    );
+
+    // Re-publish the App Home view to reflect any state changes
+    publishAppHome(
+      this.config.botToken,
+      userId,
+      this.getAppHomeContext(),
+    ).catch((err) => {
+      log.error({ err, userId }, "Failed to update App Home after interaction");
+    });
   }
 
   private scheduleReconnect(): void {
