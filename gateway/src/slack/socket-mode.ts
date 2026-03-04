@@ -336,6 +336,28 @@ export class SlackSocketModeClient {
     }
     this.dedupMap.set(eventId, Date.now());
 
+    this.normalizeAndEmit(
+      event,
+      eventId,
+      isAppMention,
+      isActiveThreadReply,
+      isReactionAdded,
+      isDm,
+    );
+  }
+
+  private normalizeAndEmit(
+    event:
+      | SlackAppMentionEvent
+      | SlackDirectMessageEvent
+      | SlackChannelMessageEvent
+      | SlackReactionAddedEvent,
+    eventId: string,
+    isAppMention: boolean,
+    isActiveThreadReply: boolean,
+    isReactionAdded: boolean,
+    _isDm: boolean,
+  ): void {
     let normalized: NormalizedSlackEvent | null;
     if (isReactionAdded) {
       normalized = normalizeSlackReactionAdded(
