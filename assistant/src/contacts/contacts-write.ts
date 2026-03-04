@@ -302,9 +302,9 @@ export function blockMemberContactsFirst(
         if (!contact && canonicalUserId !== result.externalUserId) {
           contact = findContactByChannelExternalId(
             result.sourceChannel,
-            result.externalUserId,
+            result.externalUserId!,
           );
-          lookupId = result.externalUserId;
+          lookupId = result.externalUserId!;
         }
 
         if (contact) {
