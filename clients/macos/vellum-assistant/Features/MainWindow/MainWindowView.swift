@@ -1036,8 +1036,8 @@ struct MainWindowView: View {
                 Label("Archive", systemImage: "archivebox")
             }
         }
+        .pointerCursor()
         .onHover { hovering in
-            let wasHovered = sidebar.isHoveredThread == thread.id
             withAnimation(VAnimation.fast) {
                 if hovering {
                     sidebar.isHoveredThread = thread.id
@@ -1047,7 +1047,6 @@ struct MainWindowView: View {
                     }
                 }
             }
-            if hovering { NSCursor.pointingHand.push() } else if wasHovered { NSCursor.pop() }
         }
         .onDrag {
             sidebar.draggingThreadId = thread.id
@@ -1356,6 +1355,7 @@ struct MainWindowView: View {
                                 .padding(.bottom, VSpacing.xs)
                         }
                         .buttonStyle(.plain)
+                        .pointerCursor()
                     }
 
                     if !scheduleThreads.isEmpty {
@@ -1465,6 +1465,7 @@ struct MainWindowView: View {
                                             }
                                         }
                                     }
+                                    .pointerCursor()
                                 }
                                 .padding(.horizontal, VSpacing.sm)
                                 .padding(.bottom, VSpacing.xxs)
@@ -1491,6 +1492,7 @@ struct MainWindowView: View {
                                     .padding(.bottom, VSpacing.xs)
                             }
                             .buttonStyle(.plain)
+                            .pointerCursor()
                         }
                     }
                 }
@@ -1571,6 +1573,9 @@ struct MainWindowView: View {
                     showThreadSwitcher = false
                 }
                 .contentShape(Rectangle())
+                .if(regularThreads.count > 1) { view in
+                    view.pointerCursor()
+                }
                 .onTapGesture {
                     guard regularThreads.count > 1 else { return }
                     threadSwitcherHoverTimer?.cancel()
@@ -1665,11 +1670,11 @@ struct MainWindowView: View {
                         showThreadSwitcher = false
                     }
                     .onDisappear {
-                        // Clean up hover/cursor state when popover dismisses —
+                        // Clean up hover state when popover dismisses —
                         // onHover(false) may not fire if the view is removed.
+                        // Cursor cleanup is handled by PointerCursorModifier.
                         if sidebar.isHoveredThread != nil {
                             sidebar.isHoveredThread = nil
-                            NSCursor.pop()
                         }
                         sidebar.threadPendingDeletion = nil
                     }
