@@ -301,6 +301,7 @@ describe("POST /v1/messages — queue-if-busy and hub publishing", () => {
       guardianExternalUserId: "dev-bypass",
       guardianDeliveryChatId: "vellum",
       guardianPrincipalId: "test-principal-id",
+      verifiedVia: "test",
     });
 
     eventHub = new AssistantEventHub();
