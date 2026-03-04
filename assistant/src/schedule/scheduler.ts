@@ -223,7 +223,9 @@ async function runScheduleOnce(
         },
         "Executing schedule",
       );
-      await processMessage(conversation.id, job.message, { trustClass: "guardian" });
+      await processMessage(conversation.id, job.message, {
+        trustClass: "guardian",
+      });
       completeScheduleRun(runId, { status: "ok" });
       notifySchedule({ id: job.id, name: job.name });
       processed += 1;
@@ -272,7 +274,9 @@ async function runScheduleOnce(
           },
           "Executing reminder",
         );
-        await processMessage(conversation.id, reminder.message, { trustClass: "guardian" });
+        await processMessage(conversation.id, reminder.message, {
+          trustClass: "guardian",
+        });
         completeReminder(reminder.id);
       } catch (err) {
         log.warn(
