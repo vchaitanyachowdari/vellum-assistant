@@ -164,7 +164,6 @@ export async function handleUpsertContact(
     );
   }
 
-  // Validate channel status/policy values before passing to the store
   if (body.channels) {
     for (const ch of body.channels) {
       if (ch.status !== undefined && !isChannelStatus(ch.status)) {
@@ -194,17 +193,11 @@ export async function handleUpsertContact(
       preferredTone: body.preferredTone,
       role: body.role as ContactRole | undefined,
       assistantId,
-      channels: body.channels as
-        | Array<{
-            type: string;
-            address: string;
-            isPrimary?: boolean;
-            status?: ChannelStatus;
-            policy?: ChannelPolicy;
-            externalUserId?: string;
-            externalChatId?: string;
-          }>
-        | undefined,
+      channels: body.channels?.map((ch) => ({
+        ...ch,
+        status: ch.status as ChannelStatus | undefined,
+        policy: ch.policy as ChannelPolicy | undefined,
+      })),
     });
     return Response.json(
       { ok: true, contact },
