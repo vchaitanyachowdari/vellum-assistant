@@ -7,10 +7,9 @@
  */
 
 import { mkdir, stat } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { uploadAttachment } from "../../../../memory/attachments-store.js";
+import { uploadFileBackedAttachment } from "../../../../memory/attachments-store.js";
 import { getMediaAssetById } from "../../../../memory/media-store.js";
 import type {
   ToolContext,
@@ -169,13 +168,58 @@ export async function run(
     const result = await spawnWithTimeout(ffmpegArgs, FFMPEG_CLIP_TIMEOUT_MS);
 
     if (result.exitCode !== 0) {
-      return {
-        content: `ffmpeg clip extraction failed: ${result.stderr.slice(
-          0,
-          500,
-        )}`,
-        isError: true,
-      };
+      // Stream copy failed — fall back to re-encoding (handles high-bitrate
+      // sources, incompatible codecs, and missing keyframes at cut points)
+      context.onOutput?.("Stream copy failed, re-encoding clip...\n");
+      // Select codecs based on output format (WebM needs VP9/Opus, MP4/MOV use H.264/AAC)
+      const codecArgs =
+        outputFormat === "webm"
+          ? [
+              "-c:v",
+              "libvpx-vp9",
+              "-b:v",
+              "2M",
+              "-c:a",
+              "libopus",
+              "-b:a",
+              "128k",
+            ]
+          : [
+              "-c:v",
+              "libx264",
+              "-preset",
+              "fast",
+              "-crf",
+              "23",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "128k",
+            ];
+      const reencodeArgs = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        String(clipStart),
+        "-i",
+        asset.filePath,
+        "-t",
+        String(clipDuration),
+        ...codecArgs,
+        "-avoid_negative_ts",
+        "make_zero",
+        clipPath,
+      ];
+      const reencodeResult = await spawnWithTimeout(
+        reencodeArgs,
+        FFMPEG_CLIP_TIMEOUT_MS,
+      );
+      if (reencodeResult.exitCode !== 0) {
+        return {
+          content: `ffmpeg clip extraction failed (both stream copy and re-encode): ${reencodeResult.stderr.slice(0, 500)}`,
+          isError: true,
+        };
+      }
     }
 
     // Verify the output file exists and has content
@@ -193,12 +237,14 @@ export async function run(
       )} MB). Registering as attachment...\n`,
     );
 
-    // Read clip file and register as attachment
-    const clipData = await readFile(clipPath);
-    const clipBase64 = clipData.toString("base64");
+    // Register as file-backed attachment (no size limit, no base64 in-memory copy)
     const mimeType = MIME_BY_FORMAT[outputFormat] ?? "video/mp4";
-
-    const attachment = uploadAttachment(clipFilename, mimeType, clipBase64);
+    const attachment = uploadFileBackedAttachment(
+      clipFilename,
+      mimeType,
+      clipPath,
+      clipStat.size,
+    );
 
     context.onOutput?.(`Clip registered as attachment ${attachment.id}.\n`);
 
