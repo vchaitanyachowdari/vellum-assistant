@@ -964,9 +964,9 @@ struct MainWindowView: View {
             .padding(.vertical, VSpacing.sm)
             .background {
                 if isSelected {
-                    adaptiveColor(light: Moss._100, dark: Moss._700)
+                    adaptiveColor(light: Forest._200, dark: Moss._700)
                 } else if isHovered {
-                    adaptiveColor(light: Moss._100, dark: Moss._700).opacity(0.5)
+                    adaptiveColor(light: Forest._200, dark: Moss._700).opacity(0.5)
                 } else if thread.kind == .private {
                     VColor.accent.opacity(0.04)
                 } else {
@@ -1607,13 +1607,15 @@ struct MainWindowView: View {
                         Text("\(regularThreads.count) threads")
                             .font(VFont.body)
                             .foregroundColor(VColor.textMuted)
-                            .padding(.horizontal, VSpacing.sm)
+                            .padding(.leading, VSpacing.md)
+                            .padding(.trailing, VSpacing.sm)
                             .padding(.top, VSpacing.md)
                             .padding(.bottom, VSpacing.sm)
 
                         VColor.divider
                             .frame(height: 1)
                             .padding(.horizontal, VSpacing.xs)
+                            .padding(.bottom, VSpacing.sm)
 
                         // Thread list
                         ScrollView {
@@ -1659,7 +1661,7 @@ struct MainWindowView: View {
                     }
                     .frame(width: 220)
                     .padding(.bottom, VSpacing.sm)
-                    .background(VColor.background)
+                    .background(VColor.backgroundSubtle)
                     .onChange(of: threadManager.activeThreadId) { _, _ in
                         showThreadSwitcher = false
                     }
