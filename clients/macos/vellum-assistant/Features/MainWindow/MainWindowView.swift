@@ -964,9 +964,9 @@ struct MainWindowView: View {
             .padding(.vertical, VSpacing.sm)
             .background {
                 if isSelected {
-                    adaptiveColor(light: Forest._200, dark: Moss._700)
+                    VColor.navActive
                 } else if isHovered {
-                    adaptiveColor(light: Forest._200, dark: Moss._700).opacity(0.5)
+                    VColor.navHover
                 } else if thread.kind == .private {
                     VColor.accent.opacity(0.04)
                 } else {
