@@ -114,7 +114,8 @@ function getConnectedChannels(assistantId: string): NotificationChannel[] {
         channels.push(channel);
         break;
       case "telegram":
-      case "sms": {
+      case "sms":
+      case "slack": {
         // A binding-based channel is connected when the guardian has an
         // active channel entry with a valid delivery endpoint. The
         // externalChatId check ensures we don't report a channel as
