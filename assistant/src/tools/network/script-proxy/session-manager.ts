@@ -42,6 +42,32 @@ const DEFAULT_CONFIG: ProxySessionConfig = {
   maxSessionsPerConversation: 3,
 };
 
+/**
+ * Host patterns that are allowed by default through the proxy policy engine,
+ * regardless of session configuration. Supports exact matches (e.g.
+ * `"localhost"`) and wildcard subdomain patterns (e.g. `"*.vellum.ai"`
+ * matches `platform.vellum.ai`, `dev-platform.vellum.ai`, etc.).
+ */
+const ALLOWED_HOST_PATTERNS: readonly string[] = ["*.vellum.ai", "localhost"];
+
+/**
+ * Returns `true` when `hostname` matches any entry in
+ * {@link ALLOWED_HOST_PATTERNS}.
+ */
+function isAllowedHost(hostname: string): boolean {
+  for (const pattern of ALLOWED_HOST_PATTERNS) {
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(1); // e.g. ".vellum.ai"
+      if (hostname.endsWith(suffix) || hostname === pattern.slice(2)) {
+        return true;
+      }
+    } else if (hostname === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
 interface ManagedSession {
   session: ProxySession;
   server: Server | null;
@@ -309,6 +335,13 @@ export async function startSession(
     reqPath: string,
     scheme: "http" | "https",
   ) => {
+    // Allowed hosts are always passed through the proxy, regardless of
+    // session configuration or credential state.
+    if (isAllowedHost(hostname)) {
+      log.debug({ hostname }, "Allowing always-permitted host");
+      return {};
+    }
+
     const decision = evaluateRequestWithApproval(
       hostname,
       port,
@@ -506,7 +539,8 @@ export async function getOrStartSession(
 ): Promise<{ session: ProxySession; created: boolean }> {
   const requestedHost = options?.listenHost ?? "127.0.0.1";
 
-  // Fast path — session already active with matching credentials and listen host, no lock needed.
+  // Fast path — session already active with matching credentials and listen
+  // host, no lock needed.
   const existing = getActiveSession(conversationId);
   if (existing && credentialIdsMatch(existing.credentialIds, credentialIds)) {
     const managed = sessions.get(existing.id);
@@ -533,8 +567,9 @@ export async function getOrStartSession(
         return { session, created: false };
       }
     }
-    // Credential or listenHost mismatch — tear down and loop back to re-check
-    // whether another waiter has already started a replacement session.
+    // Credential or listenHost mismatch — tear down and loop back to
+    // re-check whether another waiter has already started a replacement
+    // session.
     await stopSession(session.id);
   }
 
