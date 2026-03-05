@@ -685,7 +685,7 @@ export class RuntimeHttpServer {
 
     return [
       ...pairingRouteDefinitions({
-        pairingContext: this.pairingContext,
+        getPairingContext: () => this.pairingContext,
       }),
       ...appRouteDefinitions(),
       ...secretRouteDefinitions(),
