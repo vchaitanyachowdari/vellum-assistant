@@ -8,15 +8,6 @@ import AppKit
 struct ComposerView: View {
     private let composerMaxHeight: CGFloat = 200
     private let composerActionButtonSize: CGFloat = 34
-    private let composerActionIconSize: CGFloat = 14
-    private let compactActionOpticalYOffset: CGFloat = 0
-
-    private enum ComposerActionFocus: Hashable {
-        case stop
-        case send
-        case microphone
-        case attachment
-    }
 
     @Binding var inputText: String
     let hasAPIKey: Bool
@@ -51,12 +42,7 @@ struct ComposerView: View {
     @Environment(\.conversationZoomScale) private var zoomScale
     @Environment(\.cmdEnterToSend) private var cmdEnterToSend
     @FocusState private var composerFocus: Bool
-    @State private var isStopHovered = false
-    @State private var isSendHovered = false
-    @State private var isMicrophoneHovered = false
-    @State private var isAttachmentHovered = false
     @State private var isComposerFocused = false
-    @FocusState private var focusedComposerAction: ComposerActionFocus?
 
     @State var showSlashMenu = false
     @State var slashFilter = ""
@@ -107,30 +93,19 @@ struct ComposerView: View {
                     }
                     .frame(height: compactRowHeight, alignment: .center)
                 } else {
-                    // In compact mode, text field and buttons share a row;
-                    // in expanded mode, buttons sit on a separate row below.
-                    HStack(alignment: .center, spacing: VSpacing.md) {
-                        composerTextField
-                        if !isComposerExpanded {
+                    // Text field with action buttons pinned to trailing edge.
+                    // In compact (single-line) mode buttons are vertically centered;
+                    // in expanded (multi-line) mode they pin to the bottom-right.
+                    composerTextField
+                        .frame(minHeight: composerCompactHeight)
+                        .overlay(alignment: isComposerExpanded ? .bottomTrailing : .trailing) {
                             composerActionButtons
-                                .frame(maxHeight: .infinity, alignment: .center)
-                                .offset(y: compactActionOpticalYOffset)
+                                .padding(.bottom, isComposerExpanded ? VSpacing.xs : 0)
                         }
-                    }
-                    .frame(minHeight: composerCompactHeight)
-
-                    if isComposerExpanded {
-                        // Expanded: buttons on a separate row below the text area
-                        HStack(spacing: VSpacing.md) {
-                            Spacer()
-                            composerActionButtons
-                        }
-                        .padding(.top, VSpacing.xs)
-                    }
                 }
             }
             .padding(.top, isComposerExpanded ? VSpacing.md : VSpacing.sm)
-            .padding(.bottom, isComposerExpanded ? VSpacing.sm : VSpacing.sm)
+            .padding(.bottom, VSpacing.sm)
             .padding(.leading, VSpacing.lg)
             .padding(.trailing, VSpacing.lg)
             .background(
@@ -189,7 +164,7 @@ struct ComposerView: View {
         // visible text coloring.
         if hasSlashHighlight {
             Text(slashHighlightedText(font: font))
-                .lineLimit(1...6)
+                .lineLimit(1...)
                 .fixedSize(horizontal: false, vertical: true)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -203,7 +178,7 @@ struct ComposerView: View {
             + Text(ghostSuffix)
                 .font(font)
                 .foregroundColor(VColor.textSecondary.opacity(0.55)))
-                .lineLimit(1...6)
+                .lineLimit(1...)
                 .fixedSize(horizontal: false, vertical: true)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -219,15 +194,27 @@ struct ComposerView: View {
             text: $inputText,
             axis: .vertical
         )
-        .lineLimit(1...6)
+        .lineLimit(1...)
         .textFieldStyle(.plain)
         .font(font)
         .foregroundColor(hasSlashHighlight ? .clear : VColor.textPrimary)
         .tint(VColor.accent)
         .focused($composerFocus)
         .disabled(!hasAPIKey)
-        .onKeyPress(.return, phases: .down) { press in
-            handleReturnKeyPress(modifiers: press.modifiers)
+        .onSubmit {
+            #if os(macOS)
+            // In Cmd+Enter mode, plain Return should insert a newline.
+            // `.onSubmit` fires on all Return variants and consumes the
+            // event, so we insert the newline manually via the field editor.
+            // Cmd+Return → send is handled by the bridge before `.onSubmit`.
+            if cmdEnterToSend {
+                if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                }
+                return
+            }
+            #endif
+            performSendAction()
         }
         .onKeyPress(.tab, phases: .down) { press in
             if !press.modifiers.contains(.shift), showSlashMenu {
@@ -267,12 +254,24 @@ struct ComposerView: View {
         let scaledBody = Font.custom("Inter", size: 13 * zoomScale)
         let hasSlashHighlight = slashCommandRange != nil
 
-        return ZStack(alignment: .leading) {
-            composerTextOverlays(font: scaledBody, hasSlashHighlight: hasSlashHighlight)
-            composerInputField(font: scaledBody, hasSlashHighlight: hasSlashHighlight)
+        return ScrollView(.vertical, showsIndicators: false) {
+            ZStack(alignment: .leading) {
+                composerTextOverlays(font: scaledBody, hasSlashHighlight: hasSlashHighlight)
+                composerInputField(font: scaledBody, hasSlashHighlight: hasSlashHighlight)
+            }
+            // minHeight keeps single-line text vertically centered in the
+            // compact row; .leading alignment pins text to the left edge.
+            .frame(maxWidth: .infinity, minHeight: composerCompactHeight, alignment: .leading)
+            // Reserve trailing space so text wraps before reaching the
+            // overlaid action buttons (attach + send/mic ≈ 70pt wide).
+            .padding(.trailing, 70)
+            // Reserve bottom space so the last visible line isn't hidden
+            // behind the buttons when the composer is expanded.
+            .padding(.bottom, isComposerExpanded ? composerActionButtonSize : 0)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .accessibilityLabel("Message")
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: composerMaxHeight, alignment: .topLeading)
         .background(
             GeometryReader { geo in
                 Color.clear.preference(key: ComposerEditorHeightKey.self, value: geo.size.height)
@@ -286,7 +285,7 @@ struct ComposerView: View {
                 isFocused: composerFocus,
                 cmdEnterToSend: cmdEnterToSend,
                 onImagePaste: onPaste,
-                onCmdEnterSend: {
+                onSend: {
                     performSendAction()
                 },
                 onRedirectKeystroke: { chars in
@@ -410,10 +409,10 @@ struct ComposerView: View {
         }
     }
 
-    /// Shared send logic used by both the SwiftUI `.onKeyPress` return handler
-    /// and the AppKit `ComposerFocusBridge` Cmd+Enter interception. Keeps the
-    /// two paths in sync so slash-menu selection, ghost-text acceptance, and
-    /// pending-confirmation approval all work regardless of how "send" is triggered.
+    /// Shared send logic used by `.onSubmit` (native Return-to-send) and the
+    /// AppKit `ComposerFocusBridge` Cmd+Enter interception. Keeps slash-menu
+    /// selection, ghost-text acceptance, and pending-confirmation approval
+    /// all working regardless of how "send" is triggered.
     private func performSendAction() {
         inputText = inputText.replacingOccurrences(
             of: "\\n$", with: "", options: .regularExpression
@@ -429,139 +428,48 @@ struct ComposerView: View {
         }
     }
 
-    /// Handles Return key press: send vs insert newline depending on mode.
-    ///
-    /// Only the four semantic modifiers (Shift, Command, Control, Option) are
-    /// considered when deciding whether the user pressed a "plain" Return.
-    /// Non-semantic flags like `.capsLock` and `.numericPad` are ignored so
-    /// that Caps Lock being on or pressing Return on the numeric keypad still
-    /// behaves as a plain Return.
-    private func handleReturnKeyPress(modifiers: EventModifiers) -> KeyPress.Result {
-        let semanticModifiers = modifiers.intersection([.shift, .command, .control, .option])
-
-        // Shift+Enter always inserts a newline
-        if semanticModifiers.contains(.shift) { return .ignored }
-
-        if cmdEnterToSend {
-            // In Cmd+Enter mode: Cmd+Enter sends, plain Enter inserts newline.
-            // Cmd+Enter as a key equivalent is handled by ComposerFocusBridge's
-            // event monitor; if it also reaches here, handle it.
-            if semanticModifiers.contains(.command) {
-                performSendAction()
-                return .handled
-            }
-            if semanticModifiers.isEmpty { return .ignored } // plain Enter inserts newline
-            return .handled // consume other modifier+Return combos silently
-        }
-
-        // Default mode: plain Enter sends, any semantic modifier combo is consumed silently
-        if !semanticModifiers.isEmpty { return .handled }
-        performSendAction()
-        return .handled
-    }
-
     @ViewBuilder
     private var composerActionButtons: some View {
         HStack(spacing: 2) {
             if isSending && !hasPendingConfirmation {
-                Button(action: onStop) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(VColor.textPrimary)
-                            .frame(width: 30, height: 30)
-                        RoundedRectangle(cornerRadius: VRadius.xs)
-                            .fill(VColor.surface)
-                            .frame(width: 10, height: 10)
-                    }
-                }
-                .buttonStyle(VIconButtonStyle(
-                    isHovered: isStopHovered,
-                    isFocused: focusedComposerAction == .stop,
-                    size: composerActionButtonSize
-                ))
-                .focused($focusedComposerAction, equals: .stop)
-                .focusable(true)
-                .onHover { hovering in
-                    handleComposerButtonHover(
-                        hovering,
-                        state: $isStopHovered
-                    )
-                }
-                .accessibilityLabel("Stop generation")
+                VIconButton(
+                    label: "Stop generation",
+                    icon: "stop.fill",
+                    iconOnly: true,
+                    variant: .filled(VColor.textPrimary),
+                    size: composerActionButtonSize,
+                    action: onStop
+                )
             } else {
-                Button(action: { onAttach(); focusedComposerAction = nil }) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: composerActionIconSize, weight: .regular))
-                        .foregroundColor(adaptiveColor(light: Forest._500, dark: Moss._400))
-                }
-                .buttonStyle(VIconButtonStyle(
-                    isHovered: isAttachmentHovered,
-                    isFocused: focusedComposerAction == .attachment,
-                    size: composerActionButtonSize
-                ))
-                .focused($focusedComposerAction, equals: .attachment)
-                .focusable(true)
-                .onHover { hovering in
-                    handleComposerButtonHover(
-                        hovering,
-                        state: $isAttachmentHovered,
-                        isEnabled: hasAPIKey
-                    )
-                }
-                .accessibilityLabel("Attach file")
+                VIconButton(
+                    label: "Attach file",
+                    icon: "paperclip",
+                    iconOnly: true,
+                    size: composerActionButtonSize,
+                    action: { onAttach() }
+                )
                 .disabled(!hasAPIKey)
 
                 if canSend {
-                    Button {
+                    VIconButton(
+                        label: "Send message",
+                        icon: "arrow.up",
+                        iconOnly: true,
+                        variant: .filled(VColor.sendButton),
+                        size: composerActionButtonSize
+                    ) {
                         composerFocus = true
                         onSend()
-                    } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(VColor.sendButton)
-                                .frame(width: 30, height: 30)
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
                     }
-                    .buttonStyle(VIconButtonStyle(
-                        isHovered: isSendHovered,
-                        isFocused: focusedComposerAction == .send,
-                        size: composerActionButtonSize
-                    ))
-                    .focused($focusedComposerAction, equals: .send)
-                    .focusable(true)
-                    .onHover { hovering in
-                        handleComposerButtonHover(
-                            hovering,
-                            state: $isSendHovered
-                        )
-                    }
-                    .accessibilityLabel("Send message")
                     .transition(.scale.combined(with: .opacity))
                 } else {
                     MicrophoneButton(
                         isRecording: isRecording,
-                        iconSize: composerActionIconSize,
-                        action: { onMicrophoneToggle(); focusedComposerAction = nil }
+                        size: composerActionButtonSize,
+                        action: { onMicrophoneToggle() }
                     )
-                        .buttonStyle(VIconButtonStyle(
-                            isHovered: isMicrophoneHovered,
-                            isFocused: focusedComposerAction == .microphone,
-                            size: composerActionButtonSize
-                        ))
-                        .focused($focusedComposerAction, equals: .microphone)
-                        .focusable(true)
-                        .onHover { hovering in
-                            handleComposerButtonHover(
-                                hovering,
-                                state: $isMicrophoneHovered,
-                                isEnabled: hasAPIKey
-                            )
-                        }
-                        .disabled(!hasAPIKey)
-                        .transition(.scale.combined(with: .opacity))
+                    .disabled(!hasAPIKey)
+                    .transition(.scale.combined(with: .opacity))
                 }
             }
         }
@@ -604,38 +512,24 @@ struct ComposerView: View {
                     .frame(width: 28, height: composerActionButtonSize)
 
                 // Mute / unmute
-                Button(action: { manager.toggleListening() }) {
-                    Image(systemName: manager.state == .listening ? "mic.fill" : "mic.slash.fill")
-                        .font(.system(size: composerActionIconSize, weight: .medium))
-                        .foregroundColor(manager.state == .listening
-                            ? adaptiveColor(light: Forest._500, dark: Moss._400)
-                            : VColor.textSecondary)
-                }
-                .buttonStyle(VIconButtonStyle(
-                    isHovered: false,
-                    isFocused: false,
-                    size: composerActionButtonSize
-                ))
+                VIconButton(
+                    label: manager.state == .listening ? "Mute" : "Unmute",
+                    icon: manager.state == .listening ? "mic.fill" : "mic.slash.fill",
+                    iconOnly: true,
+                    size: composerActionButtonSize,
+                    action: { manager.toggleListening() }
+                )
                 .disabled(manager.state == .processing)
-                .accessibilityLabel(manager.state == .listening ? "Mute" : "Unmute")
 
                 // End voice mode (red X)
-                Button(action: { onEndVoiceMode?() }) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(VColor.error)
-                            .frame(width: 30, height: 30)
-                        Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-                }
-                .buttonStyle(VIconButtonStyle(
-                    isHovered: false,
-                    isFocused: false,
-                    size: composerActionButtonSize
-                ))
-                .accessibilityLabel("End voice mode")
+                VIconButton(
+                    label: "End voice mode",
+                    icon: "xmark",
+                    iconOnly: true,
+                    variant: .filled(VColor.error),
+                    size: composerActionButtonSize,
+                    action: { onEndVoiceMode?() }
+                )
             }
             .padding(.trailing, -(VSpacing.lg - VSpacing.sm))
         }
@@ -674,22 +568,6 @@ struct ComposerView: View {
         case .processing: return VColor.textSecondary
         default: return Moss._500
         }
-    }
-
-    private func handleComposerButtonHover(
-        _ hovering: Bool,
-        state: Binding<Bool>,
-        isEnabled: Bool = true
-    ) {
-        let resolvedHover = isEnabled && hovering
-        state.wrappedValue = resolvedHover
-        #if os(macOS)
-        if resolvedHover {
-            NSCursor.pointingHand.set()
-        } else {
-            NSCursor.arrow.set()
-        }
-        #endif
     }
 
     var canSend: Bool {
