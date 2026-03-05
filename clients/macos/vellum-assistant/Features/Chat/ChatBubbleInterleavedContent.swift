@@ -25,7 +25,7 @@ extension ChatBubble {
     /// array offset, which avoids spurious view invalidation when the array is
     /// recreated with identical values on each render pass.
     enum ContentGroup: Hashable {
-        case text(Int)
+        case texts([Int])
         case toolCalls([Int])
         case surface(Int)
     }
@@ -35,7 +35,11 @@ extension ChatBubble {
         for ref in message.contentOrder {
             switch ref {
             case .text(let i):
-                groups.append(.text(i))
+                if case .texts(let indices) = groups.last {
+                    groups[groups.count - 1] = .texts(indices + [i])
+                } else {
+                    groups.append(.texts([i]))
+                }
             case .toolCall(let i):
                 if case .toolCalls(let indices) = groups.last {
                     groups[groups.count - 1] = .toolCalls(indices + [i])
@@ -46,7 +50,50 @@ extension ChatBubble {
                 groups.append(.surface(i))
             }
         }
-        return groups
+
+        // Post-process: coalesce text groups that are only separated by tool call
+        // groups so that the user can drag-select across text that spans a tool
+        // invocation (tool calls render as EmptyView and produce no visual gap).
+        // Only .surface entries break a text run because they render visible content.
+        var coalesced: [ContentGroup] = []
+        var pendingTexts: [Int]?
+        var pendingToolCalls: [ContentGroup] = []
+
+        for group in groups {
+            switch group {
+            case .texts(let indices):
+                if var existing = pendingTexts {
+                    existing.append(contentsOf: indices)
+                    pendingTexts = existing
+                } else {
+                    pendingTexts = indices
+                }
+            case .toolCalls:
+                if pendingTexts != nil {
+                    // Buffer the tool calls; they might sit between two text groups.
+                    pendingToolCalls.append(group)
+                } else {
+                    coalesced.append(group)
+                }
+            case .surface:
+                // A surface breaks the text run — flush pending state.
+                if let texts = pendingTexts {
+                    coalesced.append(.texts(texts))
+                    coalesced.append(contentsOf: pendingToolCalls)
+                    pendingTexts = nil
+                    pendingToolCalls = []
+                }
+                coalesced.append(group)
+            }
+        }
+
+        // Flush any remaining pending state.
+        if let texts = pendingTexts {
+            coalesced.append(.texts(texts))
+            coalesced.append(contentsOf: pendingToolCalls)
+        }
+
+        return coalesced
     }
 
     @ViewBuilder
@@ -60,12 +107,17 @@ extension ChatBubble {
         // conversations with many interleaved blocks.
         ForEach(groups, id: \.self) { group in
             switch group {
-            case .text(let i):
-                if i < message.textSegments.count {
-                    let segmentText = message.textSegments[i].trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !segmentText.isEmpty {
-                        textBubble(for: segmentText)
+            case .texts(let indices):
+                let joined = indices
+                    .compactMap { i in
+                        i < message.textSegments.count
+                            ? message.textSegments[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                            : nil
                     }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                if !joined.isEmpty {
+                    textBubble(for: joined)
                 }
             case .toolCalls:
                 // Tool calls are rendered by trailingStatus below the message
