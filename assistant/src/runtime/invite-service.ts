@@ -10,6 +10,10 @@
 
 import { isChannelId } from "../channels/types.js";
 import {
+  DEFAULT_USER_REFERENCE,
+  resolveGuardianName,
+} from "../config/user-reference.js";
+import {
   createInvite,
   findByTokenHash,
   hashToken,
@@ -154,6 +158,7 @@ export function createIngressInvite(params: {
   // exactly once and never stored.
   let voiceCode: string | undefined;
   let voiceCodeHash: string | undefined;
+  let effectiveGuardianName: string | undefined;
   const isVoice = params.sourceChannel === "voice";
 
   // For non-voice invites: generate a 6-digit invite code for guardian-mediated
@@ -179,9 +184,11 @@ export function createIngressInvite(params: {
     if (typeof params.friendName !== "string" || !params.friendName.trim()) {
       return { ok: false, error: "friendName is required for voice invites" };
     }
+    effectiveGuardianName =
+      params.guardianName?.trim() || resolveGuardianName();
     if (
-      typeof params.guardianName !== "string" ||
-      !params.guardianName.trim()
+      !effectiveGuardianName ||
+      effectiveGuardianName === DEFAULT_USER_REFERENCE
     ) {
       return { ok: false, error: "guardianName is required for voice invites" };
     }
@@ -203,7 +210,7 @@ export function createIngressInvite(params: {
           voiceCodeHash,
           voiceCodeDigits: 6,
           friendName: params.friendName,
-          guardianName: params.guardianName,
+          guardianName: effectiveGuardianName,
         }
       : { inviteCodeHash }),
   });
