@@ -651,6 +651,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
             </array>
             <key>UTTypeDescription</key>
             <string>Vellum App Bundle</string>
+            <key>UTTypeIconFile</key>
+            <string>VellumDocument</string>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>
@@ -692,6 +694,9 @@ if [ -d "$XCASSETS" ]; then
         --output-partial-info-plist /dev/null \
         > /dev/null 2>&1 || true
 fi
+
+# Copy document type icon for .vellum UTI
+cp "$SCRIPT_DIR/vellum-assistant/Resources/VellumDocument.icns" "$RESOURCES_DIR/"
 
 # Remove transient runtime artifacts that may be written into the app bundle
 # during local dev runs (for example qdrant marker files). These are not part
