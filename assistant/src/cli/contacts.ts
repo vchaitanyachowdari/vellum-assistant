@@ -11,6 +11,8 @@ import { initializeDb } from "../memory/db.js";
 import {
   createIngressInvite,
   listIngressInvites,
+  redeemIngressInvite,
+  redeemVoiceInviteCode,
   revokeIngressInvite,
 } from "../runtime/invite-service.js";
 import { writeOutput } from "./integrations.js";
@@ -192,4 +194,76 @@ export function registerContactsCommand(program: Command): void {
       writeOutput(cmd, result);
       if (!result.ok) process.exitCode = 1;
     });
+
+  invites
+    .command("redeem")
+    .description("Redeem an invite via token or voice code")
+    .option("--token <token>", "Invite token")
+    .option("--source-channel <channel>", "Channel for redemption")
+    .option("--external-user-id <id>", "External user ID")
+    .option("--external-chat-id <id>", "External chat ID")
+    .option("--code <code>", "6-digit voice code")
+    .option(
+      "--caller-external-user-id <phone>",
+      "E.164 phone number for voice code redemption",
+    )
+    .option("--assistant-id <id>", "Assistant ID for voice code redemption")
+    .action(
+      async (
+        opts: {
+          token?: string;
+          sourceChannel?: string;
+          externalUserId?: string;
+          externalChatId?: string;
+          code?: string;
+          callerExternalUserId?: string;
+          assistantId?: string;
+        },
+        cmd: Command,
+      ) => {
+        try {
+          initializeDb();
+          if (opts.code) {
+            if (!opts.callerExternalUserId) {
+              writeOutput(cmd, {
+                ok: false,
+                error:
+                  "--caller-external-user-id is required for voice code redemption",
+              });
+              process.exitCode = 1;
+              return;
+            }
+            const result = redeemVoiceInviteCode({
+              code: opts.code,
+              callerExternalUserId: opts.callerExternalUserId,
+              sourceChannel: "voice",
+              ...(opts.assistantId ? { assistantId: opts.assistantId } : {}),
+            });
+            writeOutput(cmd, result);
+            if (!result.ok) {
+              process.exitCode = 1;
+            }
+          } else {
+            const result = redeemIngressInvite({
+              token: opts.token,
+              sourceChannel: opts.sourceChannel,
+              ...(opts.externalUserId
+                ? { externalUserId: opts.externalUserId }
+                : {}),
+              ...(opts.externalChatId
+                ? { externalChatId: opts.externalChatId }
+                : {}),
+            });
+            writeOutput(cmd, result);
+            if (!result.ok) {
+              process.exitCode = 1;
+            }
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          writeOutput(cmd, { ok: false, error: message });
+          process.exitCode = 1;
+        }
+      },
+    );
 }
