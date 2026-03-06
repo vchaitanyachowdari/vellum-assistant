@@ -114,7 +114,16 @@ public final class ChatViewModel: ObservableObject {
     }
     public var inputText: String {
         get { messageManager.inputText }
-        set { messageManager.inputText = newValue }
+        set {
+            let oldValue = messageManager.inputText
+            let oldSuggestion = messageManager.suggestion
+            messageManager.inputText = newValue
+            guard newValue != oldValue else { return }
+            if let oldSuggestion, !oldSuggestion.hasPrefix(newValue) {
+                messageManager.suggestion = nil
+                pendingSuggestionRequestId = nil
+            }
+        }
     }
     public var isThinking: Bool {
         get { messageManager.isThinking }
