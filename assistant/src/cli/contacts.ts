@@ -8,11 +8,13 @@ import {
   mergeContacts,
   searchContacts,
   updateChannelStatus,
+  upsertContact,
 } from "../contacts/contact-store.js";
 import type {
   ChannelPolicy,
   ChannelStatus,
   ContactRole,
+  ContactType,
 } from "../contacts/types.js";
 import { initializeDb } from "../memory/db.js";
 import {
@@ -42,6 +44,7 @@ is the source of truth for identity resolution across all channels.
 Examples:
   $ assistant contacts list
   $ assistant contacts get abc-123
+  $ assistant contacts upsert --display-name "Alice"
   $ assistant contacts merge keep-id merge-id
   $ assistant contacts invites list`,
   );
@@ -196,11 +199,114 @@ Examples:
       },
     );
 
-  const channels = contacts
+  contacts
+    .command("upsert")
+    .description("Create or update a contact")
+    .requiredOption("--display-name <name>", "Display name for the contact")
+    .option("--id <id>", "Contact ID — provide to update an existing contact")
+    .option("--notes <notes>", "Free-text notes about the contact")
+    .option(
+      "--role <role>",
+      "Contact role: contact or guardian (default: contact)",
+      "contact",
+    )
+    .option(
+      "--contact-type <type>",
+      "Contact type: human or assistant (default: human)",
+      "human",
+    )
+    .option(
+      "--channels <json>",
+      "JSON array of channel objects, each with type, address, and optional isPrimary, externalUserId, externalChatId, status, policy",
+    )
+    .addHelpText(
+      "after",
+      `
+Creates a new contact or updates an existing one. When --id is provided and
+matches an existing contact, that contact is updated. When --id is omitted,
+a new contact is created with a generated UUID.
+
+The --channels flag accepts a JSON array of channel objects. Each object must
+have "type" (e.g. telegram, sms, voice, email, whatsapp) and "address" fields.
+Optional channel fields: isPrimary (boolean), externalUserId, externalChatId,
+status (active, revoked, blocked), policy (allow, deny).
+
+Examples:
+  $ assistant contacts upsert --display-name "Alice" --json
+  $ assistant contacts upsert --display-name "Alice" --id abc-123 --notes "Updated notes" --json
+  $ assistant contacts upsert --display-name "Bob" --role guardian --json
+  $ assistant contacts upsert --display-name "Bob" --channels '[{"type":"telegram","address":"12345","externalUserId":"12345","status":"active","policy":"allow"}]' --json`,
+    )
+    .action(
+      async (
+        opts: {
+          displayName: string;
+          id?: string;
+          notes?: string;
+          role?: string;
+          contactType?: string;
+          channels?: string;
+        },
+        cmd: Command,
+      ) => {
+        try {
+          initializeDb();
+
+          let channels: unknown[] | undefined;
+          if (opts.channels) {
+            try {
+              channels = JSON.parse(opts.channels);
+              if (!Array.isArray(channels)) {
+                writeOutput(cmd, {
+                  ok: false,
+                  error: "--channels must be a JSON array",
+                });
+                process.exitCode = 1;
+                return;
+              }
+            } catch {
+              writeOutput(cmd, {
+                ok: false,
+                error: `Invalid JSON for --channels: ${opts.channels}`,
+              });
+              process.exitCode = 1;
+              return;
+            }
+          }
+
+          const result = upsertContact({
+            id: opts.id,
+            displayName: opts.displayName,
+            notes: opts.notes,
+            role: opts.role as ContactRole | undefined,
+            contactType: opts.contactType as ContactType | undefined,
+            channels: channels as
+              | {
+                  type: string;
+                  address: string;
+                  isPrimary?: boolean;
+                  externalUserId?: string;
+                  externalChatId?: string;
+                  status?: ChannelStatus;
+                  policy?: ChannelPolicy;
+                }[]
+              | undefined,
+          });
+
+          writeOutput(cmd, { ok: true, contact: result });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          writeOutput(cmd, { ok: false, error: message });
+          process.exitCode = 1;
+        }
+      },
+    );
+
+  const channelsCmds = contacts
     .command("channels")
     .description("Manage contact channels");
 
-  channels.addHelpText(
+  channelsCmds.addHelpText(
     "after",
     `
 Channels represent external communication endpoints linked to contacts —
@@ -214,7 +320,7 @@ Examples:
   $ assistant contacts channels update-status <channelId> --policy deny`,
   );
 
-  channels
+  channelsCmds
     .command("update-status <channelId>")
     .description("Update a channel's status or policy")
     .option(
