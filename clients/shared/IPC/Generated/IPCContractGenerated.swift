@@ -802,8 +802,10 @@ public struct IPCConfirmationStateChanged: Codable, Sendable {
     public let causedByRequestId: String?
     /// Normalized user text for analytics/debug (e.g. "approve", "deny").
     public let decisionText: String?
+    /// The tool_use block ID this confirmation applies to, for disambiguating parallel tool calls.
+    public let toolUseId: String?
 
-    public init(type: String, sessionId: String, requestId: String, state: String, source: String, causedByRequestId: String? = nil, decisionText: String? = nil) {
+    public init(type: String, sessionId: String, requestId: String, state: String, source: String, causedByRequestId: String? = nil, decisionText: String? = nil, toolUseId: String? = nil) {
         self.type = type
         self.sessionId = sessionId
         self.requestId = requestId
@@ -811,6 +813,7 @@ public struct IPCConfirmationStateChanged: Codable, Sendable {
         self.source = source
         self.causedByRequestId = causedByRequestId
         self.decisionText = decisionText
+        self.toolUseId = toolUseId
     }
 }
 
@@ -2348,13 +2351,25 @@ public struct IPCHistoryResponseToolCall: Codable, Sendable {
     public let isError: Bool?
     /// Base64-encoded image data from tool contentBlocks (e.g. browser_screenshot).
     public let imageData: String?
+    /// Unix ms when the tool started executing.
+    public let startedAt: Int?
+    /// Unix ms when the tool completed.
+    public let completedAt: Int?
+    /// Confirmation decision for this tool call: "approved" | "denied" | "timed_out".
+    public let confirmationDecision: String?
+    /// Friendly label for the confirmation (e.g. "Edit File", "Run Command").
+    public let confirmationLabel: String?
 
-    public init(name: String, input: [String: AnyCodable], result: String? = nil, isError: Bool? = nil, imageData: String? = nil) {
+    public init(name: String, input: [String: AnyCodable], result: String? = nil, isError: Bool? = nil, imageData: String? = nil, startedAt: Int? = nil, completedAt: Int? = nil, confirmationDecision: String? = nil, confirmationLabel: String? = nil) {
         self.name = name
         self.input = input
         self.result = result
         self.isError = isError
         self.imageData = imageData
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.confirmationDecision = confirmationDecision
+        self.confirmationLabel = confirmationLabel
     }
 }
 
@@ -4908,12 +4923,15 @@ public struct IPCToolUseStart: Codable, Sendable {
     public let toolName: String
     public let input: [String: AnyCodable]
     public let sessionId: String?
+    /// The tool_use block ID for client-side correlation.
+    public let toolUseId: String?
 
-    public init(type: String, toolName: String, input: [String: AnyCodable], sessionId: String? = nil) {
+    public init(type: String, toolName: String, input: [String: AnyCodable], sessionId: String? = nil, toolUseId: String? = nil) {
         self.type = type
         self.toolName = toolName
         self.input = input
         self.sessionId = sessionId
+        self.toolUseId = toolUseId
     }
 }
 
