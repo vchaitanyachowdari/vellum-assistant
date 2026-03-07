@@ -124,6 +124,7 @@ import { identityRouteDefinitions } from "./routes/identity-routes.js";
 import { integrationRouteDefinitions } from "./routes/integration-routes.js";
 import { slackShareRouteDefinitions } from "./routes/integrations/slack/share.js";
 import { telegramRouteDefinitions } from "./routes/integrations/telegram.js";
+import { twilioRouteDefinitions } from "./routes/integrations/twilio.js";
 import { inviteRouteDefinitions } from "./routes/invite-routes.js";
 import { migrationRouteDefinitions } from "./routes/migration-routes.js";
 import type { PairingHandlerContext } from "./routes/pairing-routes.js";
@@ -136,7 +137,6 @@ import { secretRouteDefinitions } from "./routes/secret-routes.js";
 import { surfaceActionRouteDefinitions } from "./routes/surface-action-routes.js";
 import { surfaceContentRouteDefinitions } from "./routes/surface-content-routes.js";
 import { trustRulesRouteDefinitions } from "./routes/trust-rules-routes.js";
-import { twilioRouteDefinitions } from "./routes/twilio-routes.js";
 import { usageRouteDefinitions } from "./routes/usage-routes.js";
 
 // Re-export for consumers
