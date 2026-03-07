@@ -3,12 +3,14 @@ import { RiskLevel } from "../../permissions/types.js";
 import type { ToolDefinition } from "../../providers/types.js";
 import type { Tool, ToolContext, ToolExecutionResult } from "../types.js";
 import {
+  memoryDeleteDefinition,
   memoryRecallDefinition,
   memorySaveDefinition,
   memorySearchDefinition,
   memoryUpdateDefinition,
 } from "./definitions.js";
 import {
+  handleMemoryDelete,
   handleMemoryRecall,
   handleMemorySave,
   handleMemorySearch,
@@ -84,6 +86,27 @@ class MemoryUpdateTool implements Tool {
   }
 }
 
+// ── memory_delete ────────────────────────────────────────────────────
+
+class MemoryDeleteTool implements Tool {
+  name = "memory_delete";
+  description = memoryDeleteDefinition.description;
+  category = "memory";
+  defaultRiskLevel = RiskLevel.Low;
+
+  getDefinition(): ToolDefinition {
+    return memoryDeleteDefinition;
+  }
+
+  async execute(
+    input: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<ToolExecutionResult> {
+    const config = getConfig();
+    return handleMemoryDelete(input, config, context.memoryScopeId);
+  }
+}
+
 // ── memory_recall ────────────────────────────────────────────────────
 
 class MemoryRecallTool implements Tool {
@@ -110,4 +133,5 @@ class MemoryRecallTool implements Tool {
 export const memorySearchTool = new MemorySearchTool();
 export const memorySaveTool = new MemorySaveTool();
 export const memoryUpdateTool = new MemoryUpdateTool();
+export const memoryDeleteTool = new MemoryDeleteTool();
 export const memoryRecallTool = new MemoryRecallTool();
