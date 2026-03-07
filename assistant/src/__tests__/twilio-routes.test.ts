@@ -797,15 +797,18 @@ describe("twilio webhook routes", () => {
         "Simulated recordCallEvent failure",
       );
 
-      // Lease must still be present because updateCallSession was never reached
+      // Lease must still be present because recordCallEvent threw before
+      // syncActiveCallLeaseFromSession ran (inside beforeLeaseSync).
       const leases = listActiveCallLeases();
       expect(leases.length).toBe(1);
       expect(leases[0].callSessionId).toBe(session.id);
 
-      // Session must not be terminal; recordCallEvent threw before updateCallSession
+      // Session is terminal; DB update runs before beforeLeaseSync, so the
+      // status write succeeded. Claim was released on throw; retry will
+      // record the event and sync the lease.
       const updated = getCallSession(session.id);
       expect(updated).not.toBeNull();
-      expect(updated!.status).toBe("in_progress");
+      expect(updated!.status).toBe("completed");
     });
 
     test("completed callback does not re-fire completion notifier for already terminal call", async () => {
