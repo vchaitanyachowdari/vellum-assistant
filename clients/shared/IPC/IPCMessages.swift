@@ -1279,12 +1279,6 @@ public typealias SessionListResponseMessage = IPCSessionListResponse
 /// Backed by generated `IPCHistoryResponse`.
 public typealias HistoryResponseMessage = IPCHistoryResponse
 
-extension IPCHistoryResponse {
-    /// Backward-compatible alias for the nested message item type.
-    public typealias HistoryMessageItem = IPCHistoryResponseMessage
-    /// Backward-compatible alias for the nested tool call type.
-    public typealias HistoryToolCallItem = IPCHistoryResponseToolCall
-}
 
 /// A single scheduled task item returned from the daemon.
 /// Backed by generated `IPCSchedulesListResponseSchedule`.
@@ -1527,13 +1521,6 @@ public typealias SecretRequestMessage = IPCSecretRequest
 /// Backed by generated `IPCConfirmationRequest`.
 public typealias ConfirmationRequestMessage = IPCConfirmationRequest
 
-// Backward-compatible nested type aliases so call sites like
-// `ConfirmationRequestMessage.ConfirmationAllowlistOption` keep compiling.
-extension IPCConfirmationRequest {
-    public typealias ConfirmationAllowlistOption = IPCConfirmationRequestAllowlistOption
-    public typealias ConfirmationScopeOption = IPCConfirmationRequestScopeOption
-    public typealias ConfirmationDiffInfo = IPCConfirmationRequestDiff
-}
 
 // Equatable conformance for generated types used in SwiftUI previews and tests.
 // Explicit `==` implementations because auto-synthesis requires conformance in the declaring file.
@@ -1679,13 +1666,6 @@ public typealias ToolNamesListResponseMessage = IPCToolNamesListResponse
 /// Backed by generated `IPCOpenBundleResponse`.
 public typealias OpenBundleResponseMessage = IPCOpenBundleResponse
 
-// Backward-compatible nested type aliases so call sites like
-// `OpenBundleResponseMessage.Manifest` keep compiling.
-extension IPCOpenBundleResponse {
-    public typealias Manifest = IPCOpenBundleResponseManifest
-    public typealias ScanResult = IPCOpenBundleResponseScanResult
-    public typealias SignatureResult = IPCOpenBundleResponseSignatureResult
-}
 
 
 // MARK: - Publish / Unpublish Page Messages
