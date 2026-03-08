@@ -78,7 +78,7 @@ Use `modelIntent` (`'latency-optimized'`, `'quality-optimized'`, `'vision-optimi
 
 ## Tooling Direction
 
-Do not add new tool registrations using the `class ____Tool implements Tool` pattern. Prefer skills in `assistant/src/skills/bundled-skills/` that teach the model CLI tools. When touching existing tool-based flows, migrate toward skill-driven CLI usage. Keep the system prompt minimal.
+Do not add new tool registrations using the `class ____Tool implements Tool` pattern. Prefer skills in `assistant/src/config/bundled-skills/` that teach the model CLI tools. When touching existing tool-based flows, migrate toward skill-driven CLI usage. Keep the system prompt minimal.
 
 ## Skill Independence
 
@@ -104,7 +104,7 @@ Memory conflicts must never surface as user-facing clarification prompts. The co
 
 ## Release Update Hygiene
 
-When shipping a release with user/assistant-facing changes, update `assistant/src/prompts/templates/UPDATES.md`. Leave empty for no-op releases. Don't modify `~/.vellum/workspace/UPDATES.md` directly. Checkpoint keys (`updates:active_releases`, `updates:completed_releases`) in `memory_checkpoints` track bulletin lifecycle — don't manipulate directly.
+When shipping a release with user/assistant-facing changes, update `assistant/src/config/templates/UPDATES.md`. Leave empty for no-op releases. Don't modify `~/.vellum/workspace/UPDATES.md` directly. Checkpoint keys (`updates:active_releases`, `updates:completed_releases`) in `memory_checkpoints` track bulletin lifecycle — don't manipulate directly.
 
 ## See Also
 
