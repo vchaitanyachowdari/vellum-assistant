@@ -268,6 +268,9 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
   { endpoint: "workspace/file", scopes: ["settings.read"] },
   { endpoint: "workspace/file/content", scopes: ["settings.read"] },
   { endpoint: "workspace/write", scopes: ["settings.write"] },
+  { endpoint: "workspace/mkdir", scopes: ["settings.write"] },
+  { endpoint: "workspace/rename", scopes: ["settings.write"] },
+  { endpoint: "workspace/delete", scopes: ["settings.write"] },
 
   // Browser relay
   { endpoint: "browser-relay/status", scopes: ["settings.read"] },
