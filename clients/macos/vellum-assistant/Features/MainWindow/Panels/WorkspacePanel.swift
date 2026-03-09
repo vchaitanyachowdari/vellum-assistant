@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import VellumAssistantShared
 #if os(macOS)
 import AVKit
@@ -15,6 +16,8 @@ final class WorkspaceBrowserState {
     var isLoadingTree = false
     var isLoadingFile = false
     var fileLoadTask: Task<Void, Never>?
+    var isDropTargeted: Bool = false
+    var uploadingCount: Int = 0
     var editableContent: String = ""
     var originalContent: String = ""
     var isDirty: Bool = false
@@ -128,6 +131,28 @@ private struct WorkspaceTreeSidebar: View {
                     .padding(.vertical, VSpacing.xs)
                 }
             }
+
+            if state.uploadingCount > 0 {
+                HStack(spacing: VSpacing.xs) {
+                    ProgressView().controlSize(.small)
+                    Text("Uploading \(state.uploadingCount) file\(state.uploadingCount == 1 ? "" : "s")...")
+                        .font(VFont.caption)
+                        .foregroundColor(VColor.textMuted)
+                }
+                .padding(.horizontal, VSpacing.md)
+                .padding(.vertical, VSpacing.xs)
+            }
+        }
+        .overlay {
+            if state.isDropTargeted {
+                RoundedRectangle(cornerRadius: VRadius.md)
+                    .strokeBorder(VColor.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 3]))
+                    .padding(4)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $state.isDropTargeted) { providers in
+            handleDrop(providers: providers, targetDir: "", state: state, daemonClient: daemonClient)
+            return true
         }
         .background(VColor.backgroundSubtle)
         .alert("New File", isPresented: $state.showingNewFileAlert) {
@@ -166,6 +191,29 @@ private struct WorkspaceTreeSidebar: View {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Drop Handler
+
+private func handleDrop(providers: [NSItemProvider], targetDir: String, state: WorkspaceBrowserState, daemonClient: DaemonClient) {
+    for provider in providers {
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            let fileName = url.lastPathComponent
+            let targetPath = targetDir.isEmpty ? fileName : "\(targetDir)/\(fileName)"
+            Task { @MainActor in
+                state.uploadingCount += 1
+                if let fileData = try? Data(contentsOf: url) {
+                    let success = await daemonClient.writeWorkspaceFile(path: targetPath, content: fileData)
+                    if success {
+                        await state.refreshDirectory(targetDir, using: daemonClient)
+                    }
+                }
+                state.uploadingCount -= 1
             }
         }
     }
@@ -219,6 +267,11 @@ private struct WorkspaceTreeRow: View {
                 .background(isSelected ? VColor.navActive : Color.clear)
             }
             .buttonStyle(.plain)
+            .onDrop(of: entry.isDirectory ? [.fileURL] : [], isTargeted: .none) { providers in
+                guard entry.isDirectory else { return false }
+                handleDrop(providers: providers, targetDir: entry.path, state: state, daemonClient: daemonClient)
+                return true
+            }
 
             // Expanded children
             if entry.isDirectory && isExpanded {
