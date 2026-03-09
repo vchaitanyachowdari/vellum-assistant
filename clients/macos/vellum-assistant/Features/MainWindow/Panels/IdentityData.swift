@@ -286,6 +286,28 @@ struct LockfileAssistant {
         }
     }
 
+    /// Resolve the assistant's local runtime HTTP port from the lockfile when
+    /// available, otherwise fall back to the current process environment.
+    func resolvedDaemonPort(environment: [String: String]? = nil) -> Int {
+        if let daemonPort {
+            return daemonPort
+        }
+
+        let rawPort: String?
+        if let environment {
+            rawPort = environment["RUNTIME_HTTP_PORT"]
+        } else {
+            let env = ProcessInfo.processInfo.environment
+            rawPort = env["RUNTIME_HTTP_PORT"]
+                ?? getenv("RUNTIME_HTTP_PORT").map { String(cString: $0) }
+        }
+        return rawPort.flatMap(Int.init) ?? 7821
+    }
+
+    var localRuntimeBaseURL: String {
+        "http://localhost:\(resolvedDaemonPort())"
+    }
+
     static func loadLatest() -> LockfileAssistant? {
         loadAll().first
     }
