@@ -139,6 +139,7 @@ import {
 import { secretRouteDefinitions } from "./routes/secret-routes.js";
 import { sessionManagementRouteDefinitions } from "./routes/session-management-routes.js";
 import { sessionQueryRouteDefinitions } from "./routes/session-query-routes.js";
+import { skillRouteDefinitions } from "./routes/skills-routes.js";
 import { subagentRouteDefinitions } from "./routes/subagents-routes.js";
 import { surfaceActionRouteDefinitions } from "./routes/surface-action-routes.js";
 import { surfaceContentRouteDefinitions } from "./routes/surface-content-routes.js";
@@ -212,6 +213,7 @@ export class RuntimeHttpServer {
   private pairingBroadcast?: (msg: ServerMessage) => void;
   private sendMessageDeps?: SendMessageDeps;
   private findSession?: RuntimeHttpServerOptions["findSession"];
+  private getSkillContext?: RuntimeHttpServerOptions["getSkillContext"];
   private sessionManagementDeps?: RuntimeHttpServerOptions["sessionManagementDeps"];
   private modelSetContext?: RuntimeHttpServerOptions["modelSetContext"];
   private getComputerUseDeps?: RuntimeHttpServerOptions["getComputerUseDeps"];
@@ -231,6 +233,7 @@ export class RuntimeHttpServer {
     this.interfacesDir = options.interfacesDir ?? null;
     this.sendMessageDeps = options.sendMessageDeps;
     this.findSession = options.findSession;
+    this.getSkillContext = options.getSkillContext;
     this.sessionManagementDeps = options.sessionManagementDeps;
     this.modelSetContext = options.modelSetContext;
     this.getComputerUseDeps = options.getComputerUseDeps;
@@ -927,6 +930,11 @@ export class RuntimeHttpServer {
       }),
       ...globalSearchRouteDefinitions(),
       ...approvalRouteDefinitions(),
+      ...(this.getSkillContext
+        ? skillRouteDefinitions({
+            getSkillContext: this.getSkillContext,
+          })
+        : []),
       ...trustRulesRouteDefinitions(),
       ...surfaceActionRouteDefinitions({ findSession: this.findSession }),
       ...surfaceContentRouteDefinitions({ findSession: this.findSession }),

@@ -442,6 +442,7 @@ export async function runDaemon(): Promise<void> {
           })),
       },
       findSession: (sessionId) => server.findSession(sessionId),
+      getSkillContext: () => server.getSkillContext(),
       sessionManagementDeps: {
         switchSession: (sessionId) =>
           switchSession(sessionId, server.getHandlerContext()),
