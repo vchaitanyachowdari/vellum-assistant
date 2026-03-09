@@ -392,7 +392,6 @@ async function sendTwitterConfigRequest(
       throw new Error(`Assistant returned an error: ${text}`);
     }
     const data = (await response.json()) as Record<string, unknown>;
-    // Map the HTTP response shape to the old IPC response shape
     return {
       type: "twitter_integration_config_response",
       success: true,
