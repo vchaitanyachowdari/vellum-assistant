@@ -13,6 +13,7 @@ struct MainWindowView: View {
     /// itself uses `@ObservedObject` and is only instantiated when shown.
     let traceStore: TraceStore
     let usageDashboardStore: UsageDashboardStore
+    let taskQueueViewModel: TaskQueueViewModel
     @ObservedObject var windowState: MainWindowState
     @State private var selectedThreadId: UUID?
     @State var sharing = SharingState()
@@ -56,13 +57,14 @@ struct MainWindowView: View {
     /// Whether the daemon-loading skeleton overlay is currently showing.
     @State var showDaemonLoading: Bool
 
-    init(threadManager: ThreadManager, appListManager: AppListManager, zoomManager: ZoomManager, conversationZoomManager: ConversationZoomManager, traceStore: TraceStore, usageDashboardStore: UsageDashboardStore, daemonClient: DaemonClient, surfaceManager: SurfaceManager, ambientAgent: AmbientAgent, settingsStore: SettingsStore, authManager: AuthManager, windowState: MainWindowState, documentManager: DocumentManager, onMicrophoneToggle: @escaping () -> Void = {}, voiceModeManager: VoiceModeManager, onSendWakeUp: (() -> Void)? = nil) {
+    init(threadManager: ThreadManager, appListManager: AppListManager, zoomManager: ZoomManager, conversationZoomManager: ConversationZoomManager, traceStore: TraceStore, usageDashboardStore: UsageDashboardStore, taskQueueViewModel: TaskQueueViewModel, daemonClient: DaemonClient, surfaceManager: SurfaceManager, ambientAgent: AmbientAgent, settingsStore: SettingsStore, authManager: AuthManager, windowState: MainWindowState, documentManager: DocumentManager, onMicrophoneToggle: @escaping () -> Void = {}, voiceModeManager: VoiceModeManager, onSendWakeUp: (() -> Void)? = nil) {
         self.threadManager = threadManager
         self.appListManager = appListManager
         self.zoomManager = zoomManager
         self.conversationZoomManager = conversationZoomManager
         self.traceStore = traceStore
         self.usageDashboardStore = usageDashboardStore
+        self.taskQueueViewModel = taskQueueViewModel
         self.daemonClient = daemonClient
         self.surfaceManager = surfaceManager
         self.ambientAgent = ambientAgent
@@ -679,6 +681,12 @@ struct MainWindowView: View {
             }
             threadManager.activeViewModel?.activeSurfaceId = windowState.isDynamicExpanded ? windowState.activeDynamicSurface?.surfaceId : nil
             threadManager.activeViewModel?.isChatDockedToSide = windowState.isDynamicExpanded && windowState.isChatDockOpen
+            // Consume any buffered deep-link message now that a thread is active.
+            // Mirrors the iOS pattern (ChatTabView.onAppear, ThreadListView.onAppear)
+            // where consumeDeepLinkIfNeeded() is called when the view model becomes
+            // visible. Without this, deep links arriving before the window/thread is
+            // fully initialized are silently dropped on macOS.
+            threadManager.activeViewModel?.consumeDeepLinkIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openDynamicWorkspace)) { notification in
             if let msg = notification.userInfo?["surfaceMessage"] as? UiSurfaceShowMessage {
