@@ -65,6 +65,7 @@ import {
   migrateNormalizePhoneIdentities,
   migrateNotificationDeliveryThreadDecision,
   migrateReminderRoutingIntent,
+  migrateRemindersToSchedules,
   migrateRenameGuardianVerificationValues,
   migrateRenameVerificationSessionIdColumn,
   migrateRenameVerificationTable,
@@ -331,6 +332,9 @@ export function initializeDb(): void {
 
   // 50. Extend cron_jobs table with one-shot and routing support
   migrateScheduleOneShotRouting(database);
+
+  // 51. Migrate existing reminders into cron_jobs as one-shot schedules
+  migrateRemindersToSchedules(database);
 
   validateMigrationState(database);
 
