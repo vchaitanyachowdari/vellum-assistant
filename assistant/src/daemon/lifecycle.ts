@@ -298,8 +298,8 @@ export async function runDaemon(): Promise<void> {
             : undefined,
         );
       },
-      (schedule) => {
-        void emitNotificationSignal({
+      async (schedule) => {
+        await emitNotificationSignal({
           sourceEventName: "schedule.notify",
           sourceChannel: "scheduler",
           sourceSessionId: schedule.id,
