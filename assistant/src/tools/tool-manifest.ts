@@ -43,7 +43,6 @@ import "./skills/load.js";
 import "./skills/scaffold-managed.js";
 import "./swarm/delegate.js";
 import "./system/request-permission.js";
-import "./system/version.js";
 import "./terminal/shell.js";
 
 // loadEagerModules is a no-op now that all eager registrations happen via
@@ -71,7 +70,6 @@ export const eagerModuleToolNames: string[] = [
   "asset_materialize",
   "swarm_delegate",
   "view_image",
-  "version",
 ];
 
 // ── Explicit tool instances ─────────────────────────────────────────
