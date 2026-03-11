@@ -19,10 +19,15 @@ interface PendingRequest {
 export class HostBashProxy {
   private pending = new Map<string, PendingRequest>();
   private sendToClient: (msg: ServerMessage) => void;
+  private onInternalResolve?: (requestId: string) => void;
   private clientConnected = false;
 
-  constructor(sendToClient: (msg: ServerMessage) => void) {
+  constructor(
+    sendToClient: (msg: ServerMessage) => void,
+    onInternalResolve?: (requestId: string) => void,
+  ) {
     this.sendToClient = sendToClient;
+    this.onInternalResolve = onInternalResolve;
   }
 
   updateSender(
@@ -52,6 +57,7 @@ export class HostBashProxy {
       const timeoutSec = input.timeout_seconds ?? shellMaxTimeoutSec;
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
+        this.onInternalResolve?.(requestId);
         log.warn(
           { requestId, command: input.command },
           "Host bash proxy request timed out",
@@ -74,6 +80,7 @@ export class HostBashProxy {
           if (this.pending.has(requestId)) {
             clearTimeout(timer);
             this.pending.delete(requestId);
+            this.onInternalResolve?.(requestId);
             resolve(formatShellOutput("", "Aborted", null, false, 0));
           }
         };
@@ -126,8 +133,9 @@ export class HostBashProxy {
   }
 
   dispose(): void {
-    for (const [, entry] of this.pending) {
+    for (const [requestId, entry] of this.pending) {
       clearTimeout(entry.timer);
+      this.onInternalResolve?.(requestId);
       entry.reject(
         new AssistantError(
           "Host bash proxy disposed",

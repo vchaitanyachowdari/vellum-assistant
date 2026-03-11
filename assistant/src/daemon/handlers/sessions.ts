@@ -34,6 +34,7 @@ import * as externalConversationStore from "../../memory/external-conversation-s
 import * as pendingInteractions from "../../runtime/pending-interactions.js";
 import { getSubagentManager } from "../../subagent/index.js";
 import { truncate } from "../../util/truncate.js";
+import { HostBashProxy } from "../host-bash-proxy.js";
 import type {
   CancelRequest,
   ConfirmationResponse,
@@ -406,6 +407,15 @@ export async function handleSessionCreate(
       userMessageInterface: transportInterface,
       assistantMessageInterface: transportInterface,
     });
+    // Only create the host bash proxy for desktop client interfaces that can
+    // execute commands on the user's machine.
+    if (transportInterface === "macos" || transportInterface === "ios") {
+      session.setHostBashProxy(
+        new HostBashProxy(sendEvent, (requestId) => {
+          pendingInteractions.resolve(requestId);
+        }),
+      );
+    }
     session
       .processMessage(msg.initialMessage, [], sendEvent, requestId)
       .catch((err) => {

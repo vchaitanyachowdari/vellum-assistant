@@ -270,7 +270,6 @@ export class Session {
       }
     });
     this.secretPrompter = new SecretPrompter(sendToClient);
-    this.hostBashProxy = new HostBashProxy(sendToClient);
 
     // Register watch/call notifiers (reads ctx properties lazily)
     registerSessionNotifiers(conversationId, this);
@@ -583,6 +582,10 @@ export class Session {
 
   hasPendingHostBash(requestId: string): boolean {
     return this.hostBashProxy?.hasPendingRequest(requestId) ?? false;
+  }
+
+  setHostBashProxy(proxy: HostBashProxy | undefined): void {
+    this.hostBashProxy = proxy;
   }
 
   // ── Server-authoritative state signals ─────────────────────────────
