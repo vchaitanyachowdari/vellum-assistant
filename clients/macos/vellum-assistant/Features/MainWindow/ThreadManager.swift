@@ -1068,9 +1068,13 @@ final class ThreadManager: ObservableObject, ThreadRestorerDelegate {
         viewModel.onToolCallsComplete = { [weak self, weak viewModel] toolCalls in
             guard let self, let service = self.activityNotificationService else { return }
             let sessionId = viewModel?.sessionId ?? ""
+            // Pass empty summary so ActivityNotificationService derives the title
+            // from the tool calls themselves (friendly name + target for single tool,
+            // count-based for multiple tools)
+            let summary = ""
             Task { @MainActor in
                 await service.notifySessionComplete(
-                    summary: "Tool execution completed",
+                    summary: summary,
                     steps: toolCalls.count,
                     toolCalls: toolCalls,
                     sessionId: sessionId
