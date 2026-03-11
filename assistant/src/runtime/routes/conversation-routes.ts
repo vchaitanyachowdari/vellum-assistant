@@ -14,15 +14,31 @@ import {
   parseChannelId,
   parseInterfaceId,
 } from "../../channels/types.js";
+import { getConfig } from "../../config/loader.js";
 import { renderHistoryContent } from "../../daemon/handlers/shared.js";
 import type { ServerMessage } from "../../daemon/message-protocol.js";
+import {
+  buildModelInfoEvent,
+  isModelSlashCommand,
+} from "../../daemon/session-process.js";
+import {
+  isProviderShortcut,
+  resolveSlash,
+  type SlashContext,
+} from "../../daemon/session-slash.js";
 import * as attachmentsStore from "../../memory/attachments-store.js";
 import {
   createCanonicalGuardianRequest,
   generateCanonicalRequestCode,
   listPendingRequestsByConversationScope,
 } from "../../memory/canonical-guardian-store.js";
-import { addMessage, getMessages } from "../../memory/conversation-crud.js";
+import {
+  addMessage,
+  getMessages,
+  provenanceFromTrustContext,
+  setConversationOriginChannelIfUnset,
+  setConversationOriginInterfaceIfUnset,
+} from "../../memory/conversation-crud.js";
 import {
   getConversationByKey,
   getOrCreateConversation,
@@ -699,16 +715,107 @@ export async function handleSendMessage(
     userMessageInterface: sourceInterface,
     assistantMessageInterface: sourceInterface,
   });
-  const requestId = crypto.randomUUID();
-  const messageId = await session.persistUserMessage(
-    content ?? "",
-    attachments,
-    requestId,
-  );
+
+  await session.ensureActorScopedHistory();
+
+  // Resolve slash commands before persisting or running the agent loop.
+  const rawContent = content ?? "";
+  const config = getConfig();
+  const slashContext: SlashContext = {
+    messageCount: session.getMessages().length,
+    inputTokens: session.usageStats.inputTokens,
+    outputTokens: session.usageStats.outputTokens,
+    maxInputTokens: config.contextWindow.maxInputTokens,
+    model: config.model,
+    provider: config.provider,
+    estimatedCost: session.usageStats.estimatedCost,
+  };
+  const slashResult = resolveSlash(rawContent, slashContext);
+
+  if (slashResult.kind === "unknown") {
+    session.processing = true;
+    try {
+      const provenance = provenanceFromTrustContext(session.trustContext);
+      const channelMeta = {
+        ...provenance,
+        userMessageChannel: sourceChannel,
+        assistantMessageChannel: sourceChannel,
+        userMessageInterface: sourceInterface,
+        assistantMessageInterface: sourceInterface,
+      };
+      const userMsg = createUserMessage(rawContent, attachments);
+      const persisted = await addMessage(
+        mapping.conversationId,
+        "user",
+        JSON.stringify(userMsg.content),
+        channelMeta,
+      );
+      session.getMessages().push(userMsg);
+
+      const assistantMsg = createAssistantMessage(slashResult.message);
+      await addMessage(
+        mapping.conversationId,
+        "assistant",
+        JSON.stringify(assistantMsg.content),
+        channelMeta,
+      );
+      session.getMessages().push(assistantMsg);
+
+      setConversationOriginChannelIfUnset(
+        mapping.conversationId,
+        sourceChannel,
+      );
+      setConversationOriginInterfaceIfUnset(
+        mapping.conversationId,
+        sourceInterface,
+      );
+
+      // Emit fresh model info before the text delta so the client has
+      // up-to-date configuredProviders when rendering /model, /models,
+      // and provider shortcut commands (/gpt4, /opus, etc.).
+      if (isModelSlashCommand(rawContent) || isProviderShortcut(rawContent)) {
+        onEvent(buildModelInfoEvent());
+      }
+
+      onEvent({ type: "assistant_text_delta", text: slashResult.message });
+      onEvent({
+        type: "message_complete",
+        sessionId: mapping.conversationId,
+      });
+
+      return Response.json(
+        { accepted: true, messageId: persisted.id },
+        { status: 202 },
+      );
+    } finally {
+      session.processing = false;
+      session.drainQueue().catch(() => {});
+    }
+  }
+
+  const resolvedContent = slashResult.content;
+  if (slashResult.kind === "rewritten") {
+    session.setPreactivatedSkillIds([slashResult.skillId]);
+  }
+
+  let messageId: string;
+  try {
+    const requestId = crypto.randomUUID();
+    messageId = await session.persistUserMessage(
+      resolvedContent,
+      attachments,
+      requestId,
+    );
+  } catch (err) {
+    // Reset preactivated skill IDs so a stale activation doesn't leak
+    // into the next message if persistence fails.
+    session.setPreactivatedSkillIds(undefined);
+    throw err;
+  }
 
   // Fire-and-forget the agent loop; events flow to the hub via onEvent.
   session
-    .runAgentLoop(content ?? "", messageId, onEvent, {
+    .runAgentLoop(resolvedContent, messageId, onEvent, {
       isInteractive: isInteractiveInterface,
       isUserMessage: true,
     })
