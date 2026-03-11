@@ -397,10 +397,13 @@ export async function embedWithBackend(
   const { provider: primaryProvider, model: primaryModel } = selection.backend;
 
   // ── Build fallback backends list (needed for embed fallback) ──
+  // In auto mode, build a fallback chain from all configured backends
+  // (excluding the primary). This lets multimodal inputs fall through
+  // to Gemini even when the primary is local or openai.
   const fallbacks: EmbeddingBackend[] =
     config.memory.embeddings.provider === "auto" &&
-    selection.backend.provider === "local"
-      ? selectFallbackBackends(config, "local")
+    selection.backend.provider !== "gemini"
+      ? selectFallbackBackends(config, selection.backend.provider)
       : [];
 
   // ── Compute provider-specific vector cache extras ───────────────
@@ -581,14 +584,13 @@ function selectFallbackBackends(
 }
 
 /**
- * Returns true when multimodal inputs (images, audio, video) can be embedded
- * with the current configuration. Today only Gemini supports multimodal.
+ * Returns true when the embedding pipeline can handle multimodal inputs
+ * (images, audio, video). Today only Gemini supports multimodal.
  *
- * In `auto` mode the primary backend is usually `local`, but `embedWithBackend`
- * builds a fallback chain that includes Gemini when available. We check the
- * primary backend *and* the fallback chain so multimodal jobs are enqueued
- * whenever Gemini is reachable — matching what `embedWithBackend` would do at
- * embed time.
+ * In auto mode, the primary backend is usually local or OpenAI, but
+ * embedWithBackend builds a fallback chain that includes Gemini when
+ * available. We check both the primary and fallback backends so that
+ * multimodal jobs are still enqueued when Gemini is reachable via fallback.
  */
 export function selectedBackendSupportsMultimodal(
   config: AssistantConfig,
@@ -597,16 +599,11 @@ export function selectedBackendSupportsMultimodal(
   if (!backend) return false;
   if (backend.provider === "gemini") return true;
 
-  // In auto mode with a local primary, embedWithBackend builds fallbacks
-  // that may include Gemini. Check whether any fallback supports multimodal.
-  if (
-    config.memory.embeddings.provider === "auto" &&
-    backend.provider === "local"
-  ) {
-    const fallbacks = selectFallbackBackends(config, "local");
+  // In auto mode, check if Gemini is available as a fallback backend.
+  if (config.memory.embeddings.provider === "auto") {
+    const fallbacks = selectFallbackBackends(config, backend.provider);
     return fallbacks.some((fb) => fb.provider === "gemini");
   }
-
   return false;
 }
 
