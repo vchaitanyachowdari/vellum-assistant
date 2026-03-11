@@ -72,6 +72,7 @@ function makeStreamingSession(events: ServerMessage[]): Session {
     setTurnChannelContext: () => {},
     setVoiceCallControlPrompt: () => {},
     updateClient: () => {},
+    ensureActorScopedHistory: async () => {},
     runAgentLoop: async (
       _content: string,
       _messageId: string,
@@ -212,6 +213,7 @@ describe("voice-session-bridge", () => {
       setTurnChannelContext: () => {},
       setVoiceCallControlPrompt: () => {},
       updateClient: () => {},
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         await new Promise((r) => setTimeout(r, 200));
       },
@@ -264,6 +266,7 @@ describe("voice-session-bridge", () => {
       setTurnChannelContext: () => {},
       setVoiceCallControlPrompt: () => {},
       updateClient: () => {},
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         await new Promise((r) => setTimeout(r, 200));
       },
@@ -642,6 +645,7 @@ describe("voice-session-bridge", () => {
       updateClient: (handler: (msg: ServerMessage) => void) => {
         clientHandler = handler;
       },
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         // Simulate the prompter emitting a confirmation_request via the
         // updateClient callback (this is how the real prompter works).
@@ -727,6 +731,7 @@ describe("voice-session-bridge", () => {
       updateClient: (handler: (msg: ServerMessage) => void) => {
         clientHandler = handler;
       },
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         clientHandler({
           type: "confirmation_request",
@@ -795,6 +800,7 @@ describe("voice-session-bridge", () => {
       updateClient: (handler: (msg: ServerMessage) => void) => {
         clientHandler = handler;
       },
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         clientHandler({
           type: "confirmation_request",
@@ -859,6 +865,7 @@ describe("voice-session-bridge", () => {
       updateClient: (handler: (msg: ServerMessage) => void) => {
         clientHandler = handler;
       },
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         clientHandler({
           type: "confirmation_request",
@@ -932,6 +939,7 @@ describe("voice-session-bridge", () => {
       updateClient: (handler: (msg: ServerMessage) => void) => {
         clientHandler = handler;
       },
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         clientHandler({
           type: "secret_request",
@@ -1005,6 +1013,7 @@ describe("voice-session-bridge", () => {
       setTurnChannelContext: () => {},
       setVoiceCallControlPrompt: () => {},
       updateClient: () => {},
+      ensureActorScopedHistory: async () => {},
       runAgentLoop: async () => {
         await new Promise((r) => setTimeout(r, 200));
       },
