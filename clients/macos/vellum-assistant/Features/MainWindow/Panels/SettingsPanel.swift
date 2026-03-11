@@ -2,61 +2,32 @@ import SwiftUI
 import VellumAssistantShared
 
 enum SettingsTab: String {
-    case account = "Account"
+    case general = "General"
     case channels = "Channels"
     case modelsAndServices = "Models & Services"
     case voice = "Voice"
-    case permissions = "Permissions"
-    case automation = "Automation"
-    case appearance = "Appearance"
-    case privacy = "Privacy"
+    case permissionsAndPrivacy = "Permissions & Privacy"
     case contacts = "Contacts"
-    case advanced = "Advanced"
-    case sentryTesting = "Sentry Testing"
+    case developer = "Developer"
 
-    /// Tabs shown in the sidebar. Contacts requires a feature flag; Advanced is only visible in dev mode.
-    static func visibleTabs(isDevMode: Bool, contactsEnabled: Bool = false, sentryTestingEnabled: Bool = false) -> [SettingsTab] {
+    /// Primary tabs shown in the main nav list (excludes feature-flagged bottom tabs).
+    static func primaryTabs(contactsEnabled: Bool = false) -> [SettingsTab] {
         var tabs: [SettingsTab] = [
-            .account, .channels, .modelsAndServices, .voice,
-            .automation, .appearance, .permissions, .privacy
+            .general, .channels, .modelsAndServices, .voice,
+            .permissionsAndPrivacy
         ]
         if contactsEnabled {
             tabs.append(.contacts)
         }
-        if isDevMode {
-            tabs.append(.advanced)
-        }
-        if sentryTestingEnabled {
-            tabs.append(.sentryTesting)
-        }
         return tabs
     }
 
-    /// Maps legacy tab names (from HTTP or saved state) to current tabs.
-    /// The `isDevMode` parameter gates dev-only tabs so external callers
-    /// (e.g. daemon HTTP) cannot navigate to them when dev mode is off.
-    static func fromLegacyRawValue(_ value: String, isDevMode: Bool = false, contactsEnabled: Bool = false, sentryTestingEnabled: Bool = false) -> SettingsTab? {
-        let tab: SettingsTab?
-        // Try current values first
-        if let direct = SettingsTab(rawValue: value) {
-            tab = direct
-        } else {
-            // Map legacy names
-            switch value {
-            case "Connect": tab = .account
-            case "Integrations": tab = .modelsAndServices
-            case "Trust": tab = .permissions
-            case "Schedules": tab = .automation
-            case "Heartbeat": tab = .automation
-            case "Advanced": tab = .advanced
-            default: tab = nil
-            }
-        }
+    /// Resolves a tab name string to a SettingsTab. Only accepts current canonical names.
+    static func fromRawValue(_ value: String, contactsEnabled: Bool = false, developerEnabled: Bool = false) -> SettingsTab? {
+        guard let tab = SettingsTab(rawValue: value) else { return nil }
         // Block feature-flagged tabs when disabled
         if tab == .contacts && !contactsEnabled { return nil }
-        // Block dev-only tabs when dev mode is disabled
-        if tab == .advanced && !isDevMode { return nil }
-        if tab == .sentryTesting && !sentryTestingEnabled { return nil }
+        if tab == .developer && !developerEnabled { return nil }
         return tab
     }
 }
@@ -80,10 +51,6 @@ struct SettingsPanel: View {
     @State private var braveSetupExpanded = false
     @State private var imageGenSetupExpanded = false
     @State private var showingTrustRules = false
-    @State private var showingReminders = false
-    @State private var showingScheduledTasks = false
-    @State private var showingHeartbeatConfig = false
-    @State private var showingHeartbeatRuns = false
     @State private var accessibilityGranted: Bool = false
     @State private var screenRecordingGranted: Bool = false
     @State private var microphoneGranted: Bool = false
@@ -91,11 +58,11 @@ struct SettingsPanel: View {
     @State private var notificationsGranted: Bool = false
     @State private var notificationBadgesGranted: Bool = false
     @State private var permissionCheckTask: Task<Void, Never>?
-    @State private var selectedTab: SettingsTab = .account
+    @State private var selectedTab: SettingsTab = .general
     @State private var isContactsEnabled: Bool = false
-    @State private var isSentryTestingEnabled: Bool = false
+    @State private var isDeveloperEnabled: Bool = false
     private static let contactsFeatureFlagKey = "feature_flags.contacts.enabled"
-    private static let sentryTestingFeatureFlagKey = "sentry_testing_enabled"
+    private static let developerFeatureFlagKey = "feature_flags.settings-developer-nav.enabled"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,8 +121,7 @@ struct SettingsPanel: View {
         .task {
             // Refresh permission status and feature flags when the view appears
             await refreshPermissionStatus()
-            await loadContactsFeatureFlag()
-            isSentryTestingEnabled = MacOSClientFeatureFlagManager.shared.isEnabled(Self.sentryTestingFeatureFlagKey)
+            await loadFeatureFlags()
         }
         .onAppear {
             store.refreshAPIKeyState()
@@ -163,7 +129,7 @@ struct SettingsPanel: View {
             store.refreshTwilioStatus()
             store.refreshIngressConfig()
             if let pending = store.pendingSettingsTab {
-                if SettingsTab.visibleTabs(isDevMode: store.isDevMode, contactsEnabled: isContactsEnabled, sentryTestingEnabled: isSentryTestingEnabled).contains(pending) {
+                if allVisibleTabs.contains(pending) {
                     selectedTab = pending
                 }
                 store.pendingSettingsTab = nil
@@ -171,7 +137,7 @@ struct SettingsPanel: View {
         }
         .onChange(of: store.pendingSettingsTab) { _, newTab in
             if let tab = newTab {
-                if SettingsTab.visibleTabs(isDevMode: store.isDevMode, contactsEnabled: isContactsEnabled, sentryTestingEnabled: isSentryTestingEnabled).contains(tab) {
+                if allVisibleTabs.contains(tab) {
                     selectedTab = tab
                 }
                 store.pendingSettingsTab = nil
@@ -182,7 +148,7 @@ struct SettingsPanel: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSettingsTab)) { notification in
             if let tab = notification.object as? SettingsTab {
-                guard SettingsTab.visibleTabs(isDevMode: store.isDevMode, contactsEnabled: isContactsEnabled, sentryTestingEnabled: isSentryTestingEnabled).contains(tab) else { return }
+                guard allVisibleTabs.contains(tab) else { return }
                 selectedTab = tab
             }
         }
@@ -192,12 +158,12 @@ struct SettingsPanel: View {
                 if key == Self.contactsFeatureFlagKey {
                     isContactsEnabled = enabled
                     if !enabled && selectedTab == .contacts {
-                        selectedTab = .account
+                        selectedTab = .general
                     }
-                } else if key == Self.sentryTestingFeatureFlagKey {
-                    isSentryTestingEnabled = enabled
-                    if !enabled && selectedTab == .sentryTesting {
-                        selectedTab = .account
+                } else if key == Self.developerFeatureFlagKey {
+                    isDeveloperEnabled = enabled
+                    if !enabled && selectedTab == .developer {
+                        selectedTab = .general
                     }
                 }
             }
@@ -217,38 +183,35 @@ struct SettingsPanel: View {
                 TrustRulesView(daemonClient: daemonClient)
             }
         }
-        .sheet(isPresented: $showingReminders) {
-            if let daemonClient {
-                RemindersView(daemonClient: daemonClient)
-            }
-        }
-        .sheet(isPresented: $showingScheduledTasks) {
-            if let daemonClient {
-                ScheduledTasksView(daemonClient: daemonClient)
-            }
-        }
-        .sheet(isPresented: $showingHeartbeatConfig) {
-            if let daemonClient {
-                HeartbeatConfigView(daemonClient: daemonClient)
-            }
-        }
-        .sheet(isPresented: $showingHeartbeatRuns) {
-            if let daemonClient {
-                HeartbeatRunsView(daemonClient: daemonClient)
-            }
-        }
     }
 
     // MARK: - Nav Sidebar
 
+    /// All currently visible tabs (primary + gated bottom tabs).
+    private var allVisibleTabs: [SettingsTab] {
+        var tabs = SettingsTab.primaryTabs(contactsEnabled: isContactsEnabled)
+        if isDeveloperEnabled {
+            tabs.append(.developer)
+        }
+        return tabs
+    }
+
     private var settingsNav: some View {
         VStack(alignment: .leading, spacing: VSpacing.xs) {
-            ForEach(SettingsTab.visibleTabs(isDevMode: store.isDevMode, contactsEnabled: isContactsEnabled, sentryTestingEnabled: isSentryTestingEnabled), id: \.self) { tab in
+            ForEach(SettingsTab.primaryTabs(contactsEnabled: isContactsEnabled), id: \.self) { tab in
                 SettingsNavRow(tab: tab, isSelected: selectedTab == tab) {
                     selectedTab = tab
                 }
             }
             Spacer()
+            if isDeveloperEnabled {
+                Divider()
+                    .padding(.trailing, VSpacing.md)
+                SettingsNavRow(tab: .developer, isSelected: selectedTab == .developer) {
+                    selectedTab = .developer
+                }
+                .padding(.bottom, VSpacing.sm)
+            }
         }
         .padding(.top, VSpacing.lg)
         .padding(.trailing, VSpacing.sm)
@@ -259,32 +222,20 @@ struct SettingsPanel: View {
     @ViewBuilder
     private var selectedTabContent: some View {
         switch selectedTab {
-        case .account:
-            SettingsAccountTab(store: store, daemonClient: daemonClient, authManager: authManager, onClose: onClose)
+        case .general:
+            SettingsGeneralTab(store: store, daemonClient: daemonClient, authManager: authManager, onClose: onClose)
         case .channels:
             SettingsChannelsTab(store: store, daemonClient: daemonClient)
         case .modelsAndServices:
             integrationsContent
         case .voice:
             VoiceSettingsView(store: store)
-        case .permissions:
-            permissionsContent
-        case .automation:
-            SettingsAutomationTab(daemonClient: daemonClient, showingReminders: $showingReminders, showingScheduledTasks: $showingScheduledTasks, showingHeartbeatConfig: $showingHeartbeatConfig, showingHeartbeatRuns: $showingHeartbeatRuns)
-        case .appearance:
-            SettingsAppearanceTab(store: store)
-        case .privacy:
-            SettingsPrivacyTab(daemonClient: daemonClient, store: store)
+        case .permissionsAndPrivacy:
+            permissionsAndPrivacyContent
         case .contacts:
             ContactsContainerView(daemonClient: daemonClient, store: store)
-        case .advanced:
-            if store.isDevMode {
-                SettingsAdvancedDevTab(store: store, daemonClient: daemonClient)
-            } else {
-                SettingsAccountTab(store: store, daemonClient: daemonClient, authManager: authManager, onClose: onClose)
-            }
-        case .sentryTesting:
-            SettingsDebugTab()
+        case .developer:
+            SettingsDeveloperTab(store: store, daemonClient: daemonClient, authManager: authManager, onClose: onClose)
         }
     }
 
@@ -593,9 +544,9 @@ struct SettingsPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Permissions Tab
+    // MARK: - Permissions & Privacy Tab
 
-    private var permissionsContent: some View {
+    private var permissionsAndPrivacyContent: some View {
         VStack(alignment: .leading, spacing: VSpacing.lg) {
             // PERMISSIONS section (OS permissions)
             VStack(alignment: .leading, spacing: VSpacing.md) {
@@ -689,28 +640,8 @@ struct SettingsPanel: View {
                 .vCard(background: VColor.surfaceSubtle)
             }
 
-            // COMPUTER USAGE section (moved from Advanced)
-            VStack(alignment: .leading, spacing: VSpacing.md) {
-                Text("Computer Usage")
-                    .font(VFont.sectionTitle)
-                    .foregroundColor(VColor.textPrimary)
-
-                HStack {
-                    Text("Max Steps per Session")
-                        .font(VFont.body)
-                        .foregroundColor(VColor.textSecondary)
-                    VInfoTooltip("Maximum number of tool-use steps the assistant can take in a single session")
-                    Spacer()
-                    Text("\(Int(store.maxSteps))")
-                        .font(VFont.mono)
-                        .foregroundColor(VColor.textSecondary)
-                }
-
-                VSlider(value: $store.maxSteps, range: 1...100, step: 10, showTickMarks: true)
-            }
-            .padding(VSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .vCard(background: VColor.surfaceSubtle)
+            // PRIVACY section (merged from SettingsPrivacyTab)
+            SettingsPrivacyTab(daemonClient: daemonClient, store: store)
 
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -752,24 +683,37 @@ struct SettingsPanel: View {
         notificationBadgesGranted = await PermissionManager.notificationBadgeStatus() == .granted
     }
 
-    // MARK: - Contacts Feature Flag
+    // MARK: - Feature Flag Loading
 
-    private func loadContactsFeatureFlag() async {
+    private func loadFeatureFlags() async {
         if let daemonClient {
             do {
                 let flags = try await daemonClient.getFeatureFlags()
-                if let flag = flags.first(where: { $0.key == Self.contactsFeatureFlagKey }) {
-                    isContactsEnabled = flag.enabled
-                    return
+                if let contactsFlag = flags.first(where: { $0.key == Self.contactsFeatureFlagKey }) {
+                    isContactsEnabled = contactsFlag.enabled
                 }
+                if let developerFlag = flags.first(where: { $0.key == Self.developerFeatureFlagKey }) {
+                    isDeveloperEnabled = developerFlag.enabled
+                }
+                return
             } catch {
                 // Fall through to local config fallback.
             }
         }
+        // Build resolved values: start with bundled registry defaults, then overlay persisted overrides
+        let registry = loadFeatureFlagRegistry()
+        let registryDefaults = Dictionary(
+            uniqueKeysWithValues: (registry?.assistantScopeFlags() ?? []).map { ($0.key, $0.defaultEnabled) }
+        )
         let config = WorkspaceConfigIO.read()
-        if let canonicalFlags = config["assistantFeatureFlagValues"] as? [String: Bool],
-           let enabled = canonicalFlags[Self.contactsFeatureFlagKey] {
-            isContactsEnabled = enabled
+        let persistedFlags = (config["assistantFeatureFlagValues"] as? [String: Bool]) ?? [:]
+        let resolved = registryDefaults.merging(persistedFlags) { _, persisted in persisted }
+
+        if let contactsEnabled = resolved[Self.contactsFeatureFlagKey] {
+            isContactsEnabled = contactsEnabled
+        }
+        if let developerEnabled = resolved[Self.developerFeatureFlagKey] {
+            isDeveloperEnabled = developerEnabled
         }
     }
 
