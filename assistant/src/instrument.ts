@@ -1,6 +1,6 @@
-import * as Sentry from "@sentry/node";
-
 import { arch, platform, release } from "node:os";
+
+import * as Sentry from "@sentry/node";
 
 import { getSentryDsn } from "./config/env.js";
 import { APP_VERSION, COMMIT_SHA } from "./version.js";
@@ -54,7 +54,8 @@ export function initSentry(): void {
         os_release: release(),
         os_arch: arch(),
         runtime: "bun",
-        runtime_version: typeof Bun !== "undefined" ? Bun.version : process.version,
+        runtime_version:
+          typeof Bun !== "undefined" ? Bun.version : process.version,
       },
     },
     beforeSend(event) {
