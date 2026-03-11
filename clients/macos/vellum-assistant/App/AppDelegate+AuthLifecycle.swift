@@ -73,7 +73,7 @@ extension AppDelegate {
             window.center()
         }
 
-        NSApp.setActivationPolicy(.regular)
+        NSApp.activateAsDockAppIfNeeded()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 

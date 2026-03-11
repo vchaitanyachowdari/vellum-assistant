@@ -7,6 +7,20 @@ import os
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.vellum.vellum-assistant", category: "AppDelegate")
 
+// MARK: - Activation Policy
+
+extension NSApplication {
+    /// Transitions to `.regular` activation policy only when the app is not
+    /// already in that mode.  Redundant `setActivationPolicy(.regular)` calls
+    /// can cause macOS to re-evaluate the dock tile, which in rare timing
+    /// windows produces a duplicate dock entry.
+    func activateAsDockAppIfNeeded() {
+        if activationPolicy() != .regular {
+            setActivationPolicy(.regular)
+        }
+    }
+}
+
 // MARK: - Surface Wiring
 
 extension AppDelegate {
@@ -215,28 +229,31 @@ extension AppDelegate {
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if onboardingWindow != nil { return true }
+        if let onboarding = onboardingWindow {
+            onboarding.bringToFront()
+            return false
+        }
 
         if authWindow != nil {
             authWindow?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            return true
+            return false
         }
 
         // Don't create the main window while bootstrap is in progress —
         // the bootstrap task will create it with the wake-up greeting
         // once the daemon is connected.
-        if isBootstrapping { return true }
+        if isBootstrapping { return false }
 
         // No assistant hatched yet — re-show onboarding so the user
         // can complete setup instead of landing on a broken main window.
         if !lockfileHasAssistants() && mainWindow == nil {
             showOnboarding()
-            return true
+            return false
         }
 
         showMainWindow()
-        return true
+        return false
     }
 }
 
