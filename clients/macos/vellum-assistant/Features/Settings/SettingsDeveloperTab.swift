@@ -68,6 +68,9 @@ struct SettingsDeveloperTab: View {
                 restartAssistantSection
                 AssistantBackupsSection(assistant: assistant, store: store)
                     .withRestoreConfirmation
+                if assistant.isManaged {
+                    sshTerminalSection
+                }
             }
             // Gateway Settings
             GatewaySettingsCard(
@@ -571,6 +574,37 @@ struct SettingsDeveloperTab: View {
                 restart: true
             )
         } catch {}
+    }
+
+    // MARK: - SSH Terminal
+
+    private var sshTerminalSection: some View {
+        SettingsCard(
+            title: "SSH Terminal",
+            subtitle: "Open a terminal session to the assistant's host machine."
+        ) {
+            VButton(label: "Open Terminal", style: .secondary, size: .medium) {
+                openTerminalWindow()
+            }
+        }
+    }
+
+    private static let terminalWindow = SSHTerminalWindow()
+
+    private func openTerminalWindow() {
+        guard let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }),
+              assistant.isManaged else { return }
+        guard let token = SessionTokenManager.getToken(), !token.isEmpty else { return }
+
+        let baseURL = assistant.runtimeUrl ?? AuthService.shared.baseURL
+        let orgId = UserDefaults.standard.string(forKey: "connectedOrganizationId")
+
+        Self.terminalWindow.open(
+            assistant: assistant,
+            baseURL: baseURL,
+            token: token,
+            organizationId: orgId
+        )
     }
 
     // MARK: - Retire Assistant
