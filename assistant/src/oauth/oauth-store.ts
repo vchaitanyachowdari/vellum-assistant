@@ -159,6 +159,7 @@ export function registerProvider(params: {
     extraParams: params.extraParams ? JSON.stringify(params.extraParams) : null,
     callbackTransport: params.callbackTransport ?? null,
     loopbackPort: params.loopbackPort ?? null,
+    pingUrl: null,
     createdAt: now,
     updatedAt: now,
   };
