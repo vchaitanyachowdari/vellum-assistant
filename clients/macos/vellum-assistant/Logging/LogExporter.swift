@@ -26,16 +26,18 @@ private let log = Logger(
 enum LogExporter {
 
     /// Collects logs, archives them, and sends to Sentry as an attachment for developer debugging.
-    static func sendLogsToSentry() {
+    /// Includes report metadata (reason, message) from the log report form.
+    static func sendLogsToSentry(formData: LogReportFormData) {
         Task {
             let fileManager = FileManager.default
             let archiveURL = fileManager.temporaryDirectory
                 .appendingPathComponent("vellum-assistant-logs-\(UUID().uuidString).tar.gz")
 
             do {
-                try await buildArchive(destination: archiveURL)
+                try await buildArchive(destination: archiveURL, formData: formData)
             } catch {
                 log.error("Failed to build log archive for Sentry: \(error.localizedDescription)")
+                NSApp.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
                 alert.messageText = "Send Failed"
                 alert.informativeText = "Could not collect logs: \(error.localizedDescription)"
@@ -47,19 +49,62 @@ enum LogExporter {
             let archiveName = defaultArchiveName()
             let attachment = Attachment(path: archiveURL.path, filename: archiveName)
             let event = Event(level: .info)
-            event.message = SentryMessage(formatted: "Manual log export")
-            event.tags = ["source": "manual_log_export"]
+            let errorTitle = "\(formData.reason.displayName) log report"
+            event.message = SentryMessage(formatted: errorTitle)
+            // Set error so Sentry displays the error message (not "No error message provided").
+            event.error = NSError(
+                domain: "com.vellum.log-report",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: errorTitle]
+            )
+            var tags: [String: String] = [
+                "source": "log_report",
+                "report_reason": formData.reason.rawValue,
+            ]
+            // When routing to the brain project, tag the event so it's clear
+            // it originated from the macOS client (not the daemon itself).
+            if formData.reason == .assistantBehavior {
+                tags["client"] = "macos"
+            }
+            event.tags = tags
+            // Group all reports by reason so different user messages don't
+            // fragment into separate Sentry issues.
+            event.fingerprint = ["log_report", formData.reason.rawValue]
+
+            // User-provided context (message, email, category) is sent via
+            // Sentry's UserFeedback API, linked to the event. This keeps PII
+            // out of event tags/extras and lets us use Sentry's built-in
+            // feedback UI for triage.
+            let feedback = MetricKitManager.UserFeedbackData(
+                comments: formData.message.isEmpty ? nil : formData.message,
+                email: formData.email,
+                name: formData.name.isEmpty ? nil : formData.name
+            )
+
+            // Route assistant behavior reports to the brain Sentry project
+            // so they appear alongside daemon issues for triage.
+            let dsn: String? = formData.reason == .assistantBehavior
+                ? MetricKitManager.brainDSN
+                : nil
 
             await withCheckedContinuation { continuation in
-                MetricKitManager.sendManualReport(event, attachments: [attachment]) {
+                MetricKitManager.sendManualReport(
+                    event,
+                    attachments: [attachment],
+                    userFeedback: feedback,
+                    dsn: dsn
+                ) {
                     try? FileManager.default.removeItem(at: archiveURL)
                     continuation.resume()
                 }
             }
 
+            // Re-activate before showing the alert in case the app reverted
+            // to .accessory policy after the log report window was dismissed.
+            NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
-            alert.messageText = "Logs Sent"
-            alert.informativeText = "Log archive has been uploaded to Vellum."
+            alert.messageText = "Log Sent"
+            alert.informativeText = "Your log report has been sent to Vellum."
             alert.alertStyle = .informational
             alert.runModal()
         }
@@ -77,7 +122,7 @@ enum LogExporter {
 
     /// Builds a tar.gz archive containing all discoverable log files.
     /// Runs file I/O and the tar process off the main actor to avoid blocking the UI.
-    private nonisolated static func buildArchive(destination: URL) async throws {
+    private nonisolated static func buildArchive(destination: URL, formData: LogReportFormData? = nil) async throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory
             .appendingPathComponent("vellum-log-export-\(UUID().uuidString)", isDirectory: true)
@@ -152,7 +197,27 @@ enum LogExporter {
             to: tempDir.appendingPathComponent("port-diagnostics.json")
         )
 
-        // 9. Sanitized workspace config — client-side fallback if daemon export didn't include it
+        // 9. Report metadata — reason and message from the log report form.
+        // Email is excluded from the archive since it's already sent via
+        // Sentry's UserFeedback API (linked to the event).
+        if let formData {
+            var metadata: [String: String] = [
+                "reason": formData.reason.rawValue,
+                "message": formData.message,
+                "device_id": SentryDeviceInfo.deviceId,
+            ]
+            if !formData.name.isEmpty {
+                metadata["name"] = formData.name
+            }
+            if let data = try? JSONSerialization.data(
+                withJSONObject: metadata,
+                options: [.prettyPrinted, .sortedKeys]
+            ) {
+                try? data.write(to: tempDir.appendingPathComponent("report-metadata.json"))
+            }
+        }
+
+        // 10. Sanitized workspace config — client-side fallback if daemon export didn't include it
         let configSnapshotPath = tempDir.appendingPathComponent("config-snapshot.json")
         if !fileManager.fileExists(atPath: configSnapshotPath.path) {
             writeSanitizedWorkspaceConfig(to: configSnapshotPath)

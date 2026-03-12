@@ -76,6 +76,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObjec
     var bootstrapInterstitialWindow: NSWindow?
     var crashReportWindow: NSWindow?
     var crashReportWindowObserver: NSObjectProtocol?
+    var logReportWindow: NSWindow?
+    var logReportWindowObserver: NSObjectProtocol?
     /// Active task for the bootstrap retry coordinator. Cancelled on dismiss.
     var bootstrapRetryTask: Task<Void, Never>?
     /// Tracks the most recent failure kind during bootstrap retries so that
@@ -203,7 +205,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObjec
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         SentrySDK.start { options in
-            options.dsn = "https://c8d6b12505ab6b1785f0e82b5fb50662@o4504590528675840.ingest.us.sentry.io/4511015779696640"
+            options.dsn = MetricKitManager.macosDSN
             options.releaseName = "vellum-macos@\(appVersion)"
             options.dist = buildNumber
             options.environment = SentryDeviceInfo.sentryEnvironment
