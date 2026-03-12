@@ -134,22 +134,3 @@ struct WakeUpStepView: View {
         }
     }
 }
-
-// MARK: - Previews
-
-#Preview("Onboarding context") {
-    ZStack {
-        VColor.surfaceOverlay.ignoresSafeArea()
-        VStack(spacing: 0) {
-            Spacer()
-            Image("VellyLogo")
-                .resizable()
-                .interpolation(.none)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 128, height: 128)
-                .padding(.bottom, VSpacing.xxl)
-            WakeUpStepView(state: OnboardingState())
-        }
-    }
-    .frame(width: 520, height: 580)
-}
