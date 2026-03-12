@@ -1836,7 +1836,7 @@ export function buildSchema(): Record<string, unknown> {
         get: {
           summary: "Runtime proxy",
           description:
-            "Reverse-proxies requests to the assistant runtime when the runtime proxy is enabled. Supports all HTTP methods. Returns 404 when the proxy is disabled.",
+            "Reverse-proxies requests to the assistant runtime when gateway.runtimeProxyEnabled is true in workspace config. Supports all HTTP methods. Returns 404 when the proxy is disabled.",
           operationId: "runtimeProxyGet",
           security: [{ BearerAuth: [] }],
           parameters: [
@@ -1898,7 +1898,7 @@ export function buildSchema(): Record<string, unknown> {
         post: {
           summary: "Runtime proxy",
           description:
-            "Reverse-proxies requests to the assistant runtime when the runtime proxy is enabled.",
+            "Reverse-proxies requests to the assistant runtime when gateway.runtimeProxyEnabled is true in workspace config.",
           operationId: "runtimeProxyPost",
           security: [{ BearerAuth: [] }],
           parameters: [
