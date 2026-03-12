@@ -263,10 +263,8 @@ export interface MemoryRecallToolResult {
   degraded: boolean;
   items: Array<{ id: string; type: string; kind: string }>;
   sources: {
-    lexical: number;
     semantic: number;
     recency: number;
-    entity: number;
   };
 }
 
@@ -321,10 +319,8 @@ export async function handleMemoryRecall(
         degraded,
         items: [],
         sources: {
-          lexical: recall.lexicalHits,
           semantic: recall.semanticHits,
           recency: recall.recencyHits,
-          entity: recall.entityHits,
         },
       };
       return {
@@ -343,10 +339,8 @@ export async function handleMemoryRecall(
         kind: c.kind,
       })),
       sources: {
-        lexical: recall.lexicalHits,
         semantic: recall.semanticHits,
         recency: recall.recencyHits,
-        entity: recall.entityHits,
       },
     };
 
