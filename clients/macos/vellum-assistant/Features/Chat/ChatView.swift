@@ -547,21 +547,20 @@ struct ScrollWheelDetector: NSViewRepresentable {
             guard view.bounds.width > 0, view.bounds.contains(locationInView) else { return event }
 
             if event.scrollingDeltaY > 3 && event.momentumPhase.isEmpty {
-                // Direct user scroll up (toward older content) — untether,
-                // but only if actually scrolled away from the bottom.
+                // Direct user scroll up (toward older content) — untether immediately.
                 // Momentum events are excluded so a flick doesn't accidentally untether.
-                // Deferred to next run-loop tick so clipBounds reflects the post-scroll position;
-                // reading it synchronously in the event monitor sees the pre-scroll state.
-                DispatchQueue.main.async {
-                    if let scrollView = coordinator.findEnclosingScrollView() {
-                        let clipBounds = scrollView.contentView.bounds
-                        let docHeight = scrollView.documentView?.frame.height ?? 0
-                        if docHeight - clipBounds.maxY >= 20 {
-                            coordinator.onScrollUp?()
-                        }
-                    } else {
+                // Called synchronously so isNearBottom is cleared before any competing
+                // layout pass can trigger an auto-scroll-to-bottom.
+                // Guard: only untether if content is actually scrollable (prevents false
+                // untethers on short threads that can't scroll).
+                if let scrollView = coordinator.findEnclosingScrollView() {
+                    let clipHeight = scrollView.contentView.bounds.height
+                    let docHeight = scrollView.documentView?.frame.height ?? 0
+                    if docHeight > clipHeight {
                         coordinator.onScrollUp?()
                     }
+                } else {
+                    coordinator.onScrollUp?()
                 }
             } else if event.scrollingDeltaY < -1 {
                 // Scrolling down (direct or momentum) — re-tether if at bottom.
@@ -599,11 +598,43 @@ struct ScrollWheelDetector: NSViewRepresentable {
         var onScrollToBottom: (() -> Void)?
         var monitor: Any?
 
+        /// Resolves the chat's vertical NSScrollView.
+        /// The detector sits in a `.background` modifier (sibling of the scroll view),
+        /// so walking up the superview chain may miss it or find a wrong parent.
+        /// The hit-test fallback searches for a *vertical* scroll view to avoid
+        /// resolving to nested horizontal scrollers (e.g. markdown code blocks).
         func findEnclosingScrollView() -> NSScrollView? {
+            // Fast path: walk up the superview chain.
+            if let sv = view?.enclosingScrollView, sv.hasVerticalScroller { return sv }
             var current = view?.superview
             while let v = current {
-                if let sv = v as? NSScrollView { return sv }
+                if let sv = v as? NSScrollView, sv.hasVerticalScroller { return sv }
                 current = v.superview
+            }
+            // Fallback: hit-test from the window root for a vertical scroll view.
+            guard let window = view?.window, let contentView = window.contentView else { return nil }
+            let probe = view?.convert(
+                NSPoint(x: view?.bounds.midX ?? 0, y: view?.bounds.midY ?? 0),
+                to: nil
+            ) ?? .zero
+            return Self.verticalScrollView(in: contentView, containing: probe)
+        }
+
+        /// Finds the outermost vertical NSScrollView containing `windowPoint`.
+        /// Stops at the first vertical match so nested horizontal scrollers
+        /// (e.g. code-block scroll views) are not returned.
+        private static func verticalScrollView(in view: NSView, containing windowPoint: NSPoint) -> NSScrollView? {
+            let localPoint = view.convert(windowPoint, from: nil)
+            guard view.bounds.contains(localPoint) else { return nil }
+            // If this is a vertical scroll view, return it immediately — don't
+            // recurse into children which may contain nested horizontal scrollers.
+            if let sv = view as? NSScrollView, sv.hasVerticalScroller {
+                return sv
+            }
+            for sub in view.subviews.reversed() {
+                if let sv = verticalScrollView(in: sub, containing: windowPoint) {
+                    return sv
+                }
             }
             return nil
         }
