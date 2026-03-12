@@ -7,7 +7,10 @@ import {
   _resetQdrantBreaker,
   withQdrantBreaker,
 } from "../qdrant-circuit-breaker.js";
-import type { QdrantSearchResult, QdrantSparseVector } from "../qdrant-client.js";
+import type {
+  QdrantSearchResult,
+  QdrantSparseVector,
+} from "../qdrant-client.js";
 import { getQdrantClient } from "../qdrant-client.js";
 import {
   conversations,

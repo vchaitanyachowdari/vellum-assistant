@@ -420,7 +420,7 @@ struct MainWindowView: View {
         .padding(.leading, trafficLightPadding)
         .padding(.trailing, VSpacing.lg)
         .frame(height: 36)
-        .background(VColor.backgroundSubtle)
+        .background(VColor.surfaceOverlay)
     }
 
     /// Core layout extracted to break up type-checker complexity.
@@ -566,7 +566,7 @@ struct MainWindowView: View {
                 }
             }
             .ignoresSafeArea(edges: .top)
-            .background(VColor.background.ignoresSafeArea())
+            .background(VColor.surfaceBase.ignoresSafeArea())
             .frame(width: geometry.size.width / zoomManager.zoomLevel,
                    height: geometry.size.height / zoomManager.zoomLevel)
             .scaleEffect(zoomManager.zoomLevel, anchor: .topLeading)
@@ -579,7 +579,7 @@ struct MainWindowView: View {
                 ZoomIndicatorView(percentage: zoomManager.zoomPercentage)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .padding(.top, 40)
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+                    .shadow(color: VColor.auxBlack.opacity(0.15), radius: 8, y: 2)
             }
         }
         .animation(VAnimation.fast, value: zoomManager.showZoomIndicator)
@@ -601,7 +601,7 @@ struct MainWindowView: View {
                     ChatSessionErrorToast(
                         message: "API key not set. Add one in Settings to start chatting.",
                         icon: .keyRound,
-                        accentColor: Amber._550,
+                        accentColor: VColor.systemMidStrong,
                         actionLabel: "Open Settings",
                         onAction: { windowState.selection = .panel(.settings) }
                     )
@@ -871,7 +871,7 @@ private struct ErrorToastOverlay: View {
                 ChatSessionErrorToast(
                     message: "API key not set. Add one in Settings to start chatting.",
                     icon: .keyRound,
-                    accentColor: Amber._550,
+                    accentColor: VColor.systemMidStrong,
                     actionLabel: "Open Settings",
                     onAction: onOpenSettings
                 )

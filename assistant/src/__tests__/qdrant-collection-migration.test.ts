@@ -81,7 +81,12 @@ mock.module("@qdrant/js-client-rest", () => ({
         mockSentinelPayload &&
         opts.ids.includes("00000000-0000-0000-0000-000000000000")
       ) {
-        return [{ id: "00000000-0000-0000-0000-000000000000", payload: mockSentinelPayload }];
+        return [
+          {
+            id: "00000000-0000-0000-0000-000000000000",
+            payload: mockSentinelPayload,
+          },
+        ];
       }
       return [];
     }

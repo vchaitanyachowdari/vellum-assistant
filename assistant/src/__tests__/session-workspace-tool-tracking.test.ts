@@ -43,8 +43,9 @@ mock.module("../config/loader.js", () => ({
     contextWindow: {
       enabled: true,
       maxInputTokens: 100000,
-      targetBudgetRatio: 0.30,
-      compactThreshold: 0.8,      summaryBudgetRatio: 0.05,
+      targetBudgetRatio: 0.3,
+      compactThreshold: 0.8,
+      summaryBudgetRatio: 0.05,
       overflowRecovery: {
         enabled: true,
         safetyMarginRatio: 0.05,

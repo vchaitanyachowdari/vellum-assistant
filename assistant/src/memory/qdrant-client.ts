@@ -105,10 +105,8 @@ export class VellumQdrantClient {
 
           const currentSize = isUnnamedVectors
             ? (vectorsConfig as { size?: number })?.size
-            : (
-                (vectorsConfig as Record<string, { size?: number }> | undefined)
-                  ?.dense
-              )?.size;
+            : (vectorsConfig as Record<string, { size?: number }> | undefined)
+                ?.dense?.size;
 
           const dimMismatch =
             currentSize != null && currentSize !== this.vectorSize;
@@ -242,7 +240,10 @@ export class VellumQdrantClient {
     const existing = await this.findByTarget(targetType, targetId);
     const pointId = existing ?? uuid();
 
-    const namedVector: Record<string, number[] | { indices: number[]; values: number[] }> = {
+    const namedVector: Record<
+      string,
+      number[] | { indices: number[]; values: number[] }
+    > = {
       dense: vector,
     };
     if (sparseVector) {

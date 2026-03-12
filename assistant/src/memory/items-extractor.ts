@@ -138,7 +138,12 @@ function hasSemanticDensity(text: string): boolean {
 // ── LLM-powered extraction ────────────────────────────────────────────
 
 function buildExtractionSystemPrompt(
-  existingItems: Array<{ id: string; kind: string; subject: string; statement: string }>,
+  existingItems: Array<{
+    id: string;
+    kind: string;
+    subject: string;
+    statement: string;
+  }>,
 ): string {
   let prompt = `You are a memory extraction system. Given a message from a conversation, extract structured memory items that would be valuable to remember for future interactions.
 
@@ -245,10 +250,7 @@ function queryExistingItemsForContext(
       })
       .from(memoryItems)
       .where(
-        and(
-          eq(memoryItems.scopeId, scopeId),
-          eq(memoryItems.status, "active"),
-        ),
+        and(eq(memoryItems.scopeId, scopeId), eq(memoryItems.status, "active")),
       )
       .limit(10 - rows.length)
       .all();

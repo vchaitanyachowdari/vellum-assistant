@@ -29,10 +29,7 @@ import {
   PREFERENCE_KINDS,
 } from "./search/formatting.js";
 import { recencySearch } from "./search/lexical.js";
-import {
-  applySourceCaps,
-  mergeCandidates,
-} from "./search/ranking.js";
+import { applySourceCaps, mergeCandidates } from "./search/ranking.js";
 import { isQdrantConnectionError, semanticSearch } from "./search/semantic.js";
 import { applyStaleDemotion, computeStaleness } from "./search/staleness.js";
 import { classifyTiers } from "./search/tier-classifier.js";
@@ -64,7 +61,6 @@ export type {
 } from "./search/types.js";
 
 const log = getLogger("memory-retriever");
-
 
 const EMBED_MAX_RETRIES = 3;
 const EMBED_BASE_DELAY_MS = 500;
@@ -236,8 +232,7 @@ export async function collectAndMergeCandidates(
     entity = entitySearchResult.candidates;
     candidateDepths = entitySearchResult.candidateDepths;
     relationSeedEntityCount = entitySearchResult.relationSeedEntityCount;
-    relationTraversedEdgeCount =
-      entitySearchResult.relationTraversedEdgeCount;
+    relationTraversedEdgeCount = entitySearchResult.relationTraversedEdgeCount;
     relationNeighborEntityCount =
       entitySearchResult.relationNeighborEntityCount;
     relationExpandedItemCount = entitySearchResult.relationExpandedItemCount;
@@ -763,10 +758,7 @@ export async function buildMemoryRecallV2(
   for (const c of allCandidates) {
     // Simple weighted combination — hybrid search already applies RRF fusion
     // at the Qdrant level; here we combine the fused semantic score with recency.
-    c.finalScore =
-      c.semantic * 0.7 +
-      c.recency * 0.2 +
-      c.confidence * 0.1;
+    c.finalScore = c.semantic * 0.7 + c.recency * 0.2 + c.confidence * 0.1;
   }
   allCandidates.sort((a, b) => b.finalScore - a.finalScore);
 
@@ -774,9 +766,7 @@ export async function buildMemoryRecallV2(
   const tiered = classifyTiers(allCandidates);
 
   // ── Step 7: Enrich with item metadata for staleness ─────────────
-  const itemIds = tiered
-    .filter((c) => c.type === "item")
-    .map((c) => c.id);
+  const itemIds = tiered.filter((c) => c.type === "item").map((c) => c.id);
   const itemMetadataMap = enrichItemMetadata(itemIds);
 
   // ── Step 8: Compute staleness per item ──────────────────────────
@@ -863,7 +853,10 @@ export async function buildMemoryRecallV2(
   const latencyMs = Date.now() - start;
 
   // Propagate degradation from semantic search failure
-  if (semanticSearchFailed || (!queryVector && config.memory.embeddings.required)) {
+  if (
+    semanticSearchFailed ||
+    (!queryVector && config.memory.embeddings.required)
+  ) {
     embeddingResult.degraded = true;
     embeddingResult.reason =
       embeddingResult.reason ?? "memory.hybrid_search_failure";
@@ -925,7 +918,10 @@ export async function buildMemoryRecallV2(
  */
 function enrichItemMetadata(
   itemIds: string[],
-): Map<string, { firstSeenAt: number; sourceConversationCount: number; kind: string }> {
+): Map<
+  string,
+  { firstSeenAt: number; sourceConversationCount: number; kind: string }
+> {
   const result = new Map<
     string,
     { firstSeenAt: number; sourceConversationCount: number; kind: string }
@@ -977,7 +973,10 @@ function enrichItemMetadata(
       }
     }
   } catch (err) {
-    log.warn({ err }, "Failed to enrich item metadata for staleness computation");
+    log.warn(
+      { err },
+      "Failed to enrich item metadata for staleness computation",
+    );
   }
 
   return result;
