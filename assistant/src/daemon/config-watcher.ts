@@ -20,6 +20,8 @@ import {
   resetAllowlist,
   validateAllowlistFile,
 } from "../security/secret-allowlist.js";
+import { handleConfirmationSignal } from "../signals/confirm.js";
+import { handleMcpReloadSignal } from "../signals/mcp-reload.js";
 import { DebouncerMap } from "../util/debounce.js";
 import { getLogger } from "../util/logger.js";
 import {
@@ -104,14 +106,8 @@ export class ConfigWatcher {
    * Start all file watchers. `onSessionEvict` is called when watched
    * files change and sessions need to be evicted for reload.
    * `onIdentityChanged` is called when IDENTITY.md changes on disk.
-   * `onMcpReload` is called when the MCP section of config.json changes
-   * or when a signal file appears in the workspace `signals/` directory.
    */
-  start(
-    onSessionEvict: () => void,
-    onIdentityChanged?: () => void,
-    onMcpReload?: () => void,
-  ): void {
+  start(onSessionEvict: () => void, onIdentityChanged?: () => void): void {
     const workspaceDir = getWorkspaceDir();
     const protectedDir = join(getRootDir(), "protected");
 
@@ -127,7 +123,7 @@ export class ConfigWatcher {
             const newConfig = getConfig();
             const newMcpFingerprint = JSON.stringify(newConfig.mcp ?? {});
             if (newMcpFingerprint !== prevMcpFingerprint) {
-              onMcpReload?.();
+              handleMcpReloadSignal();
             }
           }
         } catch (err) {
@@ -206,7 +202,7 @@ export class ConfigWatcher {
       );
     }
 
-    this.startSignalsWatcher(onMcpReload);
+    this.startSignalsWatcher();
     this.startSkillsWatchers(onSessionEvict);
   }
 
@@ -218,7 +214,7 @@ export class ConfigWatcher {
     this.watchers = [];
   }
 
-  private startSignalsWatcher(onMcpReload?: () => void): void {
+  private startSignalsWatcher(): void {
     const signalsDir = join(getWorkspaceDir(), "signals");
     try {
       if (!existsSync(signalsDir)) {
@@ -229,9 +225,8 @@ export class ConfigWatcher {
     }
 
     const signalHandlers: Record<string, () => void> = {
-      "mcp-reload": () => {
-        onMcpReload?.();
-      },
+      "mcp-reload": handleMcpReloadSignal,
+      confirm: handleConfirmationSignal,
     };
 
     try {
