@@ -23,7 +23,7 @@ This is a **collaborative guided flow**: you open the right pages in the user's 
 Determine which path applies before taking action:
 
 - **macOS desktop app:** Follow **Path A: Collaborative Browser Setup**.
-- **Telegram, SMS, Slack, or any non-interactive channel:** Follow **Path B: Manual Channel Setup**.
+- **Telegram, Slack, or any non-interactive channel:** Follow **Path B: Manual Channel Setup**.
 
 ---
 
@@ -426,7 +426,7 @@ bash:
 
 ---
 
-# Path B: Manual Channel Setup (Telegram, SMS, Slack, etc.)
+# Path B: Manual Channel Setup (Telegram, Slack, etc.)
 
 For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
 
