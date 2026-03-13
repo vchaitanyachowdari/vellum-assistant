@@ -89,6 +89,10 @@ struct ChatView: View {
     /// and shows a loading panel instead.
     var isBootstrapping: Bool = false
 
+    /// When true during bootstrap, the daemon failed to connect within the
+    /// timeout window. Shows a failure screen instead of the loading skeleton.
+    var isBootstrapTimedOut: Bool = false
+
     @State private var isNearBottom = true
     @State private var isDropTargeted = false
     @State private var containerWidth: CGFloat = 0
@@ -125,10 +129,11 @@ struct ChatView: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("Loading chat history")
                 } else if isEmptyState && isBootstrapping {
-                    // During first-launch bootstrap, suppress the empty state
-                    // and show a simple loading panel until the first assistant
-                    // reply arrives and populates the chat.
-                    ChatBootstrapLoadingView()
+                    if isBootstrapTimedOut {
+                        ChatBootstrapTimeoutView()
+                    } else {
+                        ChatBootstrapLoadingView()
+                    }
                 } else if isEmptyState {
                     if isTemporaryChat {
                         ChatTemporaryChatEmptyStateView(
@@ -555,6 +560,42 @@ private struct ChatBootstrapLoadingView: View {
                     visible = true
                 }
             }
+    }
+}
+
+/// Shown during first-launch bootstrap when the daemon fails to connect
+/// within the timeout window. Mirrors the hatch-failure pattern from
+/// onboarding: a centered error message.
+private struct ChatBootstrapTimeoutView: View {
+    @State private var visible = false
+
+    var body: some View {
+        VStack(spacing: VSpacing.lg) {
+            Spacer()
+
+            VIconView(.triangleAlert, size: 28)
+                .foregroundColor(VColor.systemNegativeHover)
+
+            VStack(spacing: VSpacing.sm) {
+                Text("Something went wrong")
+                    .font(.system(size: 24, weight: .regular, design: .serif))
+                    .foregroundColor(VColor.contentDefault)
+                Text("Your assistant didn\u{2019}t connect in time. Please quit and reopen the app.")
+                    .font(.system(size: 14))
+                    .foregroundColor(VColor.contentSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(visible ? 1 : 0)
+        .onAppear {
+            withAnimation(VAnimation.standard) {
+                visible = true
+            }
+        }
     }
 }
 
