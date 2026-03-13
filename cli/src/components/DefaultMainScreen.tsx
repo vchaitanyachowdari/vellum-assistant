@@ -2065,6 +2065,7 @@ function ChatApp({
                     role: "assistant",
                     content: msg.content,
                   });
+                  process.stdout.write("\x07");
                   h.setBusy(false);
                   h.hideSpinner();
                   return;
