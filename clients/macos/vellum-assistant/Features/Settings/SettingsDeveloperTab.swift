@@ -405,68 +405,32 @@ struct SettingsDeveloperTab: View {
         isUpgradingInline = true
         defer { isUpgradingInline = false }
 
-        guard let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }) else {
-            inlineUpgradeError = "No assistant selected"
-            return
-        }
-        let baseURL = assistant.runtimeUrl ?? AuthService.shared.baseURL
-        guard let token = SessionTokenManager.getToken(), !token.isEmpty else {
-            inlineUpgradeError = "Not authenticated"
-            return
-        }
-        guard let url = URL(string: "\(baseURL)/v1/assistants/upgrade/") else {
-            inlineUpgradeError = "Unable to start upgrade"
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue(token, forHTTPHeaderField: "X-Session-Token")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let orgId = UserDefaults.standard.string(forKey: "connectedOrganizationId"), !orgId.isEmpty {
-            request.setValue(orgId, forHTTPHeaderField: "Vellum-Organization-Id")
-        }
-
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                inlineUpgradeError = "Invalid response"
-                return
-            }
-            if httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 {
+            let response = try await GatewayHTTPClient.post(path: "upgrade")
+            if response.isSuccess {
                 inlineUpgradeSuccess = "Upgrade initiated. The assistant may be briefly unavailable."
-                // Refresh healthz after a short delay to pick up the new version
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 await fetchHealthz()
             } else {
-                inlineUpgradeError = "Upgrade failed (HTTP \(httpResponse.statusCode))"
+                inlineUpgradeError = "Upgrade failed (HTTP \(response.statusCode))"
             }
+        } catch let error as GatewayHTTPClient.ClientError {
+            inlineUpgradeError = error.localizedDescription
         } catch {
             inlineUpgradeError = "Upgrade failed: \(error.localizedDescription)"
         }
     }
 
     private func fetchHealthz() async {
-        guard let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }) else { return }
-        let baseURL = assistant.runtimeUrl ?? AuthService.shared.baseURL
-        guard let token = SessionTokenManager.getToken(), !token.isEmpty else { return }
-        guard let url = URL(string: "\(baseURL)/v1/assistants/\(assistant.assistantId)/healthz/") else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-        request.setValue(token, forHTTPHeaderField: "X-Session-Token")
-        if let orgId = UserDefaults.standard.string(forKey: "connectedOrganizationId"), !orgId.isEmpty {
-            request.setValue(orgId, forHTTPHeaderField: "Vellum-Organization-Id")
-        }
-
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            let response = try await GatewayHTTPClient.get(
+                path: "\(selectedAssistantId)/healthz",
+                timeout: 10
+            )
+            guard response.statusCode == 200 else { return }
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            healthz = try decoder.decode(DaemonHealthz.self, from: data)
+            healthz = try decoder.decode(DaemonHealthz.self, from: response.data)
         } catch {}
     }
 
