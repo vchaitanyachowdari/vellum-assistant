@@ -770,7 +770,7 @@ struct ContactDetailView: View {
                     }
                     VButton(
                         label: "Revoke Access",
-                        style: .danger,
+                        style: .dangerOutline,
                         isDisabled: anyActionInFlight
                     ) {
                         updateChannelStatus(channelId: channel.id, status: "revoked")
@@ -778,14 +778,14 @@ struct ContactDetailView: View {
                 default:
                     VButton(
                         label: "Revoke Access",
-                        style: .danger,
+                        style: .dangerOutline,
                         isDisabled: anyActionInFlight
                     ) {
                         updateChannelStatus(channelId: channel.id, status: "revoked")
                     }
                     VButton(
                         label: "Block",
-                        style: .danger,
+                        style: .dangerOutline,
                         isDisabled: anyActionInFlight
                     ) {
                         updateChannelStatus(channelId: channel.id, status: "blocked")
