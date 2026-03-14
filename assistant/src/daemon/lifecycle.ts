@@ -54,6 +54,8 @@ import { buildAssistantEvent } from "../runtime/assistant-event.js";
 import { assistantEventHub } from "../runtime/assistant-event-hub.js";
 import { DAEMON_INTERNAL_ASSISTANT_ID } from "../runtime/assistant-scope.js";
 import { mintCredentialPair } from "../runtime/auth/credential-service.js";
+import { BOOTSTRAPPED_ACTOR_HTTP_TOKEN } from "../security/credential-key.js";
+import { setSecureKeyAsync } from "../security/secure-keys.js";
 import {
   initAuthSigningKey,
   loadOrCreateSigningKey,
@@ -247,13 +249,22 @@ export async function runDaemon(): Promise<void> {
       const hashedDeviceId = createHash("sha256")
         .update(cliDeviceId)
         .digest("hex");
-      mintCredentialPair({
+      const credentials = mintCredentialPair({
         platform: "cli",
         deviceId: cliDeviceId,
         guardianPrincipalId,
         hashedDeviceId,
       });
-      log.info("Daemon startup: CLI edge token written to credential store");
+
+      const stored = await setSecureKeyAsync(
+        BOOTSTRAPPED_ACTOR_HTTP_TOKEN,
+        credentials.accessToken,
+      );
+      if (!stored) {
+        log.warn("Failed to persist CLI edge token in credential store");
+      } else {
+        log.info("Daemon startup: CLI edge token written to credential store");
+      }
     } else {
       log.warn("No guardian principal available — CLI edge token not written");
     }
