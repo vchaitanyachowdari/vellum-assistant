@@ -2,18 +2,23 @@
  * HTTP route handler for exporting audit data and daemon log files.
  *
  * A single POST /v1/export endpoint allows clients (e.g. macOS Export Logs)
- * to retrieve audit database records and daemon log files via HTTP instead
- * of requiring direct filesystem access.
+ * to retrieve audit database records, daemon log files, workspace contents,
+ * and a sanitized config snapshot as a tar.gz archive.
  */
 
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { desc } from "drizzle-orm";
@@ -35,24 +40,26 @@ const log = getLogger("log-export-routes");
 /** Maximum total payload size for log file contents (10 MB). */
 const MAX_LOG_PAYLOAD_BYTES = 10 * 1024 * 1024;
 
+/** Maximum compressed archive size before pruning workspace directories (50 MB). */
+const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
+
 interface ExportRequestBody {
   auditLimit?: number;
 }
 
-interface ExportResponse {
-  success: true;
-  auditRows: Array<Record<string, unknown>>;
-  logFiles: Record<string, string>;
-  configSnapshot?: Record<string, unknown>;
-  workspaceFiles: Record<string, string>;
-}
-
 /**
- * Collect audit data rows and daemon log file contents into a single
- * response payload. Returns both `auditRows` (tool invocation records)
- * and `logFiles` (filename → text content mapping).
+ * Collect audit data, daemon log files, workspace contents, and a sanitized
+ * config snapshot, then package everything into a tar.gz archive.
+ *
+ * Archive layout:
+ *   audit-data.json          — tool invocation records
+ *   config-snapshot.json     — sanitized workspace config
+ *   daemon-logs/<name>       — daemon log files
+ *   workspace/<relpath>      — workspace file tree
  */
 async function handleExport(body: ExportRequestBody): Promise<Response> {
+  const staging = mkdtempSync(join(tmpdir(), "vellum-export-"));
+
   try {
     // --- Audit data ---
     const limit = body.auditLimit ?? 1000;
@@ -64,9 +71,17 @@ async function handleExport(body: ExportRequestBody): Promise<Response> {
       .limit(limit)
       .all();
 
+    writeFileSync(
+      join(staging, "audit-data.json"),
+      JSON.stringify(auditRows, null, 2),
+      "utf-8",
+    );
+
     // --- Daemon log files ---
-    const logFiles: Record<string, string> = {};
+    const daemonLogsDir = join(staging, "daemon-logs");
+    mkdirSync(daemonLogsDir, { recursive: true });
     let totalBytes = 0;
+    let logFileCount = 0;
 
     const logsDir = join(getDataDir(), "logs");
     if (existsSync(logsDir)) {
@@ -77,8 +92,10 @@ async function handleExport(body: ExportRequestBody): Promise<Response> {
           const stat = statSync(filePath);
           if (!stat.isFile()) continue;
           if (totalBytes + stat.size > MAX_LOG_PAYLOAD_BYTES) continue;
-          logFiles[entry] = readFileSync(filePath, "utf-8");
+          const content = readFileSync(filePath, "utf-8");
+          writeFileSync(join(daemonLogsDir, entry), content, "utf-8");
           totalBytes += stat.size;
+          logFileCount++;
         } catch {
           // Skip unreadable files
         }
@@ -90,7 +107,13 @@ async function handleExport(body: ExportRequestBody): Promise<Response> {
       try {
         const stat = statSync(stderrPath);
         if (totalBytes + stat.size <= MAX_LOG_PAYLOAD_BYTES) {
-          logFiles["daemon-stderr.log"] = readFileSync(stderrPath, "utf-8");
+          const content = readFileSync(stderrPath, "utf-8");
+          writeFileSync(
+            join(daemonLogsDir, "daemon-stderr.log"),
+            content,
+            "utf-8",
+          );
+          logFileCount++;
         }
       } catch {
         // Skip if unreadable
@@ -99,34 +122,169 @@ async function handleExport(body: ExportRequestBody): Promise<Response> {
 
     // --- Sanitized config snapshot ---
     const configSnapshot = readSanitizedConfig();
+    if (configSnapshot) {
+      writeFileSync(
+        join(staging, "config-snapshot.json"),
+        JSON.stringify(configSnapshot, null, 2),
+        "utf-8",
+      );
+    }
 
     // --- Workspace files ---
     const workspaceFiles = collectWorkspaceFiles();
+    const workspaceDir = join(staging, "workspace");
+    mkdirSync(workspaceDir, { recursive: true });
+    for (const [relPath, content] of Object.entries(workspaceFiles)) {
+      const dest = join(workspaceDir, relPath);
+      mkdirSync(join(dest, ".."), { recursive: true });
+      writeFileSync(dest, content, "utf-8");
+    }
 
     log.info(
       {
         auditCount: auditRows.length,
-        logFileCount: Object.keys(logFiles).length,
+        logFileCount,
         totalBytes,
         hasConfig: configSnapshot !== undefined,
         workspaceFileCount: Object.keys(workspaceFiles).length,
       },
-      "Export completed",
+      "Export collected, creating tar.gz archive",
     );
 
-    const payload: ExportResponse = {
-      success: true,
-      auditRows,
-      logFiles,
-      configSnapshot,
-      workspaceFiles,
-    };
-    return Response.json(payload);
+    // --- Create tar.gz archive, pruning workspace dirs if too large ---
+    const excludedDirs: string[] = [];
+    let archiveBytes = createTarGz(staging);
+
+    while (!archiveBytes) {
+      // Find the largest top-level directory under workspace/ and remove it
+      const wsDir = join(staging, "workspace");
+      const largest = findLargestSubdirectory(wsDir);
+      if (!largest) {
+        log.error("tar command failed and no workspace dirs to prune");
+        return httpError("INTERNAL_ERROR", "Failed to create archive", 500);
+      }
+
+      log.warn(
+        { dir: largest.name, bytes: largest.bytes },
+        "Archive exceeds size limit, removing largest workspace directory",
+      );
+      excludedDirs.push(
+        `workspace/${largest.name} (${formatBytes(largest.bytes)})`,
+      );
+      rmSync(join(wsDir, largest.name), { recursive: true, force: true });
+      archiveBytes = createTarGz(staging);
+    }
+
+    if (excludedDirs.length > 0) {
+      const errorLines = [
+        "The following workspace directories were excluded because the archive exceeded the size limit:",
+        "",
+        ...excludedDirs.map((d) => `  - ${d}`),
+        "",
+        "Use the streaming export endpoint for full workspace exports.",
+      ];
+      writeFileSync(join(staging, "error.log"), errorLines.join("\n"), "utf-8");
+
+      // Re-create the archive now that error.log is included
+      const withErrorLog = createTarGz(staging);
+      if (withErrorLog) {
+        archiveBytes = withErrorLog;
+      }
+    }
+
+    return new Response(archiveBytes, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/gzip",
+        "Content-Disposition": 'attachment; filename="logs.tar.gz"',
+        "Content-Length": String(archiveBytes.byteLength),
+      },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Failed to export");
     return httpError("INTERNAL_ERROR", `Failed to export: ${message}`, 500);
+  } finally {
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup
+    }
   }
+}
+
+/**
+ * Attempts to create a tar.gz archive of `staging` into a Buffer.
+ * Returns the Buffer on success, or `undefined` if the archive exceeds
+ * the size limit or tar otherwise fails.
+ */
+function createTarGz(staging: string): ArrayBuffer | undefined {
+  const proc = spawnSync("tar", ["czf", "-", "-C", staging, "."], {
+    maxBuffer: MAX_ARCHIVE_BYTES,
+    timeout: 30_000,
+  });
+  if (proc.status !== 0) return undefined;
+  const buf = Buffer.isBuffer(proc.stdout)
+    ? proc.stdout
+    : Buffer.from(proc.stdout);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
+
+/**
+ * Returns the name and total byte size of the largest top-level subdirectory
+ * inside `dir`, or `undefined` if `dir` has no subdirectories.
+ */
+function findLargestSubdirectory(
+  dir: string,
+): { name: string; bytes: number } | undefined {
+  if (!existsSync(dir)) return undefined;
+
+  let largest: { name: string; bytes: number } | undefined;
+
+  for (const entry of readdirSync(dir)) {
+    const fullPath = join(dir, entry);
+    try {
+      if (!statSync(fullPath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const bytes = directorySize(fullPath);
+    if (!largest || bytes > largest.bytes) {
+      largest = { name: entry, bytes };
+    }
+  }
+
+  return largest;
+}
+
+/** Recursively sums the byte size of all files in `dir`. */
+function directorySize(dir: string): number {
+  let total = 0;
+  try {
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry);
+      try {
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          total += directorySize(fullPath);
+        } else if (stat.isFile()) {
+          total += stat.size;
+        }
+      } catch {
+        // skip
+      }
+    }
+  } catch {
+    // skip
+  }
+  return total;
+}
+
+/** Formats a byte count as a human-readable string (e.g. "12.3 MB"). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Directory prefixes to skip when collecting workspace files. */
