@@ -456,7 +456,9 @@ export class WorkspaceGitService {
             ? "Initial commit: migrated existing workspace"
             : "Initial commit: new workspace";
 
-          await this.execGit(["commit", "-m", message, "--allow-empty"]);
+          await this.execGit(
+            this.buildSafeCommitArgs(["-m", message, "--allow-empty"]),
+          );
 
           this.initialized = true;
           this.recordInitSuccess();
@@ -494,7 +496,9 @@ export class WorkspaceGitService {
       }
 
       // Commit (will succeed even if no changes)
-      await this.execGit(["commit", "-m", fullMessage, "--allow-empty"]);
+      await this.execGit(
+        this.buildSafeCommitArgs(["-m", fullMessage, "--allow-empty"]),
+      );
     });
   }
 
@@ -634,7 +638,7 @@ export class WorkspaceGitService {
               .join("\n");
         }
 
-        await this.execGit(["commit", "-m", fullMessage]);
+        await this.execGit(this.buildSafeCommitArgs(["-m", fullMessage]));
         return { committed: true, status, didRunGit: true as const };
       });
       if (result.didRunGit) {
@@ -871,6 +875,16 @@ export class WorkspaceGitService {
   }
 
   /**
+   * Build commit args that disable all git hook execution.
+   *
+   * Workspace contents are model-writable, so hooks in `.git/hooks` (or via
+   * `core.hooksPath`) are untrusted. Auto-commit paths must not execute them.
+   */
+  private buildSafeCommitArgs(args: string[]): string[] {
+    return ["-c", "core.hooksPath=/dev/null", "commit", "--no-verify", ...args];
+  }
+
+  /**
    * Run an arbitrary read-only git command in the workspace directory.
    * Uses the same clean env and timeout as other git operations.
    * Does NOT acquire the mutex — callers must ensure they are not
@@ -896,7 +910,13 @@ export class WorkspaceGitService {
     await this.ensureInitialized();
     await this.mutex.withLock(async () => {
       this.cleanStaleLockFile();
-      await fn((args) => this.execGit(args));
+      await fn((args) => {
+        // Intercept commit commands to enforce hook hardening.
+        if (args[0] === "commit") {
+          return this.execGit(this.buildSafeCommitArgs(args.slice(1)));
+        }
+        return this.execGit(args);
+      });
     });
   }
 
