@@ -11,9 +11,12 @@ import { join, dirname } from "path";
 
 const DEFAULT_PLATFORM_URL = "https://platform.vellum.ai";
 
+function getXdgConfigHome(): string {
+  return process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
+}
+
 function getPlatformTokenPath(): string {
-  const base = process.env.BASE_DATA_DIR || homedir();
-  return join(base, ".vellum", "platform-token");
+  return join(getXdgConfigHome(), "vellum", "platform-token");
 }
 
 export function getPlatformUrl(): string {
