@@ -111,7 +111,6 @@ mock.module("../security/secure-keys.js", () => {
     listSecureKeys: () => Object.keys(secureKeyStore),
     getBackendType: () => "encrypted",
     _resetBackend: () => {},
-    _setBackend: () => {},
   };
 });
 

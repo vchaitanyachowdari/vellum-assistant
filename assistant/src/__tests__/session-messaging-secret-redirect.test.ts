@@ -34,7 +34,6 @@ mock.module("../security/secure-keys.js", () => ({
   listSecureKeys: () => [],
   getBackendType: () => null,
   _resetBackend: () => {},
-  _setBackend: () => {},
 }));
 
 mock.module("../tools/credentials/metadata-store.js", () => ({

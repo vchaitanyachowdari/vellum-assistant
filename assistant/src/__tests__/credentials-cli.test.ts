@@ -75,7 +75,6 @@ mock.module("../security/secure-keys.js", () => ({
   },
   getBackendType: (): "broker" | "encrypted" | null => null,
   _resetBackend: (): void => {},
-  _setBackend: (): void => {},
 }));
 
 // ---------------------------------------------------------------------------
