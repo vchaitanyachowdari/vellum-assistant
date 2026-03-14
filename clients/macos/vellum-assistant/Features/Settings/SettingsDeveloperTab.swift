@@ -123,10 +123,7 @@ struct SettingsDeveloperTab: View {
                 }
             }
             Task { await loadHatchFlag() }
-            if let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }),
-               assistant.isManaged || assistant.isRemote {
-                Task { await fetchHealthz() }
-            }
+            Task { await fetchHealthz() }
 
             // Advanced dev setup
             macOSFlagStates = MacOSClientFeatureFlagManager.shared.allFlagStates()
@@ -281,10 +278,7 @@ struct SettingsDeveloperTab: View {
                 DeveloperDaemonStatusRows(daemonClient: daemonClient)
             }
 
-            if let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }),
-               assistant.isManaged || assistant.isRemote {
-                healthzInfoRows
-            }
+            healthzInfoRows
         }
     }
 
