@@ -43,6 +43,7 @@ import * as pendingInteractions from "../runtime/pending-interactions.js";
 import { checkIngressForSecrets } from "../security/secret-ingress.js";
 import { registerCancelCallback } from "../signals/cancel.js";
 import { registerConversationUndoCallback } from "../signals/conversation-undo.js";
+import { appendEventToStream } from "../signals/event-stream.js";
 import { registerUserMessageCallback } from "../signals/user-message.js";
 import { getSubagentManager } from "../subagent/index.js";
 import { IngressBlockedError } from "../util/errors.js";
@@ -353,6 +354,16 @@ export class DaemonServer {
           "assistant-events hub subscriber threw during broadcast",
         );
       });
+
+    // Dual-write to file-based stream for cross-process consumers.
+    // No-op when no subscriber files exist for this conversation.
+    if (sessionId) {
+      try {
+        appendEventToStream(sessionId, event);
+      } catch {
+        // Best-effort; file I/O failures must not block the hub chain.
+      }
+    }
   }
 
   broadcast(msg: ServerMessage): void {
