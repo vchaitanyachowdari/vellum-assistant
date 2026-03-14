@@ -27,6 +27,7 @@ import {
   setConversationOriginChannelIfUnset,
   setConversationOriginInterfaceIfUnset,
 } from "../memory/conversation-crud.js";
+import { getOrCreateConversation } from "../memory/conversation-key-store.js";
 import { buildSystemPrompt } from "../prompts/system-prompt.js";
 import { RateLimitProvider } from "../providers/ratelimit.js";
 import {
@@ -42,6 +43,7 @@ import * as pendingInteractions from "../runtime/pending-interactions.js";
 import { checkIngressForSecrets } from "../security/secret-ingress.js";
 import { registerCancelCallback } from "../signals/cancel.js";
 import { registerConversationUndoCallback } from "../signals/conversation-undo.js";
+import { registerUserMessageCallback } from "../signals/user-message.js";
 import { getSubagentManager } from "../subagent/index.js";
 import { IngressBlockedError } from "../util/errors.js";
 import { getLogger } from "../util/logger.js";
@@ -405,6 +407,42 @@ export class DaemonServer {
     registerConversationUndoCallback((sessionId) =>
       undoLastMessage(sessionId, this.handlerContext()),
     );
+
+    registerUserMessageCallback(async (params) => {
+      const { conversationId } = getOrCreateConversation(
+        params.conversationKey,
+      );
+      const session = await this.getOrCreateSession(conversationId);
+      if (session.isProcessing()) {
+        const requestId = crypto.randomUUID();
+        const resolvedChannel = resolveTurnChannel(params.sourceChannel);
+        const resolvedInterface = resolveTurnInterface(params.sourceInterface);
+        const result = session.enqueueMessage(
+          params.content,
+          [],
+          () => {},
+          requestId,
+          undefined,
+          undefined,
+          {
+            userMessageChannel: resolvedChannel,
+            assistantMessageChannel: resolvedChannel,
+            userMessageInterface: resolvedInterface,
+            assistantMessageInterface: resolvedInterface,
+          },
+        );
+        return { accepted: !result.rejected };
+      }
+      await this.persistAndProcessMessage(
+        conversationId,
+        params.content,
+        undefined,
+        undefined,
+        params.sourceChannel,
+        params.sourceInterface,
+      );
+      return { accepted: true };
+    });
 
     this.configWatcher.start(
       () => this.evictSessionsForReload(),
