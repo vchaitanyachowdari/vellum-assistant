@@ -2,7 +2,6 @@
   "entry": ["src/**/*.test.ts", "src/**/__tests__/**/*.ts", "scripts/**/*.ts"],
   "project": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
   "ignore": [
-    "src/browser-extension-relay/client.ts",
     "src/contacts/index.ts",
     "src/daemon/main.ts",
     "src/daemon/tls-certs.ts",
@@ -12,7 +11,6 @@
     "src/playbooks/index.ts",
     "src/runtime/auth/index.ts",
     "src/tools/browser/headless-browser.ts",
-    "src/tools/browser/recording-store.ts",
     "src/tools/tasks/index.ts"
   ],
   "ignoreDependencies": [
