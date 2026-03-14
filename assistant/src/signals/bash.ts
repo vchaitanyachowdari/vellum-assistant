@@ -1,17 +1,17 @@
 /**
  * Handle bash debug signals delivered via signal files from the CLI.
  *
- * The CLI writes JSON to `signals/bash` containing a command to execute.
- * The daemon's ConfigWatcher detects the file change and invokes
- * {@link handleBashSignal}, which reads the payload, spawns the command,
- * and writes the result to `signals/bash-result` for the CLI to pick up.
+ * Each invocation writes JSON to a unique `signals/bash.<requestId>` file.
+ * ConfigWatcher detects the new file and invokes {@link handleBashSignal},
+ * which reads the payload, spawns the command, and writes the result to
+ * `signals/bash.<requestId>.result` for the CLI to pick up.
  *
- * This is a developer debugging tool for inspecting how the daemon
- * environment executes shell commands.
+ * Per-request filenames avoid dropped commands when overlapping invocations
+ * race on the same signal file.
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { getLogger } from "../util/logger.js";
@@ -36,33 +36,44 @@ interface BashSignalResult {
   error?: string;
 }
 
-function writeResult(result: BashSignalResult): void {
+function writeResult(requestId: string, result: BashSignalResult): void {
   try {
     writeFileSync(
-      join(getWorkspaceDir(), "signals", "bash-result"),
+      join(getWorkspaceDir(), "signals", `bash.${requestId}.result`),
       JSON.stringify(result),
     );
   } catch (err) {
-    log.error({ err }, "Failed to write bash signal result");
+    log.error({ err, requestId }, "Failed to write bash signal result");
   }
 }
 
 /**
- * Read the `signals/bash` file, execute the command, and write the result
- * to `signals/bash-result`. Called by ConfigWatcher when the signal file
- * is written or modified.
+ * Read a `signals/bash.<requestId>` file, execute the command, and write
+ * the result to `signals/bash.<requestId>.result`. Called by ConfigWatcher
+ * when a matching signal file is created or modified.
  */
-export function handleBashSignal(): void {
+export function handleBashSignal(filename: string): void {
+  const signalPath = join(getWorkspaceDir(), "signals", filename);
+  let raw: string;
+  try {
+    raw = readFileSync(signalPath, "utf-8");
+  } catch {
+    // File may already be deleted (e.g. re-trigger from our own unlinkSync).
+    return;
+  }
+
   let payload: BashSignalPayload;
   try {
-    const content = readFileSync(
-      join(getWorkspaceDir(), "signals", "bash"),
-      "utf-8",
-    );
-    payload = JSON.parse(content) as BashSignalPayload;
+    payload = JSON.parse(raw) as BashSignalPayload;
   } catch (err) {
-    log.error({ err }, "Failed to read bash signal file");
+    log.error({ err, filename }, "Failed to parse bash signal file");
     return;
+  }
+
+  try {
+    unlinkSync(signalPath);
+  } catch {
+    // Best-effort cleanup; the file may already be gone.
   }
 
   const { requestId, command, timeoutMs } = payload;
@@ -119,7 +130,13 @@ export function handleBashSignal(): void {
       "Bash signal command completed",
     );
 
-    writeResult({ requestId, stdout, stderr, exitCode: code, timedOut });
+    writeResult(requestId, {
+      requestId,
+      stdout,
+      stderr,
+      exitCode: code,
+      timedOut,
+    });
   });
 
   child.on("error", (err) => {
@@ -128,7 +145,7 @@ export function handleBashSignal(): void {
     resultWritten = true;
 
     log.error({ err, requestId }, "Failed to spawn bash signal command");
-    writeResult({
+    writeResult(requestId, {
       requestId,
       stdout: "",
       stderr: "",
