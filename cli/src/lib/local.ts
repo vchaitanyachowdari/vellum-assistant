@@ -803,12 +803,17 @@ export async function startLocalDaemon(
       // macOS app the CLI inherits a huge environment (XPC_SERVICE_NAME,
       // __CFBundleIdentifier, CLAUDE_CODE_ENTRYPOINT, etc.) that can cause
       // the daemon to take 50+ seconds to start instead of ~1s.
-      const bunBinDir = join(homedir(), ".bun", "bin");
+      const home = homedir();
+      const bunBinDir = join(home, ".bun", "bin");
+      const localBinDir = join(home, ".local", "bin");
       const basePath =
         process.env.PATH || "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+      const extraDirs = [bunBinDir, localBinDir].filter(
+        (d) => !basePath.split(":").includes(d),
+      );
       const daemonEnv: Record<string, string> = {
-        HOME: process.env.HOME || homedir(),
-        PATH: `${bunBinDir}:${basePath}`,
+        HOME: process.env.HOME || home,
+        PATH: [...extraDirs, basePath].filter(Boolean).join(":"),
       };
       // Forward optional config env vars the daemon may need
       for (const key of [
