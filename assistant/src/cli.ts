@@ -18,13 +18,16 @@ import {
   updateDaemonText,
   updateStatusText,
 } from "./cli/main-screen.jsx";
+import { loadRawConfig, saveRawConfig } from "./config/loader.js";
 import { shouldAutoStartDaemon } from "./daemon/connection-policy.js";
 import { isHttpHealthy } from "./daemon/daemon-control.js";
+import { getModelInfo } from "./daemon/handlers/config-model.js";
 import { ensureDaemonRunning } from "./daemon/lifecycle.js";
 import type {
   ConfirmationRequest,
   ServerMessage,
 } from "./daemon/message-protocol.js";
+import { MODEL_TO_PROVIDER } from "./daemon/session-slash.js";
 import {
   copyToClipboard,
   extractLastCodeBlock,
@@ -1218,49 +1221,33 @@ export async function startCli(): Promise<void> {
     if (content === "/model" || content.startsWith("/model ")) {
       const modelArg = content.slice("/model".length).trim();
       if (modelArg) {
-        httpSend("/v1/model", {
-          method: "PUT",
-          body: JSON.stringify({ modelId: modelArg }),
-        })
-          .then(async (resp) => {
-            if (resp.ok) {
-              const data = (await resp.json()) as {
-                model: string;
-                provider: string;
-              };
-              process.stdout.write(
-                `\n  Model: ${data.model} (${data.provider})\n\n`,
-              );
-            } else {
-              process.stdout.write("[Failed to set model]\n");
-            }
-            prompt();
-          })
-          .catch(() => {
-            process.stdout.write("[Failed to set model]\n");
-            prompt();
-          });
+        try {
+          const raw = loadRawConfig();
+          const provider = MODEL_TO_PROVIDER[modelArg];
+          raw.model = modelArg;
+          if (provider) raw.provider = provider;
+          saveRawConfig(raw);
+          process.stdout.write(
+            `\n  Model: ${modelArg} (${provider ?? raw.provider})\n\n`,
+          );
+        } catch {
+          process.stdout.write("[Failed to set model]\n");
+        }
       } else {
-        httpSend("/v1/model", { method: "GET" })
-          .then(async (resp) => {
-            if (resp.ok) {
-              const data = (await resp.json()) as {
-                model: string;
-                provider: string;
-              };
-              process.stdout.write(
-                `\n  Model: ${data.model} (${data.provider})\n\n`,
-              );
-            } else {
-              process.stdout.write("[Failed to get model info]\n");
-            }
+        getModelInfo()
+          .then((info) => {
+            process.stdout.write(
+              `\n  Model: ${info.model} (${info.provider})\n\n`,
+            );
             prompt();
           })
           .catch(() => {
             process.stdout.write("[Failed to get model info]\n");
             prompt();
           });
+        return;
       }
+      prompt();
       return;
     }
 
