@@ -235,6 +235,7 @@ struct OnboardingFlowView: View {
     private func performManagedBootstrap() async {
         isBootstrappingManaged = true
         managedBootstrapError = nil
+        state.hasExistingManagedAssistant = false
         log.info("Beginning managed assistant bootstrap")
 
         do {
@@ -244,6 +245,7 @@ struct OnboardingFlowView: View {
             switch outcome {
             case .reusedExisting(let existing):
                 assistant = existing
+                state.hasExistingManagedAssistant = true
                 log.info("Managed bootstrap reused existing assistant \(assistant.id, privacy: .public)")
             case .createdNew(let created):
                 assistant = created
