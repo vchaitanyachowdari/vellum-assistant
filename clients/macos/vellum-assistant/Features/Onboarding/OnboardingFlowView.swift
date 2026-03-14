@@ -271,12 +271,42 @@ struct OnboardingFlowView: View {
             SentryDeviceInfo.updateAssistantTag(assistant.id)
 
             isBootstrappingManaged = false
-            log.info("Managed bootstrap completed for assistant \(assistant.id, privacy: .public); proceeding to app")
-            onComplete()
+            state.isManagedHatch = true
+            state.isHatching = true
+            log.info("Managed bootstrap completed for assistant \(assistant.id, privacy: .public); waiting for daemon connection")
+
+            await awaitManagedAssistantReady(assistantId: assistant.id)
         } catch {
             log.error("Managed bootstrap failed: \(error.localizedDescription)")
             managedBootstrapError = error.localizedDescription
         }
+    }
+
+    /// Polls the gateway health endpoint for the managed assistant until it
+    /// responds successfully or the timeout elapses.
+    private func awaitManagedAssistantReady(assistantId: String) async {
+        let timeout: TimeInterval = 15
+        let start = CFAbsoluteTimeGetCurrent()
+
+        while CFAbsoluteTimeGetCurrent() - start < timeout {
+            do {
+                let response = try await GatewayHTTPClient.get(
+                    path: "assistants/\(assistantId)/healthz",
+                    timeout: 5
+                )
+                if response.isSuccess {
+                    log.info("Managed assistant \(assistantId, privacy: .public) is ready")
+                    state.hatchCompleted = true
+                    return
+                }
+            } catch {}
+
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+        }
+
+        log.warning("Managed assistant \(assistantId, privacy: .public) not ready after \(timeout)s")
+        state.hatchFailed = true
     }
 }
 

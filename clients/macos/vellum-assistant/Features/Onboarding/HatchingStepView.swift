@@ -150,6 +150,7 @@ struct HatchingStepView: View {
 
     private func goBack() {
         state.isHatching = false
+        state.isManagedHatch = false
         state.hatchFailed = false
         state.hatchLogLines = []
         hatchStarted = false
@@ -186,6 +187,9 @@ struct HatchingStepView: View {
     // MARK: - Hatching / Pairing
 
     private func startHatching() {
+        // Managed assistants handle daemon connection in OnboardingFlowView;
+        // this view only provides the animation and failure UI.
+        if state.isManagedHatch { return }
         if isCustomHardware {
             startPairing()
         } else {
