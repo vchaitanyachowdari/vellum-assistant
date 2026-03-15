@@ -28,6 +28,7 @@ struct SettingsDeveloperTab: View {
     @State private var displayNames: [String: String] = [:]
     @State private var awakeStates: [String: Bool] = [:]
     @State private var transitioningStates: Set<String> = []
+    @State private var platformUuid: String?
 
     // -- Advanced dev state --
     @State private var macOSFlagStates: [MacOSFeatureFlagState] = []
@@ -132,6 +133,7 @@ struct SettingsDeveloperTab: View {
                     remoteIdentity = await daemonClient?.fetchRemoteIdentity()
                 }
             }
+            resolvePlatformUuid()
             Task { await loadHatchFlag() }
             Task { await fetchHealthz() }
 
@@ -477,10 +479,38 @@ struct SettingsDeveloperTab: View {
                             .textSelection(.enabled)
                     }
                 }
+
+                if let uuid = platformUuid {
+                    HStack(spacing: VSpacing.xs) {
+                        Text("Platform ID:")
+                            .font(VFont.caption)
+                            .foregroundColor(VColor.contentTertiary)
+                        Text(uuid)
+                            .font(VFont.mono)
+                            .foregroundColor(VColor.contentSecondary)
+                            .textSelection(.enabled)
+                    }
+                }
             }
 
             Spacer()
         }
+    }
+
+    private func resolvePlatformUuid() {
+        guard let assistant = lockfileAssistants.first(where: { $0.assistantId == selectedAssistantId }) else {
+            platformUuid = nil
+            return
+        }
+        let orgId = UserDefaults.standard.string(forKey: "connectedOrganizationId")
+        let userId = authManager.currentUser?.id
+        platformUuid = PlatformAssistantIdResolver.resolve(
+            lockfileAssistantId: assistant.assistantId,
+            isManaged: assistant.isManaged,
+            organizationId: orgId,
+            userId: userId,
+            credentialStorage: KeychainCredentialStorage()
+        )
     }
 
     // MARK: - Switch Assistant
@@ -533,6 +563,7 @@ struct SettingsDeveloperTab: View {
                 }
             }
             .onChange(of: selectedAssistantId) { oldValue, newValue in
+                resolvePlatformUuid()
                 let currentId = UserDefaults.standard.string(forKey: "connectedAssistantId") ?? ""
                 guard newValue != currentId, newValue != oldValue else { return }
                 guard let assistant = lockfileAssistants.first(where: { $0.assistantId == newValue }) else { return }
