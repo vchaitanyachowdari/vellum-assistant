@@ -853,7 +853,5 @@ describe("YAML metadata round-trip", () => {
     expect(skill!.disableModelInvocation).toBe(true);
     expect(skill!.emoji).toBe("🧪");
     expect(skill!.includes).toEqual(["child-a", "child-b"]);
-
-    expect(skill!.metadata).toBeDefined();
   });
 });

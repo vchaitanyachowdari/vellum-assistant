@@ -39,31 +39,6 @@ const log = getLogger("skills");
 const VellumMetadataSchema = z
   .object({
     emoji: z.string().optional(),
-    requires: z
-      .object({
-        bins: z.array(z.string()).optional(),
-        anyBins: z.array(z.string()).optional(),
-        env: z.array(z.string()).optional(),
-        config: z.array(z.string()).optional(),
-      })
-      .optional(),
-    primaryEnv: z.string().optional(),
-    install: z
-      .array(
-        z
-          .object({
-            id: z.string(),
-            kind: z.enum(["brew", "node", "go", "uv", "download"]),
-          })
-          .passthrough(),
-      )
-      .optional(),
-    cli: z
-      .object({
-        command: z.string(),
-        entry: z.string(),
-      })
-      .optional(),
     "display-name": z.string().optional(),
     "user-invocable": z.union([z.boolean(), z.string()]).optional(),
     "disable-model-invocation": z.union([z.boolean(), z.string()]).optional(),
@@ -81,33 +56,8 @@ const SkillMetadataSchema = z
 
 // ─── New interfaces for extended skill metadata ──────────────────────────────
 
-export interface SkillCliSpec {
-  /** CLI command name (e.g. "doordash"). Used as the launcher script name in ~/.vellum/bin/. */
-  command: string;
-  /** Entry point filename relative to the skill directory (e.g. "doordash-entry.ts"). */
-  entry: string;
-}
-
 export interface VellumMetadata {
   emoji?: string;
-  requires?: SkillRequirements;
-  primaryEnv?: string;
-  install?: InstallerSpec[];
-  /** Declares a standalone CLI entry point for this skill. */
-  cli?: SkillCliSpec;
-}
-
-export interface SkillRequirements {
-  bins?: string[];
-  anyBins?: string[];
-  env?: string[];
-  config?: string[];
-}
-
-export interface InstallerSpec {
-  id: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  [key: string]: unknown;
 }
 
 export type SkillSource = "bundled" | "managed" | "workspace" | "extra";
@@ -210,74 +160,6 @@ export interface SkillToolManifestMeta {
    * during catalog load.
    */
   versionHash?: string;
-}
-
-// ─── Requirements check ──────────────────────────────────────────────────────
-
-export interface RequirementsCheckResult {
-  eligible: boolean;
-  missing: {
-    bins?: string[];
-    env?: string[];
-  };
-}
-
-export function checkSkillRequirements(
-  skill: SkillSummary,
-  envOverrides?: Record<string, string>,
-): RequirementsCheckResult {
-  const vellum = skill.metadata;
-  if (!vellum) {
-    return { eligible: true, missing: {} };
-  }
-
-  const missingBins: string[] = [];
-  const missingEnv: string[] = [];
-
-  const requires = vellum.requires;
-  if (!requires) {
-    return { eligible: true, missing: {} };
-  }
-
-  // bins: all must exist
-  if (requires.bins) {
-    for (const bin of requires.bins) {
-      if (!Bun.which(bin)) {
-        missingBins.push(bin);
-      }
-    }
-  }
-
-  // anyBins: at least one must exist
-  if (requires.anyBins && requires.anyBins.length > 0) {
-    const hasAny = requires.anyBins.some((bin) => Bun.which(bin) != null);
-    if (!hasAny) {
-      missingBins.push(`(one of: ${requires.anyBins.join(", ")})`);
-    }
-  }
-
-  // env: check process.env or envOverrides
-  if (requires.env) {
-    const env = envOverrides
-      ? { ...process.env, ...envOverrides }
-      : process.env;
-    for (const key of requires.env) {
-      if (!env[key]) {
-        missingEnv.push(key);
-      }
-    }
-  }
-
-  // config: skip for now (needs config integration from M2)
-
-  const missing: RequirementsCheckResult["missing"] = {};
-  if (missingBins.length > 0) missing.bins = missingBins;
-  if (missingEnv.length > 0) missing.env = missingEnv;
-
-  return {
-    eligible: missingBins.length === 0 && missingEnv.length === 0,
-    missing,
-  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -395,17 +277,6 @@ function parseFrontmatter(
         vellum = raw?.vellum as z.infer<typeof VellumMetadataSchema>;
         if (raw?.vellum && typeof raw.vellum === "object") {
           const vellumRaw = raw.vellum as Record<string, unknown>;
-
-          // Coerce `requires` sub-fields to arrays.
-          if (vellumRaw.requires && typeof vellumRaw.requires === "object") {
-            const req = vellumRaw.requires as Record<string, unknown>;
-            for (const key of ["bins", "anyBins", "env", "config"] as const) {
-              if (req[key] !== undefined && !Array.isArray(req[key])) {
-                req[key] = typeof req[key] === "string" ? [req[key]] : [];
-              }
-            }
-          }
-
           metadata = vellumRaw as unknown as VellumMetadata;
         }
       }
