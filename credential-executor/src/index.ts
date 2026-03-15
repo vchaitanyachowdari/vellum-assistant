@@ -16,6 +16,8 @@
 export {
   CesRpcServer,
   createCesServer,
+  createRunAuthenticatedCommandHandler,
+  registerCommandExecutionHandler,
   createMakeAuthenticatedRequestHandler,
   buildHandlersWithHttp,
 } from "./server.js";
@@ -23,6 +25,7 @@ export type {
   CesServerOptions,
   RpcHandlerRegistry,
   RpcMethodHandler,
+  RunAuthenticatedCommandHandlerOptions,
 } from "./server.js";
 
 export {
@@ -86,6 +89,15 @@ export type {
   TokenRefreshFn,
   LocalMaterialiserDeps,
 } from "./materializers/local.js";
+
+export { executeAuthenticatedCommand } from "./commands/executor.js";
+export type {
+  ExecuteCommandRequest,
+  ExecuteCommandResult,
+  CommandExecutorDeps,
+  MaterializeCredentialFn,
+  MaterializeCredentialResult,
+} from "./commands/executor.js";
 
 export { executeAuthenticatedHttpRequest } from "./http/executor.js";
 export type { HttpExecutorDeps } from "./http/executor.js";
