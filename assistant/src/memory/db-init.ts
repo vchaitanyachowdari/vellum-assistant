@@ -84,6 +84,7 @@ import {
   migrateRenameConversationTypeColumn,
   migrateRenameGuardianVerificationValues,
   migrateRenameInboxThreadStateTable,
+  migrateRenameNotificationThreadColumns,
   migrateRenameVerificationSessionIdColumn,
   migrateRenameVerificationTable,
   migrateRenameVoiceToPhone,
@@ -403,6 +404,9 @@ export function initializeDb(): void {
 
   // 67. Rename thread_type → conversation_type in conversations table
   migrateRenameConversationTypeColumn(database);
+
+  // 68. Rename notification_deliveries thread columns → conversation columns
+  migrateRenameNotificationThreadColumns(database);
 
   validateMigrationState(database);
 
