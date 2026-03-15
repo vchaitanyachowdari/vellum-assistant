@@ -9,6 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -92,7 +93,6 @@ chown -R "$SSH_USER:$SSH_USER" "$SSH_USER_HOME" 2>/dev/null || true
 
 export async function buildStartupScript(
   species: Species,
-  bearerToken: string,
   sshUser: string,
   anthropicApiKey: string,
   instanceName: string,
@@ -111,7 +111,6 @@ export async function buildStartupScript(
 
   if (species === "openclaw") {
     return await buildOpenclawStartupScript(
-      bearerToken,
       sshUser,
       anthropicApiKey,
       timestampRedirect,

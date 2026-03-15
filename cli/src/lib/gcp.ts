@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { unlinkSync, writeFileSync } from "fs";
 import { tmpdir, userInfo } from "os";
 import { join } from "path";
@@ -7,6 +7,7 @@ import { saveAssistantEntry, setActiveAssistant } from "./assistant-config";
 import type { AssistantEntry } from "./assistant-config";
 import { FIREWALL_TAG, GATEWAY_PORT } from "./constants";
 import type { Species } from "./constants";
+import { leaseGuardianToken } from "./guardian-token";
 import { generateRandomSuffix } from "./random-name";
 import { exec, execOutput } from "./step-runner";
 
@@ -447,7 +448,6 @@ export async function hatchGcp(
   name: string | null,
   buildStartupScript: (
     species: Species,
-    bearerToken: string,
     sshUser: string,
     anthropicApiKey: string,
     instanceName: string,
@@ -506,7 +506,6 @@ export async function hatchGcp(
     }
 
     const sshUser = userInfo().username;
-    const bearerToken = randomBytes(32).toString("hex");
     const hatchedBy = process.env.VELLUM_HATCHED_BY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     if (!anthropicApiKey) {
@@ -517,7 +516,6 @@ export async function hatchGcp(
     }
     const startupScript = await buildStartupScript(
       species,
-      bearerToken,
       sshUser,
       anthropicApiKey,
       instanceName,
@@ -653,6 +651,19 @@ export async function hatchGcp(
         } else {
           process.exit(1);
         }
+      }
+
+      try {
+        const tokenData = await leaseGuardianToken(
+          runtimeUrl,
+          instanceName,
+        );
+        gcpEntry.bearerToken = tokenData.accessToken;
+        saveAssistantEntry(gcpEntry);
+      } catch (err) {
+        console.warn(
+          `\u26a0\ufe0f  Could not lease guardian token: ${err instanceof Error ? err.message : err}`,
+        );
       }
 
       console.log("Instance details:");
