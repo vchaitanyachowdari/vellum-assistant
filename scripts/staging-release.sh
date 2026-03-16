@@ -10,9 +10,26 @@
 # Configuration is read from scripts/.env (see scripts/.env.example).
 #
 # Usage:
-#   ./scripts/staging-release.sh
+#   ./scripts/staging-release.sh [--cleanup]
+#
+# Options:
+#   --cleanup   Before installing, SCP the mac-mini-cleanup.sh script to the
+#               mini, run it, then remove it. Resets the environment to a
+#               clean state before installing the staging app.
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+
+RUN_CLEANUP=false
+for arg in "$@"; do
+  case "$arg" in
+    --cleanup) RUN_CLEANUP=true ;;
+    *) echo "Unknown option: $arg"; exit 1 ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
@@ -158,7 +175,29 @@ fi
 rm -rf "$DMG_STAGING"
 
 # ---------------------------------------------------------------------------
-# 3. Upload to Mac mini and install into /Applications
+# 3. (Optional) Run cleanup script on the Mac mini before installing
+# ---------------------------------------------------------------------------
+
+if [ "$RUN_CLEANUP" = true ]; then
+  CLEANUP_SCRIPT="${SCRIPT_DIR}/mac-mini-cleanup.sh"
+  REMOTE_CLEANUP="/tmp/mac-mini-cleanup.sh"
+
+  if [ ! -f "$CLEANUP_SCRIPT" ]; then
+    echo "ERROR: Cleanup script not found at $CLEANUP_SCRIPT"
+    exit 1
+  fi
+
+  echo "Uploading cleanup script to ${SCP_HOST}..."
+  remote_scp "$CLEANUP_SCRIPT" "${SCP_HOST}:${REMOTE_CLEANUP}"
+
+  echo "Running cleanup script on ${SCP_HOST}..."
+  remote_ssh "${SCP_HOST}" "bash '${REMOTE_CLEANUP}'; rc=\$?; rm -f '${REMOTE_CLEANUP}'; exit \$rc"
+
+  echo "Cleanup complete on ${SCP_HOST}."
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Upload to Mac mini and install into /Applications
 # ---------------------------------------------------------------------------
 
 REMOTE_DMG="/tmp/vellum-assistant-staging.dmg"
