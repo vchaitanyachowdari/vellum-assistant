@@ -31,9 +31,9 @@ When a platform is connected (auth test succeeds), always use the messaging API 
 
 Before using any messaging tool, verify that the platform is connected by calling `messaging_auth_test` with the appropriate `platform` parameter. If the call fails with a token/authorization error, follow the steps below.
 
-### Public Ingress (required for Slack and Telegram)
+### Public Ingress (required for Telegram)
 
-Slack and Telegram setup require a publicly reachable URL for OAuth callbacks or webhook delivery. The **public-ingress** skill handles ngrok tunnel setup and persists the URL as `ingress.publicBaseUrl`. Gmail on the desktop app uses a loopback callback and does not require public ingress; the channel path (Path B in the google-oauth-applescript skill) handles public ingress internally when needed.
+Telegram setup requires a publicly reachable URL for webhook delivery. The **public-ingress** skill handles ngrok tunnel setup and persists the URL as `ingress.publicBaseUrl`. Slack uses Socket Mode and does not require public ingress. Gmail on the desktop app uses a loopback callback and does not require public ingress; the channel path (Path B in the google-oauth-applescript skill) handles public ingress internally when needed.
 
 ### Email Connection Flow
 
@@ -58,16 +58,12 @@ When the user asks to "connect my email", "set up email", "manage my email", or 
 
 ### Slack
 
-1. **Try connecting directly first.** Call `credential_store` with `action: "oauth2_connect"` and `service: "slack"`. The tool auto-fills Slack's OAuth endpoints and looks up any previously stored client credentials.
-2. **If it fails because no client_id is found:** The user needs to create a Slack App first. Load the **slack-oauth-setup** skill:
-   - Call `skill_load` with `skill: "slack-oauth-setup"` to load the dependency skill.
-   - Tell the user Slack isn't connected yet and briefly explain what the setup involves, then use `ui_show` with `surface_type: "confirmation"` to ask for permission to start:
-     - **message:** "Ready to set up Slack?"
-     - **detail:** "I'll walk you through creating a Slack App and connecting your workspace. The process takes a few minutes, and I'll ask for your approval before each step."
-     - **confirmLabel:** "Get Started"
-     - **cancelLabel:** "Not Now"
-   - Wait for the user to confirm before proceeding with the setup guide. If they decline, acknowledge and let them know they can set it up later.
-3. **If the user provides client_id and client_secret directly in chat:** Call `credential_store` with `action: "oauth2_connect"`, `service: "slack"`, `client_id`, and `client_secret`. Everything else is auto-filled. Note: Slack always requires a client_secret.
+Slack connects via Socket Mode using a bot token and app-level token (not OAuth). Load the **slack-app-setup** skill, which guides the user through creating a Slack app from a pre-configured manifest, collecting tokens securely, and connecting the bot to their workspace:
+
+- Call `skill_load` with `skill: "slack-app-setup"` to load the dependency skill.
+- Tell the user Slack isn't connected yet and briefly explain what the setup involves, then follow the skill's guided flow.
+
+The slack-app-setup skill handles: manifest-driven app creation, app token and bot token collection via secure prompt (never accept tokens pasted in plaintext chat), token validation, workspace metadata storage, and optional guardian verification. Socket Mode connects automatically once both credentials are stored.
 
 ### Telegram
 
