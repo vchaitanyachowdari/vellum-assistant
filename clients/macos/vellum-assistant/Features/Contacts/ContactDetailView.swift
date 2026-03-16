@@ -9,6 +9,7 @@ struct ContactDetailView: View {
 
     let contact: ContactPayload
     var daemonClient: DaemonClient?
+    var contactClient: ContactClientProtocol = ContactClient()
     var store: SettingsStore?
     var onDelete: (() -> Void)?
     var guardianName: String?
@@ -1008,7 +1009,7 @@ struct ContactDetailView: View {
         isSaving = true
         errorMessage = nil
         do {
-            if let updated = try await daemonClient?.updateContact(
+            if let updated = try await contactClient.updateContact(
                 contactId: displayContact.id,
                 displayName: trimmedName,
                 notes: trimmedNotes
@@ -1111,7 +1112,7 @@ struct ContactDetailView: View {
     }
 
     private func createInviteForChannel(type: String) {
-        guard let daemonClient, inviteInProgress == nil else { return }
+        guard inviteInProgress == nil else { return }
         inviteInProgress = type
         inviteError = nil
         inviteErrorChannel = nil
@@ -1130,7 +1131,7 @@ struct ContactDetailView: View {
                 }
                 let resolvedGuardianName = type == "phone" ? (guardianName ?? "your guardian") : nil
 
-                if let result = try await daemonClient.createInvite(
+                if let result = try await contactClient.createInvite(
                     sourceChannel: type,
                     note: "Invite for \(displayContact.displayName)",
                     contactName: displayContact.displayName,
