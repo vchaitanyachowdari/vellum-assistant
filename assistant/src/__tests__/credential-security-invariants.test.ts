@@ -247,7 +247,6 @@ describe("Invariant 2: no generic plaintext secret read API", () => {
       "media/app-icon-generator.ts", // app icon generation API key lookup
       "media/avatar-router.ts", // avatar generation API key lookup
       "memory/embedding-backend.ts", // embedding backend API key lookup
-      "daemon/lifecycle.ts", // CLI edge token persistence at startup
       "daemon/providers-setup.ts", // provider initialization API key lookup
       "tools/claude-code/claude-code.ts", // Claude Code tool API key lookup
     ]);
