@@ -149,3 +149,22 @@ export const memoryCheckpoints = sqliteTable("memory_checkpoints", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+export const threadStarters = sqliteTable(
+  "thread_starters",
+  {
+    id: text("id").primaryKey(),
+    label: text("label").notNull(),
+    prompt: text("prompt").notNull(),
+    generationBatch: integer("generation_batch").notNull(),
+    scopeId: text("scope_id").notNull().default("default"),
+    sourceMemoryKinds: text("source_memory_kinds"),
+    category: text("category"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_thread_starters_batch").on(
+      table.generationBatch,
+      table.createdAt,
+    ),
+  ],
+);

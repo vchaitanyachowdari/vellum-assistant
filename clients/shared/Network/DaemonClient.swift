@@ -243,6 +243,8 @@ public final class DaemonClient: ObservableObject, DaemonClientProtocol {
 
     // MARK: - Static Helpers
 
+    /// Character set for percent-encoding query-string values, excluding
+    /// query-string metacharacters that would break parameter parsing.
     private static let queryValueAllowed: CharacterSet = {
         var cs = CharacterSet.urlQueryAllowed
         cs.remove(charactersIn: "&=+#")

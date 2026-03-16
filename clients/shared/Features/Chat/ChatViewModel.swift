@@ -14,6 +14,40 @@ import UIKit
 
 private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.vellum.vellum-assistant", category: "ChatViewModel")
 
+// MARK: - Thread Starter Types
+
+public struct ThreadStarter: Identifiable, Codable {
+    public let id: String
+    public let label: String
+    public let prompt: String
+    public let category: String?
+    public let batch: Int
+}
+
+struct ThreadStartersResponse: Codable {
+    let starters: [ThreadStarter]
+    let total: Int
+    let status: String  // "ready", "generating", "empty"
+}
+
+@MainActor
+protocol ThreadStarterClientProtocol {
+    func fetchThreadStarters(limit: Int) async -> ThreadStartersResponse?
+}
+
+@MainActor
+struct ThreadStarterClient: ThreadStarterClientProtocol {
+    nonisolated init() {}
+
+    func fetchThreadStarters(limit: Int) async -> ThreadStartersResponse? {
+        guard let response = try? await GatewayHTTPClient.get(
+            path: "thread-starters",
+            params: ["limit": String(limit)]
+        ), response.isSuccess else { return nil }
+        return try? JSONDecoder().decode(ThreadStartersResponse.self, from: response.data)
+    }
+}
+
 @MainActor
 protocol SurfaceClientProtocol {
     func fetchSurfaceData(surfaceId: String, conversationId: String) async -> SurfaceData?
@@ -317,6 +351,7 @@ public final class ChatViewModel: ObservableObject {
     public let subagentDetailStore = SubagentDetailStore()
     let daemonClient: any DaemonClientProtocol
     private let surfaceClient: any SurfaceClientProtocol = SurfaceClient()
+    private let threadStarterClient: any ThreadStarterClientProtocol = ThreadStarterClient()
     /// Tracks the action submitted for each guardian decision requestId so the
     /// response handler can display the correct resolved state (the server does
     /// not echo back the action in its acknowledgement).
@@ -594,6 +629,12 @@ public final class ChatViewModel: ObservableObject {
     @Published public var isGeneratingGreeting: Bool = false
     /// The in-flight greeting streaming task, stored for cancellation.
     private var greetingTask: Task<Void, Never>?
+
+    // MARK: - Thread Starters
+
+    /// Personalized suggestion chips shown on the empty conversation page.
+    @Published public var threadStarters: [ThreadStarter] = []
+    @Published public var threadStartersLoading: Bool = false
 
     private static let fallbackGreetings = [
         "What are we working on?",
@@ -1285,6 +1326,46 @@ public final class ChatViewModel: ObservableObject {
         greetingTask = nil
         emptyStateGreeting = nil
         isGeneratingGreeting = false
+    }
+
+    private var threadStarterPollTask: Task<Void, Never>?
+
+    /// Fetch personalized thread starters from the daemon for the empty conversation state.
+    public func fetchThreadStarters() {
+        threadStarterPollTask?.cancel()
+        threadStarterPollTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let response = await self.threadStarterClient.fetchThreadStarters(limit: 4)
+            guard !Task.isCancelled else { return }
+
+            if let response, !response.starters.isEmpty {
+                self.threadStarters = response.starters
+                self.threadStartersLoading = false
+                return
+            }
+
+            if response?.status == "generating" {
+                self.threadStartersLoading = true
+                // Poll every 3 seconds until ready
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    let poll = await self.threadStarterClient.fetchThreadStarters(limit: 4)
+                    guard !Task.isCancelled else { return }
+                    if let poll, !poll.starters.isEmpty {
+                        self.threadStarters = poll.starters
+                        self.threadStartersLoading = false
+                        return
+                    }
+                    if poll?.status != "generating" {
+                        self.threadStartersLoading = false
+                        return
+                    }
+                }
+            } else {
+                self.threadStartersLoading = false
+            }
+        }
     }
 
     private func bootstrapConversation(userMessage: String?, attachments: [UserMessageAttachment]?) {

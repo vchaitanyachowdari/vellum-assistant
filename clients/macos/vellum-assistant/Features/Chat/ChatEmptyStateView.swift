@@ -29,6 +29,10 @@ struct ChatEmptyStateView: View {
     var conversationId: UUID?
     var daemonGreeting: String? = nil
     var onRequestGreeting: (() -> Void)? = nil
+    var threadStarters: [ThreadStarter] = []
+    var threadStartersLoading: Bool = false
+    var onSelectStarter: ((ThreadStarter) -> Void)? = nil
+    var onFetchThreadStarters: (() -> Void)? = nil
 
     @State private var visible = false
     @State private var placeholder: String = placeholderTexts.randomElement()!
@@ -118,6 +122,41 @@ struct ChatEmptyStateView: View {
             .opacity(visible ? 1 : 0)
             .offset(y: visible ? 0 : 10)
 
+            if !threadStarters.isEmpty {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: VSpacing.sm) {
+                    ForEach(threadStarters.prefix(4)) { starter in
+                        ThreadStarterChip(label: starter.label, fullPrompt: starter.prompt) {
+                            onSelectStarter?(starter)
+                        }
+                    }
+                }
+                .frame(maxWidth: VSpacing.chatBubbleMaxWidth)
+                .padding(.top, VSpacing.xxxl)
+                .opacity(visible ? 1 : 0)
+                .offset(y: visible ? 0 : 10)
+            } else if threadStartersLoading {
+                HStack(spacing: VSpacing.sm) {
+                    Group {
+                        if let body = appearance.characterBodyShape,
+                           let eyes = appearance.characterEyeStyle,
+                           let color = appearance.characterColor {
+                            AnimatedAvatarView(bodyShape: body, eyeStyle: eyes, color: color, size: 16)
+                                .frame(width: 16, height: 16)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                    Text("Getting some ideas\u{2026}")
+                        .font(VFont.caption)
+                        .foregroundColor(VColor.contentTertiary)
+                }
+                .frame(maxWidth: VSpacing.chatBubbleMaxWidth)
+                .padding(.top, VSpacing.xxxl)
+                .opacity(visible ? 1 : 0)
+                .offset(y: visible ? 0 : 10)
+            }
+
             Spacer()
             Spacer()
             Spacer()
@@ -127,6 +166,7 @@ struct ChatEmptyStateView: View {
             if soulGreeting == nil {
                 onRequestGreeting?()
             }
+            onFetchThreadStarters?()
             withAnimation(.easeOut(duration: 0.5)) {
                 visible = true
             }
@@ -136,6 +176,40 @@ struct ChatEmptyStateView: View {
         }
     }
 
+}
+
+// MARK: - Thread Starter Chip
+
+struct ThreadStarterChip: View {
+    let label: String
+    let fullPrompt: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(VFont.body)
+                .foregroundColor(VColor.contentSecondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, VSpacing.md)
+                .padding(.vertical, VSpacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: VRadius.md)
+                        .fill(isHovered ? VColor.surfaceOverlay : VColor.surfaceActive)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: VRadius.md)
+                        .stroke(VColor.borderBase, lineWidth: 0.5)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: VRadius.md))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
 }
 
 // MARK: - Temporary Chat Empty State
