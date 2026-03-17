@@ -453,7 +453,11 @@ struct SettingsPanel: View {
                     subtitle: "Allows your assistant to click, type, and control apps on your behalf.",
                     granted: accessibilityGranted
                 ) {
-                    _ = PermissionManager.accessibilityStatus(prompt: true)
+                    if accessibilityGranted {
+                        PermissionManager.openAccessibilitySettings()
+                    } else {
+                        _ = PermissionManager.accessibilityStatus(prompt: true)
+                    }
                     startPermissionPolling()
                 }
 
@@ -539,8 +543,7 @@ struct SettingsPanel: View {
 
     private func permissionRow(label: String, subtitle: String, granted: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VToggle(isOn: .constant(granted), label: label, helperText: subtitle)
-                .allowsHitTesting(false)
+            VToggle(isOn: .constant(granted), label: label, helperText: subtitle, interactive: false)
         }
         .buttonStyle(.plain)
     }
