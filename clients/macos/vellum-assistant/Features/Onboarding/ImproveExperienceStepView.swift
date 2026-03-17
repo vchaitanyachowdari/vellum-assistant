@@ -83,12 +83,13 @@ struct ImproveExperienceStepView: View {
                 )
 
                 OnboardingButton(
-                    title: "Accept and Start",
+                    title: "Continue",
                     style: .primary,
                     disabled: !tosAccepted
                 ) {
                     saveAndContinue()
                 }
+                .padding(.top, VSpacing.lg)
 
                 OnboardingButton(title: "Back", style: .ghost) {
                     goBack()

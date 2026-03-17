@@ -30,8 +30,26 @@ struct APIKeyStepView: View {
             .padding(.bottom, VSpacing.xxl)
 
         VStack(spacing: VSpacing.md) {
-            VStack(spacing: VSpacing.md) {
+            VStack(spacing: 0) {
                 hostingCards
+
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://vellum.ai/docs/environments")!)
+                } label: {
+                    HStack(spacing: VSpacing.xs) {
+                        VIconView(.info, size: 14)
+                            .foregroundColor(VColor.contentSecondary)
+                        Text("Need help deciding?")
+                            .font(VFont.caption)
+                            .foregroundColor(VColor.contentSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .accessibilityLabel("Need help deciding?")
+                .padding(.top, VSpacing.sm)
+                .padding(.bottom, VSpacing.xl)
 
                 OnboardingButton(
                     title: continueButtonTitle,
@@ -41,15 +59,11 @@ struct APIKeyStepView: View {
                     handleContinue()
                 }
 
-                OnboardingButton(title: "Need help deciding?", style: .ghostPrimary) {
-                    NSWorkspace.shared.open(URL(string: "https://vellum.ai/docs/environments")!)
-                }
-
                 if !isAuthenticated {
                     OnboardingButton(title: "Back", style: .ghost) {
                         goBack()
                     }
-                    .padding(.top, VSpacing.xs)
+                    .padding(.top, VSpacing.md)
                 }
             }
         }
