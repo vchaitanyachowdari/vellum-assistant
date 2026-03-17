@@ -88,7 +88,10 @@ struct AssistantChannelsDetailView: View {
         .onChange(of: store.channelSetupStatus["phone"]) { _, status in
             if status == nil || status == "not_configured" {
                 voiceSetupExpanded = false
-            } else if status == "ready" || status == "incomplete" {
+            } else if status == "ready" {
+                voiceSetupExpanded = false
+                store.refreshTwilioNumbers()
+            } else if status == "incomplete" {
                 store.refreshTwilioNumbers()
             }
         }
@@ -228,7 +231,13 @@ struct AssistantChannelsDetailView: View {
     private var voiceRow: some View {
         let status = store.channelSetupStatus["phone"]
         return Group {
-            if store.twilioHasCredentials {
+            if voiceSetupExpanded || (status == "incomplete" && store.twilioHasCredentials) {
+                VStack(alignment: .leading, spacing: VSpacing.sm) {
+                    channelRowHeader(name: "Phone Calling", value: nil, status: nil)
+                    voiceCredentialEntry
+                }
+                .padding(.vertical, VSpacing.sm)
+            } else if status == "ready" {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
                     channelRowHeader(
                         name: "Phone Calling",
@@ -257,18 +266,12 @@ struct AssistantChannelsDetailView: View {
                     }
                 }
                 .padding(.vertical, VSpacing.sm)
-            } else if voiceSetupExpanded {
-                VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(name: "Phone Calling", value: nil, status: nil)
-                    voiceCredentialEntry
-                }
-                .padding(.vertical, VSpacing.sm)
             } else {
                 channelRowHeader(
                     name: "Phone Calling",
                     value: nil,
                     status: nil,
-                    setupAction: { voiceSetupExpanded = true }
+                    setupAction: status != "ready" ? { voiceSetupExpanded = true } : nil
                 )
                 .padding(.vertical, VSpacing.sm)
             }
@@ -701,11 +704,11 @@ struct AssistantChannelsDetailView: View {
     private var voiceCard: some View {
         let status = store.channelSetupStatus["phone"]
         return SettingsCard(title: "Phone Calling", subtitle: "Receive and make phone calls via Twilio", showBorder: showCardBorders) {
-            if store.twilioHasCredentials {
+            if status == "ready" {
                 VBadge(label: "Connected", tone: .positive)
             }
         } content: {
-            if store.twilioHasCredentials {
+            if status == "ready" {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
                     Text("Phone Number")
                         .font(VFont.inputLabel)
@@ -728,7 +731,7 @@ struct AssistantChannelsDetailView: View {
                     store.clearTwilioCredentials()
                     store.channelSetupStatus["phone"] = "not_configured"
                 }
-            } else if voiceSetupExpanded {
+            } else if (status == "incomplete" && store.twilioHasCredentials) || voiceSetupExpanded {
                 voiceCredentialEntry
             } else {
                 VButton(label: "Set Up", style: .outlined) {
