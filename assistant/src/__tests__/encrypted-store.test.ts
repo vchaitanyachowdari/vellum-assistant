@@ -1,8 +1,4 @@
-import {
-  createCipheriv,
-  pbkdf2Sync,
-  randomBytes,
-} from "node:crypto";
+import { createCipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -346,7 +342,8 @@ describe("encrypted-store", () => {
       // Create a v1 store using legacy encryption
       const salt = randomBytes(SALT_LENGTH);
       const legacyKey = legacyDeriveKey(salt);
-      const entries: Record<string, { iv: string; tag: string; data: string }> = {};
+      const entries: Record<string, { iv: string; tag: string; data: string }> =
+        {};
       entries["api-key"] = legacyEncrypt("secret-123", legacyKey);
       entries["other-key"] = legacyEncrypt("secret-456", legacyKey);
       writeV1Store(STORE_PATH, salt, entries);
@@ -372,7 +369,8 @@ describe("encrypted-store", () => {
       // Create a v1 store
       const salt = randomBytes(SALT_LENGTH);
       const legacyKey = legacyDeriveKey(salt);
-      const entries: Record<string, { iv: string; tag: string; data: string }> = {};
+      const entries: Record<string, { iv: string; tag: string; data: string }> =
+        {};
       entries["my-key"] = legacyEncrypt("my-value", legacyKey);
       writeV1Store(STORE_PATH, salt, entries);
 
@@ -393,7 +391,8 @@ describe("encrypted-store", () => {
       // Create a v1 store with one good entry and one tampered entry
       const salt = randomBytes(SALT_LENGTH);
       const legacyKey = legacyDeriveKey(salt);
-      const entries: Record<string, { iv: string; tag: string; data: string }> = {};
+      const entries: Record<string, { iv: string; tag: string; data: string }> =
+        {};
       entries["good"] = legacyEncrypt("good-value", legacyKey);
       entries["bad"] = legacyEncrypt("bad-value", legacyKey);
       // Tamper with the bad entry
@@ -423,7 +422,8 @@ describe("encrypted-store", () => {
       // write v1 store + store.key but leave store as v1
       const salt = randomBytes(SALT_LENGTH);
       const legacyKey = legacyDeriveKey(salt);
-      const entries: Record<string, { iv: string; tag: string; data: string }> = {};
+      const entries: Record<string, { iv: string; tag: string; data: string }> =
+        {};
       entries["test-key"] = legacyEncrypt("test-value", legacyKey);
       writeV1Store(STORE_PATH, salt, entries);
 
