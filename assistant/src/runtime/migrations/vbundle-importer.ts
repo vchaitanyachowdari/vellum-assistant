@@ -19,6 +19,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
@@ -178,6 +179,31 @@ export function commitImport(options: ImportCommitOptions): ImportCommitResult {
           err instanceof Error ? err.message : String(err)
         }`,
       };
+    }
+  }
+
+  // Step 1d: Clear stale prompt files if the bundle contains prompts entries.
+  // Only the known prompt filenames are accepted, so delete each one that
+  // currently exists to avoid stale prompts surviving a restore.
+  const hasPromptsEntries = manifest.files.some((f) =>
+    f.path.startsWith("prompts/"),
+  );
+  if (hasPromptsEntries) {
+    const PROMPT_FILENAMES = [
+      "IDENTITY.md",
+      "SOUL.md",
+      "USER.md",
+      "UPDATES.md",
+    ];
+    for (const filename of PROMPT_FILENAMES) {
+      const diskPath = pathResolver.resolve(`prompts/${filename}`);
+      if (diskPath && existsSync(diskPath)) {
+        try {
+          unlinkSync(diskPath);
+        } catch {
+          // Non-fatal — the file will be overwritten or left as-is
+        }
+      }
     }
   }
 

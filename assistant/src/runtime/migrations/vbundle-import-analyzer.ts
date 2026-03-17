@@ -19,6 +19,14 @@ import { join, resolve } from "node:path";
 
 import type { ManifestType } from "./vbundle-validator.js";
 
+/** Only these prompt filenames are accepted during import. */
+const ALLOWED_PROMPT_FILENAMES = new Set([
+  "IDENTITY.md",
+  "SOUL.md",
+  "USER.md",
+  "UPDATES.md",
+]);
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -114,23 +122,41 @@ export class DefaultPathResolver implements PathResolver {
           return join(this.protectedDir, "trust.json");
         }
         if (archivePath.startsWith("skills/") && this.skillsDir) {
-          const resolved = resolve(this.skillsDir, archivePath.slice("skills/".length));
+          const resolved = resolve(
+            this.skillsDir,
+            archivePath.slice("skills/".length),
+          );
           const skillsRoot = resolve(this.skillsDir);
-          if (resolved !== skillsRoot && !resolved.startsWith(skillsRoot + "/")) {
+          if (
+            resolved !== skillsRoot &&
+            !resolved.startsWith(skillsRoot + "/")
+          ) {
             return null;
           }
           return resolved;
         }
         if (archivePath.startsWith("prompts/") && this.workspaceDir) {
-          const resolved = resolve(this.workspaceDir, archivePath.slice("prompts/".length));
+          const filename = archivePath.slice("prompts/".length);
+          // Only allow known prompt filenames — reject anything else to
+          // prevent a crafted bundle from writing arbitrary workspace files.
+          if (!ALLOWED_PROMPT_FILENAMES.has(filename)) {
+            return null;
+          }
+          const resolved = resolve(this.workspaceDir, filename);
           const workspaceRoot = resolve(this.workspaceDir);
-          if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + "/")) {
+          if (
+            resolved !== workspaceRoot &&
+            !resolved.startsWith(workspaceRoot + "/")
+          ) {
             return null;
           }
           return resolved;
         }
         if (archivePath.startsWith("hooks/") && this.hooksDir) {
-          const resolved = resolve(this.hooksDir, archivePath.slice("hooks/".length));
+          const resolved = resolve(
+            this.hooksDir,
+            archivePath.slice("hooks/".length),
+          );
           const hooksRoot = resolve(this.hooksDir);
           if (resolved !== hooksRoot && !resolved.startsWith(hooksRoot + "/")) {
             return null;

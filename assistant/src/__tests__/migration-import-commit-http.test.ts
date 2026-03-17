@@ -770,10 +770,7 @@ describe("commitImport — directory clearing", () => {
   afterEach(() => {
     // Clean up skills/hooks dirs and any backup dirs
     for (const entry of readdirSync(testDir)) {
-      if (
-        entry.startsWith("skills") ||
-        entry.startsWith("hooks")
-      ) {
+      if (entry.startsWith("skills") || entry.startsWith("hooks")) {
         rmSync(join(testDir, entry), { recursive: true, force: true });
       }
     }
@@ -795,7 +792,10 @@ describe("commitImport — directory clearing", () => {
       undefined,
       skillsDir,
     );
-    const result = commitImport({ archiveData: vbundle, pathResolver: resolver });
+    const result = commitImport({
+      archiveData: vbundle,
+      pathResolver: resolver,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -826,7 +826,10 @@ describe("commitImport — directory clearing", () => {
       undefined,
       skillsDir,
     );
-    const result = commitImport({ archiveData: vbundle, pathResolver: resolver });
+    const result = commitImport({
+      archiveData: vbundle,
+      pathResolver: resolver,
+    });
 
     expect(result.ok).toBe(true);
 
@@ -841,7 +844,10 @@ describe("commitImport — directory clearing", () => {
       existsSync(join(testDir, backupDirs[0], "old-skill", "SKILL.md")),
     ).toBe(true);
     expect(
-      readFileSync(join(testDir, backupDirs[0], "old-skill", "SKILL.md"), "utf8"),
+      readFileSync(
+        join(testDir, backupDirs[0], "old-skill", "SKILL.md"),
+        "utf8",
+      ),
     ).toBe("old content");
   });
 
@@ -855,7 +861,10 @@ describe("commitImport — directory clearing", () => {
       { path: "skills/my-skill/SKILL.md", data: skillData },
     ]);
 
-    const result = commitImport({ archiveData: vbundle, pathResolver: resolver });
+    const result = commitImport({
+      archiveData: vbundle,
+      pathResolver: resolver,
+    });
 
     // Skills entry is skipped (no disk target), but import succeeds
     expect(result.ok).toBe(true);
@@ -884,7 +893,10 @@ describe("commitImport — directory clearing", () => {
       undefined,
       hooksDir,
     );
-    const result = commitImport({ archiveData: vbundle, pathResolver: resolver });
+    const result = commitImport({
+      archiveData: vbundle,
+      pathResolver: resolver,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -911,7 +923,10 @@ describe("commitImport — directory clearing", () => {
       undefined,
       skillsDir,
     );
-    const result = commitImport({ archiveData: vbundle, pathResolver: resolver });
+    const result = commitImport({
+      archiveData: vbundle,
+      pathResolver: resolver,
+    });
 
     expect(result.ok).toBe(true);
 

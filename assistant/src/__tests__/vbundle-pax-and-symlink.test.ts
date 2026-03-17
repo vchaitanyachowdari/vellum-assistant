@@ -64,7 +64,10 @@ mock.module("../config/env.js", () => ({
   setIngressPublicBaseUrl: () => {},
 }));
 
-import { buildExportVBundle, buildVBundle } from "../runtime/migrations/vbundle-builder.js";
+import {
+  buildExportVBundle,
+  buildVBundle,
+} from "../runtime/migrations/vbundle-builder.js";
 import { validateVBundle } from "../runtime/migrations/vbundle-validator.js";
 
 afterAll(() => {
@@ -83,7 +86,11 @@ describe("PAX extended header round-trip", () => {
   test("builder + validator round-trip for paths >100 bytes", () => {
     // Create a path that exceeds the 100-byte ustar limit
     const longPath =
-      "skills/" + "a".repeat(50) + "/" + "b".repeat(50) + "/very-long-skill-name-that-exceeds-limit.md";
+      "skills/" +
+      "a".repeat(50) +
+      "/" +
+      "b".repeat(50) +
+      "/very-long-skill-name-that-exceeds-limit.md";
     expect(new TextEncoder().encode(longPath).length).toBeGreaterThan(100);
 
     const fileData = new TextEncoder().encode("# Long path skill content");
@@ -179,8 +186,8 @@ describe("buildExportVBundle with symlinked skills directory", () => {
     expect(result.is_valid).toBe(true);
 
     // The skill file should be in the manifest
-    const skillFile = manifest.files.find((f) =>
-      f.path === "skills/my-skill.md",
+    const skillFile = manifest.files.find(
+      (f) => f.path === "skills/my-skill.md",
     );
     expect(skillFile).toBeDefined();
   });
