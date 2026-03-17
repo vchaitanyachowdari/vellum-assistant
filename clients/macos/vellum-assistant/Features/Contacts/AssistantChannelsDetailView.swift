@@ -33,6 +33,17 @@ struct AssistantChannelsDetailView: View {
     // Disconnect confirmation
     @State private var channelToDisconnect: String? = nil
 
+    // Collapsible row expanded states
+    @State private var telegramRowExpanded: Bool = false
+    @State private var slackRowExpanded: Bool = false
+    @State private var voiceRowExpanded: Bool = false
+    @State private var emailRowExpanded: Bool = false
+
+    // Auto-focus first input when setup expands
+    @FocusState private var isTelegramTokenFocused: Bool
+    @FocusState private var isSlackBotTokenFocused: Bool
+    @FocusState private var isVoiceAccountSidFocused: Bool
+    @State private var focusTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -78,16 +89,19 @@ struct AssistantChannelsDetailView: View {
         .onChange(of: store.channelSetupStatus["telegram"]) { _, status in
             if status == nil || status == "not_configured" {
                 telegramSetupExpanded = false
+                telegramRowExpanded = false
             }
         }
         .onChange(of: store.channelSetupStatus["slack"]) { _, status in
             if status == nil || status == "not_configured" {
                 slackChannelSetupExpanded = false
+                slackRowExpanded = false
             }
         }
         .onChange(of: store.channelSetupStatus["phone"]) { _, status in
             if status == nil || status == "not_configured" {
                 voiceSetupExpanded = false
+                voiceRowExpanded = false
             } else if status == "ready" {
                 voiceSetupExpanded = false
                 store.refreshTwilioNumbers()
@@ -100,6 +114,25 @@ struct AssistantChannelsDetailView: View {
                 store.refreshAssistantEmail()
             }
         }
+        .onChange(of: telegramSetupExpanded) { _, expanded in
+            if expanded { scheduleFocus { isTelegramTokenFocused = true } }
+        }
+        .onChange(of: slackChannelSetupExpanded) { _, expanded in
+            if expanded { scheduleFocus { isSlackBotTokenFocused = true } }
+        }
+        .onChange(of: voiceSetupExpanded) { _, expanded in
+            if expanded { scheduleFocus { isVoiceAccountSidFocused = true } }
+        }
+        .onChange(of: telegramRowExpanded) { _, expanded in
+            if expanded { scheduleFocus { isTelegramTokenFocused = true } }
+        }
+        .onChange(of: slackRowExpanded) { _, expanded in
+            if expanded { scheduleFocus { isSlackBotTokenFocused = true } }
+        }
+        .onChange(of: voiceRowExpanded) { _, expanded in
+            if expanded { scheduleFocus { isVoiceAccountSidFocused = true } }
+        }
+        .onDisappear { focusTask?.cancel() }
     }
 
     // MARK: - Layouts
@@ -160,31 +193,34 @@ struct AssistantChannelsDetailView: View {
 
     private var telegramRow: some View {
         let status = store.channelSetupStatus["telegram"]
+        let isConnected = status == "ready"
+        let value: String? = {
+            if isConnected, let username = store.telegramBotUsername, !username.isEmpty {
+                return "@\(username)"
+            }
+            return nil
+        }()
         return Group {
-            if telegramSetupExpanded || (status == "incomplete" && store.telegramHasBotToken) {
-                VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(name: "Telegram", value: nil, status: nil)
-                    telegramCredentialEntry
-                }
-                .padding(.vertical, VSpacing.sm)
-            } else {
-                let value: String? = {
-                    if status == "ready", let username = store.telegramBotUsername, !username.isEmpty {
-                        return "@\(username)"
-                    }
-                    return nil
-                }()
+            VStack(alignment: .leading, spacing: VSpacing.sm) {
                 channelRowHeader(
                     name: "Telegram",
                     channelKey: "telegram",
                     value: value,
-                    status: status == "ready" ? .connected : nil,
-                    setupAction: status != "ready" ? { telegramSetupExpanded = true } : nil,
-                    hasDisconnect: status == "ready",
+                    isConnected: isConnected,
+                    isExpanded: $telegramRowExpanded,
+                    setupAction: !isConnected && !telegramSetupExpanded && !(status == "incomplete" && store.telegramHasBotToken) ? {
+                        telegramRowExpanded = true
+                        telegramSetupExpanded = true
+                    } : nil,
                     isDisconnectDisabled: store.telegramSaveInProgress
                 )
-                .padding(.vertical, VSpacing.sm)
+                if isConnected && telegramRowExpanded {
+                    telegramCredentialEntry
+                } else if !isConnected && (telegramSetupExpanded || (status == "incomplete" && store.telegramHasBotToken)) {
+                    telegramCredentialEntry
+                }
             }
+            .padding(.vertical, VSpacing.sm)
 
             if let error = store.telegramError {
                 VInlineMessage(error)
@@ -195,31 +231,34 @@ struct AssistantChannelsDetailView: View {
 
     private var slackRow: some View {
         let status = store.channelSetupStatus["slack"]
+        let isConnected = status == "ready"
+        let value: String? = {
+            if isConnected, let username = store.slackChannelBotUsername, !username.isEmpty {
+                return "@\(username)"
+            }
+            return nil
+        }()
         return Group {
-            if slackChannelSetupExpanded || (status == "incomplete" && (store.slackChannelHasBotToken || store.slackChannelHasAppToken)) {
-                VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(name: "Slack", value: nil, status: nil)
-                    slackChannelCredentialEntry
-                }
-                .padding(.vertical, VSpacing.sm)
-            } else {
-                let value: String? = {
-                    if status == "ready", let username = store.slackChannelBotUsername, !username.isEmpty {
-                        return "@\(username)"
-                    }
-                    return nil
-                }()
+            VStack(alignment: .leading, spacing: VSpacing.sm) {
                 channelRowHeader(
                     name: "Slack",
                     channelKey: "slack",
                     value: value,
-                    status: status == "ready" ? .connected : nil,
-                    setupAction: status != "ready" ? { slackChannelSetupExpanded = true } : nil,
-                    hasDisconnect: status == "ready",
+                    isConnected: isConnected,
+                    isExpanded: $slackRowExpanded,
+                    setupAction: !isConnected && !slackChannelSetupExpanded && !(status == "incomplete" && (store.slackChannelHasBotToken || store.slackChannelHasAppToken)) ? {
+                        slackRowExpanded = true
+                        slackChannelSetupExpanded = true
+                    } : nil,
                     isDisconnectDisabled: store.slackChannelSaveInProgress
                 )
-                .padding(.vertical, VSpacing.sm)
+                if isConnected && slackRowExpanded {
+                    slackChannelCredentialEntry
+                } else if !isConnected && (slackChannelSetupExpanded || (status == "incomplete" && (store.slackChannelHasBotToken || store.slackChannelHasAppToken))) {
+                    slackChannelCredentialEntry
+                }
             }
+            .padding(.vertical, VSpacing.sm)
 
             if let error = store.slackChannelError {
                 VInlineMessage(error)
@@ -230,23 +269,32 @@ struct AssistantChannelsDetailView: View {
 
     private var voiceRow: some View {
         let status = store.channelSetupStatus["phone"]
-        return Group {
-            if voiceSetupExpanded || (status == "incomplete" && store.twilioHasCredentials) {
-                VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(name: "Phone Calling", value: nil, status: nil)
-                    voiceCredentialEntry
+        let isConnected = store.twilioHasCredentials
+        let value: String? = {
+            if isConnected, let phone = store.twilioPhoneNumber {
+                // Display friendlyName when available for proper formatting
+                if let match = store.twilioNumbers.first(where: { $0.phoneNumber == phone }) {
+                    return match.friendlyName
                 }
-                .padding(.vertical, VSpacing.sm)
-            } else if status == "ready" {
-                VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(
-                        name: "Phone Calling",
-                        channelKey: "phone",
-                        value: store.twilioPhoneNumber,
-                        status: .connected,
-                        hasDisconnect: true,
-                        isDisconnectDisabled: store.twilioSaveInProgress
-                    )
+                return phone
+            }
+            return nil
+        }()
+        return Group {
+            VStack(alignment: .leading, spacing: VSpacing.sm) {
+                channelRowHeader(
+                    name: "Phone Calling",
+                    channelKey: "phone",
+                    value: value,
+                    isConnected: isConnected,
+                    isExpanded: $voiceRowExpanded,
+                    setupAction: !isConnected && !voiceSetupExpanded ? {
+                        voiceRowExpanded = true
+                        voiceSetupExpanded = true
+                    } : nil,
+                    isDisconnectDisabled: store.twilioSaveInProgress
+                )
+                if isConnected && voiceRowExpanded {
                     HStack(spacing: VSpacing.sm) {
                         Text("Phone Number")
                             .font(VFont.caption)
@@ -264,17 +312,11 @@ struct AssistantChannelsDetailView: View {
                         )
                         .frame(maxWidth: 280)
                     }
+                } else if !isConnected && voiceSetupExpanded {
+                    voiceCredentialEntry
                 }
-                .padding(.vertical, VSpacing.sm)
-            } else {
-                channelRowHeader(
-                    name: "Phone Calling",
-                    value: nil,
-                    status: nil,
-                    setupAction: status != "ready" ? { voiceSetupExpanded = true } : nil
-                )
-                .padding(.vertical, VSpacing.sm)
             }
+            .padding(.vertical, VSpacing.sm)
 
             if let warning = store.twilioWarning {
                 VInlineMessage(warning, tone: .warning)
@@ -288,30 +330,20 @@ struct AssistantChannelsDetailView: View {
     }
 
     private var emailRow: some View {
-        Group {
-            if let email = store.assistantEmail {
-                channelRowHeader(
-                    name: "Email",
-                    value: email,
-                    status: .connected
-                )
-                .padding(.vertical, VSpacing.sm)
-            } else {
-                channelRowHeader(
-                    name: "Email",
-                    value: "Not configured",
-                    status: nil
-                )
-                .padding(.vertical, VSpacing.sm)
-            }
+        let isConnected = store.assistantEmail != nil
+        let value: String? = store.assistantEmail ?? "Not configured"
+        return Group {
+            channelRowHeader(
+                name: "Email",
+                value: value,
+                isConnected: isConnected,
+                isExpanded: $emailRowExpanded
+            )
+            .padding(.vertical, VSpacing.sm)
         }
     }
 
     // MARK: - Channel Row Header (3-column layout)
-
-    private enum ChannelStatus {
-        case connected
-    }
 
     private func channelIcon(for name: String) -> VIcon {
         switch name {
@@ -327,9 +359,9 @@ struct AssistantChannelsDetailView: View {
         name: String,
         channelKey: String? = nil,
         value: String?,
-        status: ChannelStatus?,
+        isConnected: Bool,
+        isExpanded: Binding<Bool>,
         setupAction: (() -> Void)? = nil,
-        hasDisconnect: Bool = false,
         isDisconnectDisabled: Bool = false
     ) -> some View {
         ChannelRowHeader(
@@ -337,31 +369,34 @@ struct AssistantChannelsDetailView: View {
             icon: channelIcon(for: name),
             channelKey: channelKey,
             value: value,
-            status: status,
+            isConnected: isConnected,
+            isExpanded: isExpanded,
             setupAction: setupAction,
-            hasDisconnect: hasDisconnect,
             isDisconnectDisabled: isDisconnectDisabled,
             onDisconnect: { key in channelToDisconnect = key }
         )
     }
 
-    /// A single channel row with hover-reveal kebab menu for disconnect.
+    /// A single channel row header with collapsible chevron and inline disconnect button.
     private struct ChannelRowHeader: View {
         let name: String
         var icon: VIcon = .messageCircle
         var channelKey: String?
         let value: String?
-        let status: ChannelStatus?
+        let isConnected: Bool
+        @Binding var isExpanded: Bool
+        var isExpandable: Bool = true
         var setupAction: (() -> Void)?
-        var hasDisconnect: Bool = false
         var isDisconnectDisabled: Bool = false
         var onDisconnect: ((String) -> Void)?
 
-        @State private var isHovered = false
-
         var body: some View {
             HStack(spacing: VSpacing.sm) {
-                // Left: channel icon + name
+                // Left: chevron (when connected) + channel icon + name
+                if isConnected {
+                    VIconView(isExpanded ? .chevronUp : .chevronDown, size: 12)
+                        .foregroundColor(isExpandable ? VColor.contentTertiary : VColor.contentDisabled)
+                }
                 VIconView(icon, size: 16)
                     .foregroundColor(VColor.contentSecondary)
                 Text(name)
@@ -380,40 +415,29 @@ struct AssistantChannelsDetailView: View {
                 Spacer()
 
                 // Right: status or action
-                if let status, status == .connected {
-                    VButton(label: "Connected", leftIcon: VIcon.check.rawValue, style: .primary) {}
+                if isConnected {
+                    VButton(label: "Connected", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
+
+                    // Inline disconnect X button
+                    if let channelKey {
+                        VButton(label: "Disconnect", iconOnly: VIcon.x.rawValue, style: .danger, isDisabled: isDisconnectDisabled, tooltip: "Disconnect") {
+                            onDisconnect?(channelKey)
+                        }
+                    }
                 } else if let setupAction {
                     VButton(label: "Set up", style: .outlined) {
                         setupAction()
                     }
                 }
-
-                // Trailing kebab menu — only takes space when disconnect is available
-                if hasDisconnect, let channelKey {
-                    Menu {
-                        Button(role: .destructive) {
-                            onDisconnect?(channelKey)
-                        } label: {
-                            Label("Disconnect", systemImage: "trash")
-                        }
-                        .disabled(isDisconnectDisabled)
-                    } label: {
-                        VIconView(.ellipsis, size: 14)
-                            .foregroundColor(VColor.contentTertiary)
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .opacity(isHovered ? 1 : 0)
-                    .animation(VAnimation.fast, value: isHovered)
-                }
             }
             .frame(minHeight: 36)
             .contentShape(Rectangle())
-            .onHover { hovering in
-                isHovered = hovering
+            .onTapGesture {
+                if isConnected && isExpandable {
+                    withAnimation(VAnimation.fast) {
+                        isExpanded.toggle()
+                    }
+                }
             }
         }
     }
@@ -433,18 +457,31 @@ struct AssistantChannelsDetailView: View {
             store.clearTelegramCredentials()
             telegramBotTokenText = ""
             telegramSetupExpanded = false
+            telegramRowExpanded = false
             store.channelSetupStatus["telegram"] = "not_configured"
         case "slack":
             store.clearSlackChannelConfig()
             slackChannelBotTokenInput = ""
             slackChannelAppTokenInput = ""
             slackChannelSetupExpanded = false
+            slackRowExpanded = false
             store.channelSetupStatus["slack"] = "not_configured"
         case "phone":
             store.clearTwilioCredentials()
+            voiceRowExpanded = false
             store.channelSetupStatus["phone"] = "not_configured"
         default:
             break
+        }
+    }
+
+    /// Schedule a cancellable focus action after a short delay.
+    private func scheduleFocus(_ action: @escaping @MainActor () -> Void) {
+        focusTask?.cancel()
+        focusTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            action()
         }
     }
 
@@ -494,7 +531,7 @@ struct AssistantChannelsDetailView: View {
         let status = store.channelSetupStatus["telegram"]
         return SettingsCard(title: "Telegram", subtitle: "Message your assistant from Telegram", showBorder: showCardBorders) {
             if status == "ready" {
-                VBadge(label: "Connected", tone: .positive)
+                VButton(label: "Connected", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
             }
         } content: {
             if status == "ready" {
@@ -557,6 +594,7 @@ struct AssistantChannelsDetailView: View {
                 .vInputStyle()
                 .font(VFont.body)
                 .foregroundColor(VColor.contentDefault)
+                .focused($isTelegramTokenFocused)
 
             Text("Get your bot token from @BotFather on Telegram")
                 .font(VFont.caption)
@@ -578,6 +616,7 @@ struct AssistantChannelsDetailView: View {
                     }
                     VButton(label: "Cancel", style: .ghost) {
                         telegramSetupExpanded = false
+                        telegramRowExpanded = false
                         telegramBotTokenText = ""
                     }
                 }
@@ -591,7 +630,7 @@ struct AssistantChannelsDetailView: View {
         let status = store.channelSetupStatus["slack"]
         return SettingsCard(title: "Slack", subtitle: "Message your assistant from Slack", showBorder: showCardBorders) {
             if status == "ready" {
-                VBadge(label: "Connected", tone: .positive)
+                VButton(label: "Connected", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
             }
         } content: {
             if status == "ready" {
@@ -656,6 +695,7 @@ struct AssistantChannelsDetailView: View {
                 .vInputStyle()
                 .font(VFont.body)
                 .foregroundColor(VColor.contentDefault)
+                .focused($isSlackBotTokenFocused)
 
             SecureField("App Token (xapp-...)", text: $slackChannelAppTokenInput)
                 .vInputStyle()
@@ -691,6 +731,7 @@ struct AssistantChannelsDetailView: View {
                     }
                     VButton(label: "Cancel", style: .ghost) {
                         slackChannelSetupExpanded = false
+                        slackRowExpanded = false
                         slackChannelBotTokenInput = ""
                         slackChannelAppTokenInput = ""
                     }
@@ -704,8 +745,8 @@ struct AssistantChannelsDetailView: View {
     private var voiceCard: some View {
         let status = store.channelSetupStatus["phone"]
         return SettingsCard(title: "Phone Calling", subtitle: "Receive and make phone calls via Twilio", showBorder: showCardBorders) {
-            if status == "ready" {
-                VBadge(label: "Connected", tone: .positive)
+            if store.twilioHasCredentials {
+                VButton(label: "Connected", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
             }
         } content: {
             if status == "ready" {
@@ -762,6 +803,7 @@ struct AssistantChannelsDetailView: View {
                 .vInputStyle()
                 .font(VFont.body)
                 .foregroundColor(VColor.contentDefault)
+                .focused($isVoiceAccountSidFocused)
 
             SecureField("Auth Token", text: $voiceAuthTokenText)
                 .vInputStyle()
@@ -793,6 +835,7 @@ struct AssistantChannelsDetailView: View {
                     }
                     VButton(label: "Cancel", style: .ghost) {
                         voiceSetupExpanded = false
+                        voiceRowExpanded = false
                         voiceAccountSidText = ""
                         voiceAuthTokenText = ""
                     }

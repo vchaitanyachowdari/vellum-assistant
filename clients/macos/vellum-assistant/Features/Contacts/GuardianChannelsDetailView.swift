@@ -7,7 +7,7 @@ import VellumAssistantShared
 /// Mirrors the card-per-channel layout of AssistantChannelsDetailView.
 @MainActor
 struct GuardianChannelsDetailView: View {
-    private static let allChannelTypes = ["telegram", "phone", "slack"]
+    private static let allChannelTypes = ["slack", "telegram", "phone"]
     private static let verificationSupportedChannels: Set<String> = ["telegram", "phone", "slack"]
 
     let contact: ContactPayload
@@ -30,6 +30,7 @@ struct GuardianChannelsDetailView: View {
     @State private var actionInProgress: String? = nil
     @State private var errorMessage: String? = nil
     @State private var errorChannelType: String? = nil
+    @State private var channelToRevoke: (id: String, type: String)? = nil
 
     var displayContact: ContactPayload {
         currentContact ?? contact
@@ -44,6 +45,26 @@ struct GuardianChannelsDetailView: View {
             } else {
                 content
             }
+        }
+        .confirmationDialog(
+            "Revoke \(channelLabel(for: channelToRevoke?.type ?? "")) access?",
+            isPresented: Binding(
+                get: { channelToRevoke != nil },
+                set: { if !$0 { channelToRevoke = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Revoke", role: .destructive) {
+                if let revoke = channelToRevoke {
+                    disconnectChannel(channelId: revoke.id, type: revoke.type)
+                }
+                channelToRevoke = nil
+            }
+            Button("Cancel", role: .cancel) {
+                channelToRevoke = nil
+            }
+        } message: {
+            Text("This will revoke the verified connection for this channel. The contact will need to re-verify to use this channel again.")
         }
         .onAppear {
             startVerificationCountdownTimer()
@@ -166,16 +187,29 @@ struct GuardianChannelsDetailView: View {
                 && !setupExpanded.contains(type)
 
             VStack(alignment: .leading, spacing: VSpacing.sm) {
-                // Row header: icon + name + inline status/action
                 HStack(spacing: VSpacing.sm) {
                     VIconView(channelIcon(for: type), size: 16)
                         .foregroundColor(isVerified ? VColor.systemPositiveStrong : VColor.contentSecondary)
                     Text(channelLabel(for: type))
                         .font(VFont.bodyMedium)
                         .foregroundColor(VColor.contentDefault)
+
+                    if isVerified, let channel = activeChannel {
+                        Text(channel.address)
+                            .font(VFont.body)
+                            .foregroundColor(VColor.contentSecondary)
+                            .lineLimit(1)
+                    }
+
                     Spacer()
+
                     if isVerified {
-                        VBadge(label: "Verified", tone: .positive)
+                        VButton(label: "Verified", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
+                        if let channel = activeChannel, daemonClient != nil {
+                            VButton(label: "Revoke", iconOnly: VIcon.x.rawValue, style: .danger, tooltip: "Revoke access") {
+                                channelToRevoke = (id: channel.id, type: type)
+                            }
+                        }
                     } else if needsSetup {
                         VButton(label: "Set up", style: .outlined) {
                             dismissedChannels.remove(type)
@@ -185,8 +219,7 @@ struct GuardianChannelsDetailView: View {
                 }
                 .frame(minHeight: 36)
 
-                // Expanded content below the row (verification flow or verified identity)
-                if !needsSetup {
+                if !needsSetup && !isVerified {
                     channelCardContent(type: type, existingChannels: existingChannels, activeChannel: activeChannel, isVerified: isVerified)
                 }
             }
@@ -394,7 +427,8 @@ struct GuardianChannelsDetailView: View {
                 },
                 botUsername: store.telegramBotUsername,
                 phoneNumber: store.twilioPhoneNumber,
-                showLabel: false
+                showLabel: false,
+                autoFocus: true
             )
         }
     }
