@@ -1304,6 +1304,10 @@ public final class SettingsStore: ObservableObject {
             )
             twilioSaveInProgress = false
             self.fetchChannelSetupStatus()
+            // Fetch available phone numbers immediately after saving credentials
+            if twilioHasCredentials {
+                self.refreshTwilioNumbers()
+            }
         }
     }
 
@@ -1316,6 +1320,10 @@ public final class SettingsStore: ObservableObject {
                 method: "DELETE",
                 path: "integrations/twilio/credentials"
             )
+            // Clear any warning/error set by the response — "credentials not
+            // configured" is obvious after the user just disconnected.
+            twilioWarning = nil
+            twilioError = nil
             twilioSaveInProgress = false
             self.fetchChannelSetupStatus()
         }
@@ -1374,6 +1382,10 @@ public final class SettingsStore: ObservableObject {
                 applyNumbers: true
             )
             twilioListInProgress = false
+            // Auto-select the first available number if none is assigned
+            if twilioPhoneNumber == nil, let first = twilioNumbers.first {
+                assignTwilioNumber(phoneNumber: first.phoneNumber)
+            }
         }
     }
 

@@ -228,11 +228,20 @@ struct AssistantChannelsDetailView: View {
     private var voiceRow: some View {
         let status = store.channelSetupStatus["phone"]
         return Group {
-            if voiceSetupExpanded || (status == "incomplete" && store.twilioHasCredentials) {
+            if store.twilioHasCredentials {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(name: "Phone Calling", value: nil, status: nil)
-                    // Phone number dropdown when credentials exist
-                    if store.twilioHasCredentials {
+                    channelRowHeader(
+                        name: "Phone Calling",
+                        channelKey: "phone",
+                        value: store.twilioPhoneNumber,
+                        status: .connected,
+                        hasDisconnect: true,
+                        isDisconnectDisabled: store.twilioSaveInProgress
+                    )
+                    HStack(spacing: VSpacing.sm) {
+                        Text("Phone Number")
+                            .font(VFont.caption)
+                            .foregroundColor(VColor.contentSecondary)
                         VDropdown(
                             placeholder: "Not Set",
                             selection: Binding(
@@ -244,41 +253,14 @@ struct AssistantChannelsDetailView: View {
                             options: store.twilioNumbers.map { (label: $0.friendlyName, value: $0.phoneNumber) },
                             emptyValue: ""
                         )
-                        .frame(maxWidth: 360)
+                        .frame(maxWidth: 280)
                     }
-                    voiceCredentialEntry
                 }
                 .padding(.vertical, VSpacing.sm)
-            } else if status == "ready" {
+            } else if voiceSetupExpanded {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    channelRowHeader(
-                        name: "Phone Calling",
-                        channelKey: "phone",
-                        value: store.twilioPhoneNumber,
-                        status: .connected,
-                        hasDisconnect: true,
-                        isDisconnectDisabled: store.twilioSaveInProgress
-                    )
-                    // Phone number dropdown in connected state
-                    if store.twilioHasCredentials {
-                        HStack(spacing: VSpacing.sm) {
-                            Text("Phone Number")
-                                .font(VFont.caption)
-                                .foregroundColor(VColor.contentSecondary)
-                            VDropdown(
-                                placeholder: "Not Set",
-                                selection: Binding(
-                                    get: { store.twilioPhoneNumber ?? "" },
-                                    set: { newValue in
-                                        store.assignTwilioNumber(phoneNumber: newValue)
-                                    }
-                                ),
-                                options: store.twilioNumbers.map { (label: $0.friendlyName, value: $0.phoneNumber) },
-                                emptyValue: ""
-                            )
-                            .frame(maxWidth: 280)
-                        }
-                    }
+                    channelRowHeader(name: "Phone Calling", value: nil, status: nil)
+                    voiceCredentialEntry
                 }
                 .padding(.vertical, VSpacing.sm)
             } else {
@@ -396,39 +378,34 @@ struct AssistantChannelsDetailView: View {
 
                 // Right: status or action
                 if let status, status == .connected {
-                    VBadge(label: "Connected", tone: .positive)
+                    VButton(label: "Connected", leftIcon: VIcon.check.rawValue, style: .primary) {}
                 } else if let setupAction {
                     VButton(label: "Set up", style: .outlined) {
                         setupAction()
                     }
                 }
 
-                // Trailing column — fixed width for alignment across all rows
-                Group {
-                    if hasDisconnect, let channelKey {
-                        Menu {
-                            Button(role: .destructive) {
-                                onDisconnect?(channelKey)
-                            } label: {
-                                Label("Disconnect", systemImage: "trash")
-                            }
-                            .disabled(isDisconnectDisabled)
+                // Trailing kebab menu — only takes space when disconnect is available
+                if hasDisconnect, let channelKey {
+                    Menu {
+                        Button(role: .destructive) {
+                            onDisconnect?(channelKey)
                         } label: {
-                            VIconView(.ellipsis, size: 14)
-                                .foregroundColor(VColor.contentTertiary)
-                                .frame(width: 24, height: 24)
-                                .contentShape(Rectangle())
+                            Label("Disconnect", systemImage: "trash")
                         }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .opacity(isHovered ? 1 : 0)
-                        .animation(VAnimation.fast, value: isHovered)
-                    } else {
-                        Color.clear
+                        .disabled(isDisconnectDisabled)
+                    } label: {
+                        VIconView(.ellipsis, size: 14)
+                            .foregroundColor(VColor.contentTertiary)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .opacity(isHovered ? 1 : 0)
+                    .animation(VAnimation.fast, value: isHovered)
                 }
-                .frame(width: 24)
             }
             .frame(minHeight: 36)
             .contentShape(Rectangle())
@@ -724,12 +701,11 @@ struct AssistantChannelsDetailView: View {
     private var voiceCard: some View {
         let status = store.channelSetupStatus["phone"]
         return SettingsCard(title: "Phone Calling", subtitle: "Receive and make phone calls via Twilio", showBorder: showCardBorders) {
-            if status == "ready" {
+            if store.twilioHasCredentials {
                 VBadge(label: "Connected", tone: .positive)
             }
         } content: {
-            // Phone number dropdown: show when credentials are configured
-            if (status == "ready" || status == "incomplete") && store.twilioHasCredentials {
+            if store.twilioHasCredentials {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
                     Text("Phone Number")
                         .font(VFont.inputLabel)
@@ -747,14 +723,12 @@ struct AssistantChannelsDetailView: View {
                     )
                     .frame(maxWidth: 360)
                 }
-            }
 
-            if status == "ready" {
                 VButton(label: "Disconnect", style: .dangerGhost, isDisabled: store.twilioSaveInProgress) {
                     store.clearTwilioCredentials()
                     store.channelSetupStatus["phone"] = "not_configured"
                 }
-            } else if (status == "incomplete" && store.twilioHasCredentials) || voiceSetupExpanded {
+            } else if voiceSetupExpanded {
                 voiceCredentialEntry
             } else {
                 VButton(label: "Set Up", style: .outlined) {

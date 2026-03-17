@@ -69,7 +69,11 @@ struct GuardianChannelsDetailView: View {
     private var visibleTypes: [String] {
         Self.allChannelTypes.filter { type in
             let hasExisting = displayContact.channels.contains { $0.type == type && $0.status != "revoked" }
-            return hasExisting || channelReadiness[type]?.ready == true
+            let readiness = channelReadiness[type]
+            let isAvailable = readiness?.ready == true
+                || readiness?.setupStatus == "ready"
+                || readiness?.setupStatus == "incomplete"
+            return hasExisting || isAvailable
         }
     }
 
@@ -130,44 +134,77 @@ struct GuardianChannelsDetailView: View {
 
     // MARK: - Channel Card
 
+    private func channelIcon(for type: String) -> VIcon {
+        switch type {
+        case "slack": return .hash
+        case "telegram": return .send
+        case "phone": return .phone
+        default: return .messageCircle
+        }
+    }
+
     @ViewBuilder
     private func channelCard(for type: String) -> some View {
-        SettingsCard(title: channelLabel(for: type), subtitle: channelSubtitle(for: type), showBorder: showCardBorders) {
-            let existingChannels = displayContact.channels.filter { $0.type == type && $0.status != "revoked" }
-            let activeChannel = existingChannels.first(where: { $0.status == "active" && $0.verifiedAt != nil })
-                ?? existingChannels.first
-            if let channel = activeChannel, channel.status == "active", channel.verifiedAt != nil {
-                VBadge(label: "Verified", tone: .positive)
-            } else if store?.channelVerificationState(for: type).verified == true {
-                VBadge(label: "Verified", tone: .positive)
+        let existingChannels = displayContact.channels.filter { $0.type == type && $0.status != "revoked" }
+        let activeChannel = existingChannels.first(where: { $0.status == "active" && $0.verifiedAt != nil })
+            ?? existingChannels.first
+        let isVerified = (activeChannel?.status == "active" && activeChannel?.verifiedAt != nil)
+            || store?.channelVerificationState(for: type).verified == true
+
+        if showCardBorders {
+            SettingsCard(title: channelLabel(for: type), subtitle: channelSubtitle(for: type), showBorder: true) {
+                if isVerified {
+                    VBadge(label: "Verified", tone: .positive)
+                }
+            } content: {
+                channelCardContent(type: type, existingChannels: existingChannels, activeChannel: activeChannel, isVerified: isVerified)
             }
-        } content: {
-            let existingChannels = displayContact.channels.filter { $0.type == type && $0.status != "revoked" }
+        } else {
+            let needsSetup = !isVerified
+                && store?.channelVerificationState(for: type).verified != true
+                && (existingChannels.isEmpty || dismissedChannels.contains(type))
+                && !setupExpanded.contains(type)
 
-            // Prefer the latest verified channel to avoid showing stale status when
-            // multiple non-revoked rows exist for the same channel type.
-            let activeChannel = existingChannels.first(where: { $0.status == "active" && $0.verifiedAt != nil })
-                ?? existingChannels.first
+            VStack(alignment: .leading, spacing: VSpacing.sm) {
+                // Row header: icon + name + inline status/action
+                HStack(spacing: VSpacing.sm) {
+                    VIconView(channelIcon(for: type), size: 16)
+                        .foregroundColor(isVerified ? VColor.systemPositiveStrong : VColor.contentSecondary)
+                    Text(channelLabel(for: type))
+                        .font(VFont.bodyMedium)
+                        .foregroundColor(VColor.contentDefault)
+                    Spacer()
+                    if isVerified {
+                        VBadge(label: "Verified", tone: .positive)
+                    } else if needsSetup {
+                        VButton(label: "Set up", style: .outlined) {
+                            dismissedChannels.remove(type)
+                            setupExpanded.insert(type)
+                        }
+                    }
+                }
+                .frame(minHeight: 36)
 
-            if let channel = activeChannel, channel.status == "active", channel.verifiedAt != nil {
-                // Verified channel — show rich identity + disconnect
-                verifiedChannelContent(channel: channel, type: type)
-            } else if store?.channelVerificationState(for: type).verified == true
-                || (!existingChannels.isEmpty && !dismissedChannels.contains(type))
-                || setupExpanded.contains(type) {
-                // Existing unverified channel or user clicked "Set Up" — show verification flow
-                verificationFlowContent(for: type)
-            } else {
-                // Channel ready on assistant but not yet started — show "Set Up"
-                VButton(label: "Set Up", style: .outlined) {
-                    dismissedChannels.remove(type)
-                    setupExpanded.insert(type)
+                // Expanded content below the row (verification flow or verified identity)
+                if !needsSetup {
+                    channelCardContent(type: type, existingChannels: existingChannels, activeChannel: activeChannel, isVerified: isVerified)
                 }
             }
+        }
+    }
 
-            if errorChannelType == type, let errorMessage {
-                VInlineMessage(errorMessage)
-            }
+    @ViewBuilder
+    private func channelCardContent(type: String, existingChannels: [ContactChannelPayload], activeChannel: ContactChannelPayload?, isVerified: Bool) -> some View {
+        if let channel = activeChannel, isVerified {
+            verifiedChannelContent(channel: channel, type: type)
+        } else if store?.channelVerificationState(for: type).verified == true
+            || (!existingChannels.isEmpty && !dismissedChannels.contains(type))
+            || setupExpanded.contains(type) {
+            verificationFlowContent(for: type)
+        }
+
+        if errorChannelType == type, let errorMessage {
+            VInlineMessage(errorMessage)
         }
     }
 
@@ -386,7 +423,7 @@ struct GuardianChannelsDetailView: View {
         case "telegram": return "Telegram"
         case "email": return "Email"
         case "whatsapp": return "WhatsApp"
-        case "phone": return "Phone"
+        case "phone": return "Phone Calling"
         case "slack": return "Slack"
         default: return type.capitalized
         }
