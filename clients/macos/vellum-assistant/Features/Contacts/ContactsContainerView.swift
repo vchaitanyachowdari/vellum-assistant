@@ -20,6 +20,8 @@ struct ContactsContainerView: View {
     @StateObject private var viewModel: ContactsViewModel
     @State private var selection: ContactSelection? = .assistant
 
+    private let contactClient: ContactClientProtocol = ContactClient()
+
     init(daemonClient: DaemonClient?, store: SettingsStore? = nil, isEmailEnabled: Bool = false) {
         self.daemonClient = daemonClient
         self.store = store
@@ -29,19 +31,15 @@ struct ContactsContainerView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Left pane: contacts list
-            ScrollView {
-                ContactsListView(
-                    viewModel: viewModel,
-                    selection: $selection
-                )
-                .padding(VSpacing.lg)
-            }
+            // Left pane: contacts list (full height, internal scrolling)
+            ContactsListView(
+                viewModel: viewModel,
+                selection: $selection
+            )
+            .padding(VSpacing.lg)
             .frame(width: 320)
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(VColor.surfaceOverlay)
-
-            Divider()
-                .background(VColor.borderBase)
 
             // Right pane: detail, loading, or placeholder
             if viewModel.isLoading && viewModel.contacts.isEmpty {
@@ -58,31 +56,13 @@ struct ContactsContainerView: View {
             } else {
                 switch selection {
                 case .assistant:
-                    if let store {
-                        AssistantChannelsDetailView(store: store, daemonClient: daemonClient, isEmailEnabled: isEmailEnabled)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    } else {
-                        VStack(spacing: VSpacing.md) {
-                            ProgressView()
-                                .controlSize(.regular)
-                            Text("Loading assistant channels...")
-                                .font(VFont.body)
-                                .foregroundColor(VColor.contentSecondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(VColor.surfaceOverlay)
-                    }
+                    assistantDetailView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 case .contact(let contactId):
                     if let contact = viewModel.contacts.first(where: { $0.id == contactId }) {
                         if contact.role == "guardian" {
-                            GuardianChannelsDetailView(
-                                contact: contact,
-                                daemonClient: daemonClient,
-                                store: store,
-                                onSelectAssistant: { selection = .assistant }
-                            )
-                            .id(contactId)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                            guardianDetailView(contact: contact)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         } else {
                             ContactDetailView(
                                 contact: contact,
@@ -123,15 +103,129 @@ struct ContactsContainerView: View {
                 selection = .assistant
             }
         }
-        .sheet(isPresented: $viewModel.isCreatingContact) {
-            ContactCreateView(
-                daemonClient: daemonClient,
-                isPresented: $viewModel.isCreatingContact,
-                onCreated: { contact in
-                    selection = .contact(contact.id)
-                    viewModel.loadContacts()
+        .onChange(of: viewModel.isCreatingContact) { _, isCreating in
+            if isCreating {
+                Task {
+                    await createPlaceholderContact()
                 }
+            }
+        }
+    }
+
+    @State private var cachedAssistantName: String = AssistantDisplayName.placeholder
+
+    /// Guardian detail — name+tag header card, then existing channel content in a second card.
+    private func guardianDetailView(contact: ContactPayload) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: VSpacing.lg) {
+                // Header card matching assistant/human style
+                VStack(alignment: .leading, spacing: VSpacing.xs) {
+                    HStack(spacing: VSpacing.sm) {
+                        Text(contact.displayName)
+                            .font(VFont.display)
+                            .foregroundColor(VColor.contentDefault)
+                        Text("Guardian")
+                            .font(VFont.captionMedium)
+                            .foregroundColor(VColor.contentDefault)
+                            .padding(.horizontal, VSpacing.sm)
+                            .padding(.vertical, VSpacing.xs)
+                            .background(VColor.tagGuardian)
+                            .clipShape(RoundedRectangle(cornerRadius: VRadius.sm + 2))
+                    }
+                    Text("\(contact.interactionCount) interaction\(contact.interactionCount == 1 ? "" : "s")")
+                        .font(VFont.caption)
+                        .foregroundColor(VColor.contentTertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(VSpacing.lg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VRadius.xl)
+                        .stroke(VColor.borderDisabled, lineWidth: 2)
+                )
+
+                // Channels card
+                GuardianChannelsDetailView(
+                    contact: contact,
+                    daemonClient: daemonClient,
+                    store: store,
+                    onSelectAssistant: { selection = .assistant }
+                )
+                .padding(VSpacing.lg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VRadius.xl)
+                        .stroke(VColor.borderDisabled, lineWidth: 2)
+                )
+            }
+            .padding(VSpacing.lg)
+        }
+        .background(VColor.surfaceOverlay)
+        .id(contact.id)
+    }
+
+    /// Assistant detail with the same card header as human contacts, plus
+    /// the existing AssistantChannelsDetailView for channel configuration.
+    @ViewBuilder
+    private var assistantDetailView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: VSpacing.lg) {
+                // Header card matching human contact style
+                VStack(alignment: .leading, spacing: VSpacing.md) {
+                    HStack(spacing: VSpacing.sm) {
+                        Text(cachedAssistantName)
+                            .font(VFont.display)
+                            .foregroundColor(VColor.contentDefault)
+                        Text("Assistant")
+                            .font(VFont.captionMedium)
+                            .foregroundColor(VColor.contentDefault)
+                            .padding(.horizontal, VSpacing.sm)
+                            .padding(.vertical, VSpacing.xs)
+                            .background(VColor.tagAssistant)
+                            .clipShape(RoundedRectangle(cornerRadius: VRadius.sm + 2))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(VSpacing.lg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VRadius.xl)
+                        .stroke(VColor.borderDisabled, lineWidth: 2)
+                )
+
+                // Channels section in bordered card
+                if let store {
+                    AssistantChannelsDetailView(store: store, daemonClient: daemonClient, isEmailEnabled: isEmailEnabled)
+                        .padding(VSpacing.lg)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: VRadius.xl)
+                                .stroke(VColor.borderDisabled, lineWidth: 2)
+                        )
+                }
+            }
+            .padding(VSpacing.lg)
+        }
+        .background(VColor.surfaceOverlay)
+        .task {
+            cachedAssistantName = AssistantDisplayName.firstUserFacing(from: [IdentityInfo.load()?.name]) ?? AssistantDisplayName.placeholder
+        }
+    }
+
+    /// Creates a placeholder contact with a default name, selects it in the
+    /// list, and shows the detail pane so the user can edit inline.
+    private func createPlaceholderContact() async {
+        viewModel.isCreatingContact = false
+        do {
+            let contact = try await contactClient.createContact(
+                displayName: "New Contact",
+                notes: nil,
+                channels: nil
             )
+            if let contact {
+                viewModel.loadContacts()
+                // Small delay to let the contacts list refresh before selecting
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                selection = .contact(contact.id)
+            }
+        } catch {
+            // Silently fail — user can retry via the + button
         }
     }
 }

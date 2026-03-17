@@ -111,7 +111,8 @@ import type { ContentBlock, Message } from "../providers/types.js";
 
 /** Extract text from a content block, asserting it is a text block. */
 function textOf(block: ContentBlock): string {
-  if (block.type !== "text") throw new Error(`Expected text block, got ${block.type}`);
+  if (block.type !== "text")
+    throw new Error(`Expected text block, got ${block.type}`);
   return block.text;
 }
 
@@ -346,12 +347,42 @@ describe("Memory Retriever Pipeline", () => {
     insertConversation(db, otherConv, now - 120_000);
 
     // Messages and segments in the active conversation (should be filtered)
-    insertMessage(db, "msg-a1", activeConv, "user", "hello world", now - 50_000);
-    insertSegment(db, "seg-a1", "msg-a1", activeConv, "user", "hello world", now - 50_000);
+    insertMessage(
+      db,
+      "msg-a1",
+      activeConv,
+      "user",
+      "hello world",
+      now - 50_000,
+    );
+    insertSegment(
+      db,
+      "seg-a1",
+      "msg-a1",
+      activeConv,
+      "user",
+      "hello world",
+      now - 50_000,
+    );
 
     // Messages and segments in a different conversation (should be kept)
-    insertMessage(db, "msg-o1", otherConv, "user", "hello world from other", now - 100_000);
-    insertSegment(db, "seg-o1", "msg-o1", otherConv, "user", "hello world from other", now - 100_000);
+    insertMessage(
+      db,
+      "msg-o1",
+      otherConv,
+      "user",
+      "hello world from other",
+      now - 100_000,
+    );
+    insertSegment(
+      db,
+      "seg-o1",
+      "msg-o1",
+      otherConv,
+      "user",
+      "hello world from other",
+      now - 100_000,
+    );
 
     // Query from the active conversation
     const result = await buildMemoryRecall(
@@ -381,21 +412,81 @@ describe("Memory Retriever Pipeline", () => {
 
     // Older messages (compacted out of context window) — their segments
     // should NOT be filtered because the model can no longer see them
-    insertMessage(db, "msg-old-1", convId, "user", "old discussion topic", now - 100_000);
-    insertMessage(db, "msg-old-2", convId, "assistant", "old response", now - 90_000);
+    insertMessage(
+      db,
+      "msg-old-1",
+      convId,
+      "user",
+      "old discussion topic",
+      now - 100_000,
+    );
+    insertMessage(
+      db,
+      "msg-old-2",
+      convId,
+      "assistant",
+      "old response",
+      now - 90_000,
+    );
 
     // Newer messages (still in context window) — their segments should
     // be filtered since the model can still see them
-    insertMessage(db, "msg-new-1", convId, "user", "recent discussion", now - 50_000);
-    insertMessage(db, "msg-new-2", convId, "assistant", "recent response", now - 40_000);
+    insertMessage(
+      db,
+      "msg-new-1",
+      convId,
+      "user",
+      "recent discussion",
+      now - 50_000,
+    );
+    insertMessage(
+      db,
+      "msg-new-2",
+      convId,
+      "assistant",
+      "recent response",
+      now - 40_000,
+    );
 
     // Segments from compacted messages (should survive filtering)
-    insertSegment(db, "seg-old-1", "msg-old-1", convId, "user", "old discussion topic details", now - 100_000);
-    insertSegment(db, "seg-old-2", "msg-old-2", convId, "assistant", "old response details", now - 90_000);
+    insertSegment(
+      db,
+      "seg-old-1",
+      "msg-old-1",
+      convId,
+      "user",
+      "old discussion topic details",
+      now - 100_000,
+    );
+    insertSegment(
+      db,
+      "seg-old-2",
+      "msg-old-2",
+      convId,
+      "assistant",
+      "old response details",
+      now - 90_000,
+    );
 
     // Segments from in-context messages (should be filtered)
-    insertSegment(db, "seg-new-1", "msg-new-1", convId, "user", "recent discussion details", now - 50_000);
-    insertSegment(db, "seg-new-2", "msg-new-2", convId, "assistant", "recent response details", now - 40_000);
+    insertSegment(
+      db,
+      "seg-new-1",
+      "msg-new-1",
+      convId,
+      "user",
+      "recent discussion details",
+      now - 50_000,
+    );
+    insertSegment(
+      db,
+      "seg-new-2",
+      "msg-new-2",
+      convId,
+      "assistant",
+      "recent response details",
+      now - 40_000,
+    );
 
     const result = await buildMemoryRecall(
       "discussion topic",

@@ -83,13 +83,15 @@ function insertStarter(overrides: {
   getSqlite().run(
     `INSERT INTO conversation_starters (id, label, prompt, category, generation_batch, scope_id, card_type, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'chip', ?)`,
-    uuid(),
-    overrides.label,
-    overrides.prompt,
-    overrides.category,
-    overrides.batch ?? 1,
-    overrides.scopeId ?? "default",
-    overrides.createdAt ?? now,
+    [
+      uuid(),
+      overrides.label,
+      overrides.prompt,
+      overrides.category,
+      overrides.batch ?? 1,
+      overrides.scopeId ?? "default",
+      overrides.createdAt ?? now,
+    ],
   );
 }
 
@@ -97,10 +99,7 @@ function insertMemoryItem(scopeId = "default") {
   getSqlite().run(
     `INSERT INTO memory_items (id, kind, subject, statement, importance, status, scope_id, first_seen_at, updated_at)
      VALUES (?, 'fact', 'test', 'test statement', 5, 'active', ?, ?, ?)`,
-    uuid(),
-    scopeId,
-    Date.now(),
-    Date.now(),
+    [uuid(), scopeId, Date.now(), Date.now()],
   );
 }
 

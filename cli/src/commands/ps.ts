@@ -265,9 +265,7 @@ async function getDockerContainerState(
   }
 }
 
-async function getDockerProcesses(
-  entry: AssistantEntry,
-): Promise<TableRow[]> {
+async function getDockerProcesses(entry: AssistantEntry): Promise<TableRow[]> {
   const res = dockerResourceNames(entry.assistantId);
 
   const containers: { name: string; containerName: string }[] = [
