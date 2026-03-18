@@ -668,7 +668,7 @@ describe("access-request-helper unit tests", () => {
       (d) => d.destinationChannel === "telegram",
     );
 
-    // Same-channel routing skips vellum delivery entirely — no fallback record
+    // Guardian IS verified on telegram → sameChannelOnly, no vellum fallback
     expect(vellum).toBeUndefined();
     expect(telegram).toBeDefined();
     expect(telegram!.destinationChatId).toBe("guardian-chat-456");
