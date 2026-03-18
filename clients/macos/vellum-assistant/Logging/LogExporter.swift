@@ -895,7 +895,6 @@ enum LogExporter {
             "windowZoomLevel",
             "collectUsageData",
             "sendDiagnostics",
-            "selectedImageGenModel",
         ]
 
         let boolKeys = [
