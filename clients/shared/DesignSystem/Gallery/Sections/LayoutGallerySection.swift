@@ -8,6 +8,52 @@ struct LayoutGallerySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: VSpacing.xxl) {
+            // MARK: - VModal
+            GallerySectionHeader(
+                title: "VModal",
+                description: "Standardized modal container with title, optional subtitle, scrollable content, and optional footer."
+            )
+
+            VCard(padding: 0) {
+                VModal(title: "Set PIN", subtitle: "This is a subtitle.") {
+                    VStack(alignment: .leading, spacing: VSpacing.lg) {
+                        VStack(alignment: .leading, spacing: VSpacing.xs) {
+                            Text("Tool Name")
+                                .font(VFont.caption)
+                                .foregroundColor(VColor.contentTertiary)
+                            Text("Select a Tool")
+                                .font(VFont.body)
+                                .foregroundColor(VColor.contentSecondary)
+                                .padding(VSpacing.sm)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(VColor.surfaceActive)
+                                .clipShape(RoundedRectangle(cornerRadius: VRadius.md))
+                        }
+                        VStack(alignment: .leading, spacing: VSpacing.xs) {
+                            Text("Tool Name")
+                                .font(VFont.caption)
+                                .foregroundColor(VColor.contentTertiary)
+                            Text("Select a Tool")
+                                .font(VFont.body)
+                                .foregroundColor(VColor.contentSecondary)
+                                .padding(VSpacing.sm)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(VColor.surfaceActive)
+                                .clipShape(RoundedRectangle(cornerRadius: VRadius.md))
+                        }
+                    }
+                } footer: {
+                    HStack {
+                        Spacer()
+                        VButton(label: "Cancel", style: .outlined) {}
+                        VButton(label: "Confirm", style: .primary) {}
+                    }
+                }
+                .frame(width: 360, height: 320)
+            }
+
+            Divider().background(VColor.borderBase).padding(.vertical, VSpacing.md)
+
             // MARK: - VToolbar
             GallerySectionHeader(
                 title: "VToolbar",
