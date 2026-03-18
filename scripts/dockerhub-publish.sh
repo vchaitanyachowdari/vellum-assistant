@@ -11,6 +11,9 @@
 #   - QEMU registered for multi-arch builds (the script sets this up)
 #   - Authenticated to Docker Hub: `docker login`
 #
+# All configuration has sensible defaults baked in. Override any value by
+# setting the corresponding environment variable before invoking the script.
+#
 # Usage:
 #   ./scripts/dockerhub-publish.sh --version <semver>
 #   ./scripts/dockerhub-publish.sh --version <semver> --services assistant,gateway
@@ -25,6 +28,8 @@
 #   --dry-run             Build images but do not push to Docker Hub
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ---------------------------------------------------------------------------
 # Parse flags
@@ -76,18 +81,20 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration (override any value via environment variables)
 # ---------------------------------------------------------------------------
 
-DOCKERHUB_ORG="vellumai"
-PLATFORMS="linux/amd64,linux/arm64"
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DOCKERHUB_ORG="${DOCKERHUB_ORG:-vellumai}"
+DOCKERHUB_USER="${DOCKERHUB_USER:-}"
+DOCKERHUB_ACCESS_TOKEN="${DOCKERHUB_ACCESS_TOKEN:-}"
+PLATFORMS="${DOCKERHUB_PLATFORMS:-linux/amd64,linux/arm64}"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Image name mapping: service → Docker Hub image name
 declare -A IMAGE_NAMES=(
-  [assistant]="vellum-assistant"
-  [gateway]="vellum-gateway"
-  [credential-executor]="vellum-credential-executor"
+  [assistant]="${ASSISTANT_IMAGE_NAME:-vellum-assistant}"
+  [gateway]="${GATEWAY_IMAGE_NAME:-vellum-gateway}"
+  [credential-executor]="${CREDENTIAL_EXECUTOR_IMAGE_NAME:-vellum-credential-executor}"
 )
 
 # Build context mapping: service → build context (relative to repo root)
@@ -135,10 +142,13 @@ if ! docker buildx version &>/dev/null; then
   exit 1
 fi
 
-# Verify Docker Hub authentication
-if ! docker info 2>/dev/null | grep -q "Username"; then
+# Log into Docker Hub if credentials are provided
+if [[ -n "$DOCKERHUB_USER" && -n "$DOCKERHUB_ACCESS_TOKEN" ]]; then
+  echo "  Logging into Docker Hub as ${DOCKERHUB_USER}..."
+  echo "$DOCKERHUB_ACCESS_TOKEN" | docker login --username "$DOCKERHUB_USER" --password-stdin
+elif ! docker info 2>/dev/null | grep -q "Username"; then
   echo "WARNING: You may not be logged into Docker Hub."
-  echo "  Run: docker login"
+  echo "  Set DOCKERHUB_USER and DOCKERHUB_ACCESS_TOKEN, or run: docker login"
   echo "  Continuing anyway — the push step will fail if not authenticated."
 fi
 
