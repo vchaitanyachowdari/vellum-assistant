@@ -83,18 +83,28 @@ final class SecretPromptManager {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
         panel.identifier = NSUserInterfaceItemIdentifier("SecureCredentialPanel")
 
-        // Position centered over the main app window, or screen center as fallback
+        // Position at the top-right corner of the app window so the panel
+        // stays near the content the user is working with, even when the
+        // window is not full-screen. Falls back to screen top-right when
+        // no app window is visible.
+        let margin: CGFloat = 20
         let appWindow = NSApp.windows.first { $0 is TitleBarZoomableWindow && $0.isVisible }
-        if let anchor = appWindow {
-            let anchorFrame = anchor.frame
-            let x = anchorFrame.midX - panelWidth / 2
-            let y = anchorFrame.midY - panelHeight / 2
-            panel.setFrameOrigin(NSPoint(x: x, y: y))
-        } else if let screen = NSScreen.main {
-            let screenFrame = screen.visibleFrame
-            let x = screenFrame.midX - panelWidth / 2
-            let y = screenFrame.midY - panelHeight / 2
-            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        let screen = appWindow?.screen ?? NSScreen.main
+        if let screenFrame = screen?.visibleFrame {
+            let x: CGFloat
+            let y: CGFloat
+            if let anchor = appWindow {
+                x = anchor.frame.maxX - panelWidth - margin
+                y = anchor.frame.maxY - panelHeight - margin
+            } else {
+                x = screenFrame.maxX - panelWidth - margin
+                y = screenFrame.maxY - panelHeight - margin
+            }
+            // Clamp within visible screen bounds so the panel never
+            // goes off-screen on small windows or edge positions.
+            let clampedX = max(screenFrame.minX + margin, min(x, screenFrame.maxX - panelWidth - margin))
+            let clampedY = max(screenFrame.minY + margin, min(y, screenFrame.maxY - panelHeight - margin))
+            panel.setFrameOrigin(NSPoint(x: clampedX, y: clampedY))
         }
 
         panels[message.requestId] = panel
