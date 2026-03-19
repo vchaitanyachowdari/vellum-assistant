@@ -12,6 +12,7 @@ struct MessageInspectorView: View {
 
     private let llmContextClient: any LLMContextClientProtocol = LLMContextClient()
     private let payloadViewportHeight: CGFloat = 560
+    private let payloadSectionChromeHeight: CGFloat = 44
 
     @State private var response: LLMContextResponse?
     @State private var isLoading = true
@@ -220,21 +221,31 @@ struct MessageInspectorView: View {
             )
 
             if isExpanded {
-                HStack(alignment: .top, spacing: VSpacing.lg) {
-                    jsonSection(
-                        title: "Request",
-                        formattedText: formattedJSON["\(entry.id)-request"] ?? ""
-                    )
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                GeometryReader { proxy in
+                    // Constrain both panes to the visible row width so very wide
+                    // request JSON cannot push the sibling response pane offscreen.
+                    let columnWidth = max((proxy.size.width - VSpacing.lg) / 2, 0)
 
-                    jsonSection(
-                        title: "Response",
-                        formattedText: formattedJSON["\(entry.id)-response"] ?? ""
-                    )
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    HStack(alignment: .top, spacing: VSpacing.lg) {
+                        jsonSection(
+                            title: "Request",
+                            formattedText: formattedJSON["\(entry.id)-request"] ?? ""
+                        )
+                        .frame(width: columnWidth, alignment: .topLeading)
+
+                        jsonSection(
+                            title: "Response",
+                            formattedText: formattedJSON["\(entry.id)-response"] ?? ""
+                        )
+                        .frame(width: columnWidth, alignment: .topLeading)
+                    }
+                    .frame(width: proxy.size.width, alignment: .leading)
                 }
+                .frame(
+                    minHeight: payloadViewportHeight + payloadSectionChromeHeight,
+                    alignment: .topLeading
+                )
                 .padding(VSpacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(VColor.surfaceOverlay.opacity(0.5))
                 .clipShape(
                     UnevenRoundedRectangle(
@@ -275,7 +286,7 @@ struct MessageInspectorView: View {
 
             GeometryReader { proxy in
                 ScrollView([.vertical, .horizontal]) {
-                    Text(formattedText)
+                    Text(verbatim: formattedText)
                         .font(VFont.mono)
                         .foregroundColor(VColor.contentDefault)
                         .textSelection(.enabled)
