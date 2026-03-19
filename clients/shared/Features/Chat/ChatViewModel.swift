@@ -1125,6 +1125,16 @@ public final class ChatViewModel: ObservableObject {
 
     // MARK: - Sending
 
+    private var sendPathPlatform: ChatSlashCommandPlatform {
+        #if os(macOS)
+        return .macos
+        #elseif os(iOS)
+        return .ios
+        #else
+        #error("Unsupported platform")
+        #endif
+    }
+
     public func sendMessage(hidden: Bool = false) {
         let rawText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = rawText
@@ -1164,7 +1174,10 @@ public final class ChatViewModel: ObservableObject {
 
         // Refresh model state only for slash commands that explicitly opt in.
         let shouldRefreshModelMetadata = !hasSkillInvocation
-            && ChatSlashCommandCatalog.shouldRefreshModelMetadata(forRawInput: text)
+            && ChatSlashCommandCatalog.shouldRefreshModelMetadata(
+                forRawInput: text,
+                platform: sendPathPlatform
+            )
         if shouldRefreshModelMetadata {
             Task {
                 let info = await self.settingsClient.fetchModelInfo()
@@ -1246,6 +1259,7 @@ public final class ChatViewModel: ObservableObject {
 
         let hasRecognizedSlashCommand = ChatSlashCommandCatalog.isRecognizedSlashCommand(
             text,
+            platform: sendPathPlatform,
             surface: .sendPath
         )
         let isWorkspaceRefinement = activeSurfaceId != nil && !isChatDockedToSide && !hasRecognizedSlashCommand
