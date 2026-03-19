@@ -98,7 +98,8 @@ struct SkillDetailView: View {
                 fileName: file.path,
                 mimeType: file.mimeType,
                 content: .constant(content),
-                viewMode: $skillFileViewMode
+                viewMode: $skillFileViewMode,
+                isActivelyEditing: .constant(false)
             )
         } else {
             VEmptyState(
