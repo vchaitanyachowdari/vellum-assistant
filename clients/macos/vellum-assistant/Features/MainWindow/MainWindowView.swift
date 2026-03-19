@@ -1065,14 +1065,14 @@ struct MainWindowView: View {
         Task {
             let assistantName = UserDefaults.standard.string(forKey: "connectedAssistantId")
             guard let appDelegate = AppDelegate.shared else { return }
-            appDelegate.assistantCli.stop(name: assistantName)
+            appDelegate.vellumCli.stop(name: assistantName)
             do {
-                try await appDelegate.assistantCli.hatch(
+                try await appDelegate.vellumCli.hatch(
                     name: assistantName,
                     daemonOnly: true,
                     restart: true
                 )
-            } catch let error as AssistantCli.CLIError {
+            } catch let error as VellumCli.CLIError {
                 let startupError: DaemonStartupError
                 if case .daemonStartupFailed(let parsed) = error {
                     startupError = parsed

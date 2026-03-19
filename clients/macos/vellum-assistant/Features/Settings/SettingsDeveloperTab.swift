@@ -664,7 +664,7 @@ struct SettingsDeveloperTab: View {
 
     private func toggleAwakeState(assistant: LockfileAssistant, awake: Bool) {
         guard !assistant.isRemote else { return }
-        guard let cli = AppDelegate.shared?.assistantCli else { return }
+        guard let cli = AppDelegate.shared?.vellumCli else { return }
 
         transitioningStates.insert(assistant.assistantId)
         Task {
@@ -727,7 +727,7 @@ struct SettingsDeveloperTab: View {
 
     private func performLocalRestart() async {
         do {
-            try await AppDelegate.shared?.assistantCli.hatch(
+            try await AppDelegate.shared?.vellumCli.hatch(
                 name: selectedAssistantId,
                 daemonOnly: true,
                 restart: true
