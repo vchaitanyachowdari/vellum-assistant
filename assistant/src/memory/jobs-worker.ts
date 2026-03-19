@@ -12,6 +12,7 @@ import { generateConversationStartersJob } from "./job-handlers/conversation-sta
 import {
   embedAttachmentJob,
   embedChunkJob,
+  embedEpisodeJob,
   embedItemJob,
   embedMediaJob,
   embedSegmentJob,
@@ -270,6 +271,9 @@ async function processJob(
       return;
     case "embed_chunk":
       await embedChunkJob(job, config);
+      return;
+    case "embed_episode":
+      await embedEpisodeJob(job, config);
       return;
     case "extract_items":
       await extractItemsJob(job);
