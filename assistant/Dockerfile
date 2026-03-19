@@ -47,11 +47,21 @@ RUN apt-get update && apt-get install -y \
     g++ \
     git \
     sudo \
+    bubblewrap \
+    htop \
+    procps \
     && rm -rf /var/lib/apt/lists/*
+
+## Alias bwrap to bubblewrap
+RUN ln -sf /usr/bin/bwrap /usr/bin/bubblewrap
 
 # Copy bun binary from builder instead of re-installing
 COPY --from=builder /root/.bun/bin/bun /usr/local/bin/bun
 RUN ln -sf /usr/local/bin/bun /usr/local/bin/bunx
+
+# Install assistant CLI launcher backed by the bundled assistant package
+RUN printf '#!/usr/bin/env sh\nexec bun run /app/assistant/src/index.ts "$@"\n' > /usr/local/bin/assistant && \
+    chmod +x /usr/local/bin/assistant
 
 # Create non-root user that also has sudo access so it can like install stuff
 RUN groupadd --system --gid 1001 assistant && \
@@ -71,23 +81,6 @@ ENV BUN_INSTALL="/data/.bun"
 ENV PATH="${BUN_INSTALL}/bin:${PATH}"
 ENV PYTHONUSERBASE="/data/.python"
 ENV PATH="${PYTHONUSERBASE}/bin:${PATH}"
-
-# Configure apt/dpkg to install future packages to /data
-RUN mkdir -p /data/dpkg/info /data/dpkg/updates /data/dpkg/triggers && \
-    mkdir -p /data/usr/bin /data/usr/lib /data/usr/share && \
-    chown -R assistant:assistant /data/dpkg /data/usr
-
-# Create dpkg configuration for using /data as install prefix
-RUN echo 'Dir::State "/data/dpkg";' > /etc/apt/apt.conf.d/99data-dir && \
-    echo 'Dir::State::status "/data/dpkg/status";' >> /etc/apt/apt.conf.d/99data-dir && \
-    echo 'Dir::Cache "/data/apt/cache";' >> /etc/apt/apt.conf.d/99data-dir && \
-    echo 'DPkg::Options {"--instdir=/data/usr";"--admindir=/data/dpkg";"--force-not-root";"--force-bad-path";};' >> /etc/apt/apt.conf.d/99data-dir && \
-    mkdir -p /data/apt/cache && \
-    touch /data/dpkg/status && \
-    chown -R assistant:assistant /data/apt /data/dpkg
-
-ENV PATH="/data/usr/bin:/data/usr/sbin:${PATH}"
-ENV LD_LIBRARY_PATH="/data/usr/lib:/data/usr/lib/x86_64-linux-gnu:/data/usr/lib/aarch64-linux-gnu"
 
 # Ensure the CES bootstrap socket volume is writable by the non-root CES user.
 RUN mkdir -p /run/ces-bootstrap && chmod 777 /run/ces-bootstrap
