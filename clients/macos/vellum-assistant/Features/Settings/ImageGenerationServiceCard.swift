@@ -54,6 +54,7 @@ struct ImageGenerationServiceCard: View {
                 apiKeyText = ""
             },
             showReset: draftMode == "your-own" && isConnected,
+            hideButtons: draftMode == "managed" && !isLoggedIn,
             managedContent: {
                 if isLoggedIn {
                     modelPicker
