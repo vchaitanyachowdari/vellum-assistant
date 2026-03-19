@@ -59,9 +59,7 @@ export function migrateBackfillInlineAttachmentsToDisk(
       if (totalMigrated > 0) {
         // Log is intentionally not imported to keep migration self-contained;
         // the checkpoint value records completion.
-        console.log(
-          `Migrated ${totalMigrated} inline attachments to disk`,
-        );
+        console.log(`Migrated ${totalMigrated} inline attachments to disk`);
       }
     },
   );

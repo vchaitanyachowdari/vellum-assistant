@@ -163,7 +163,10 @@ export async function run(
         dataBase64: buffer.toString("base64"),
       });
     }
-    if (validPathImages.length === 0 && (!sourceImages || sourceImages.length === 0)) {
+    if (
+      validPathImages.length === 0 &&
+      (!sourceImages || sourceImages.length === 0)
+    ) {
       return {
         content: `None of the specified file paths could be read.\n${errors.join("\n")}`,
         isError: true,

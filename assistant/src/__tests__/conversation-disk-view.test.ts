@@ -1,21 +1,14 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
-  mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 // ---------------------------------------------------------------------------
 // Mocks — must come before any imports that depend on them
@@ -62,6 +55,11 @@ mock.module("../config/loader.js", () => ({
 // ---------------------------------------------------------------------------
 
 import {
+  linkAttachmentToMessage,
+  uploadAttachment,
+} from "../memory/attachments-store.js";
+import { addMessage, createConversation } from "../memory/conversation-crud.js";
+import {
   flattenContentBlocks,
   getConversationDirName,
   getConversationDirPath,
@@ -71,14 +69,6 @@ import {
   syncMessageToDisk,
   updateMetaFile,
 } from "../memory/conversation-disk-view.js";
-import {
-  linkAttachmentToMessage,
-  uploadAttachment,
-} from "../memory/attachments-store.js";
-import {
-  addMessage,
-  createConversation,
-} from "../memory/conversation-crud.js";
 import { getDb, initializeDb, resetDb } from "../memory/db.js";
 
 initializeDb();
@@ -253,9 +243,7 @@ describe("flattenContentBlocks", () => {
   });
 
   test("extracts tool_result blocks", () => {
-    const blocks = JSON.stringify([
-      { type: "tool_result", content: "Done!" },
-    ]);
+    const blocks = JSON.stringify([{ type: "tool_result", content: "Done!" }]);
     const result = flattenContentBlocks(blocks);
     expect(result.toolResults).toEqual([{ content: "Done!" }]);
   });
@@ -278,7 +266,9 @@ describe("flattenContentBlocks", () => {
   });
 
   test("handles non-array JSON gracefully", () => {
-    const result = flattenContentBlocks(JSON.stringify({ text: "not an array" }));
+    const result = flattenContentBlocks(
+      JSON.stringify({ text: "not an array" }),
+    );
     expect(result.content).toBe(JSON.stringify({ text: "not an array" }));
   });
 

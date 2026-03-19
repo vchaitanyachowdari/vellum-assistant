@@ -12,7 +12,6 @@
 
 import {
   appendFileSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   rmSync,
@@ -43,9 +42,7 @@ export function getConversationDirName(
   id: string,
   createdAtMs: number,
 ): string {
-  const isoDate = new Date(createdAtMs)
-    .toISOString()
-    .replace(/:/g, "-");
+  const isoDate = new Date(createdAtMs).toISOString().replace(/:/g, "-");
   return `${id}_${isoDate}`;
 }
 
@@ -91,7 +88,10 @@ export function initConversationDir(conv: {
       JSON.stringify(meta, null, 2) + "\n",
     );
   } catch (err) {
-    log.warn({ err, conversationId: conv.id }, "Failed to init conversation dir");
+    log.warn(
+      { err, conversationId: conv.id },
+      "Failed to init conversation dir",
+    );
   }
 }
 
@@ -299,7 +299,8 @@ export function syncMessageToDisk(
     if (content) record.content = content;
     if (toolCalls.length > 0) record.toolCalls = toolCalls;
     if (toolResults.length > 0) record.toolResults = toolResults;
-    if (attachmentFilenames.length > 0) record.attachments = attachmentFilenames;
+    if (attachmentFilenames.length > 0)
+      record.attachments = attachmentFilenames;
 
     appendFileSync(
       join(dirPath, "messages.jsonl"),
@@ -320,10 +321,7 @@ export function syncMessageToDisk(
 /**
  * Remove a conversation's disk-view directory entirely.
  */
-export function removeConversationDir(
-  id: string,
-  createdAtMs: number,
-): void {
+export function removeConversationDir(id: string, createdAtMs: number): void {
   try {
     const dirPath = getConversationDirPath(id, createdAtMs);
     rmSync(dirPath, { recursive: true, force: true });

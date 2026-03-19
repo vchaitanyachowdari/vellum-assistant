@@ -59,9 +59,7 @@ mock.module("../permissions/types.js", () => ({
 }));
 
 import type { AssistantAttachmentDraft } from "../daemon/assistant-attachments.js";
-import {
-  getFilePathForAttachment,
-} from "../memory/attachments-store.js";
+import { getFilePathForAttachment } from "../memory/attachments-store.js";
 import { addMessage, createConversation } from "../memory/conversation-crud.js";
 import { getDb, initializeDb, resetDb } from "../memory/db.js";
 
