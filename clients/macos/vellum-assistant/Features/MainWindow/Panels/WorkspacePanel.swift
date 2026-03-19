@@ -66,7 +66,6 @@ final class WorkspaceBrowserState {
         let task = Task {
             let detail = await workspaceClient.fetchWorkspaceFile(path: targetPath, showHidden: showHiddenFiles)
             guard !Task.isCancelled, selectedFilePath == targetPath else { return }
-            selectedFileDetail = detail
             let raw = detail?.content ?? ""
             let isJSON = ext == "json"
                 || detail?.mimeType.lowercased().hasPrefix("application/json") == true
@@ -78,7 +77,6 @@ final class WorkspaceBrowserState {
             originalContent = content
             isDirty = false
             isSaving = false
-            isLoadingFile = false
 
             // Sync view mode using MIME type from the response, respecting
             // the user's saved preference that was already applied above.
@@ -88,6 +86,12 @@ final class WorkspaceBrowserState {
                     viewMode = modes.first ?? .source
                 }
             }
+
+            // Set selectedFileDetail before clearing isLoadingFile so the
+            // view transitions directly from the loading spinner to file
+            // content, never briefly falling through to the empty state.
+            selectedFileDetail = detail
+            isLoadingFile = false
         }
         fileLoadTask = task
     }
