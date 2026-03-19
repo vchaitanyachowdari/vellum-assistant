@@ -1,6 +1,7 @@
 /**
  * Route handlers for conversation management operations.
  *
+ * POST   /v1/conversations                 — create a new conversation
  * POST   /v1/conversations/switch         — switch to an existing conversation
  * POST   /v1/conversations/fork           — fork an existing conversation
  * PATCH  /v1/conversations/:id/name       — rename a conversation
@@ -19,7 +20,9 @@ import {
   PRIVATE_CONVERSATION_FORK_ERROR,
   wipeConversation,
 } from "../../memory/conversation-crud.js";
+import { updateConversationTitle } from "../../memory/conversation-crud.js";
 import {
+  getOrCreateConversation,
   resolveConversationId,
   setConversationKeyIfAbsent,
 } from "../../memory/conversation-key-store.js";
@@ -66,6 +69,44 @@ export function conversationManagementRouteDefinitions(
   deps: ConversationManagementDeps,
 ): RouteDefinition[] {
   return [
+    {
+      endpoint: "conversations",
+      method: "POST",
+      policyKey: "conversations",
+      handler: async ({ req }) => {
+        let body: { conversationKey?: string; conversationType?: string } = {};
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          // Empty or malformed body — fall through with defaults.
+        }
+        const conversationKey = body.conversationKey ?? crypto.randomUUID();
+        const requestedType =
+          body.conversationType === "private" ? "private" : "standard";
+        const result = getOrCreateConversation(conversationKey, {
+          conversationType: requestedType,
+        });
+        if (result.created) {
+          updateConversationTitle(result.conversationId, "New Conversation");
+        }
+        log.info(
+          {
+            conversationId: result.conversationId,
+            conversationKey,
+            created: result.created,
+          },
+          "Created conversation via POST",
+        );
+        return Response.json(
+          {
+            id: result.conversationId,
+            conversationKey,
+            conversationType: result.conversationType,
+          },
+          { status: result.created ? 201 : 200 },
+        );
+      },
+    },
     {
       endpoint: "conversations/fork",
       method: "POST",
