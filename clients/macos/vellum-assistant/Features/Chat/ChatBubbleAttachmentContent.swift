@@ -72,9 +72,10 @@ private enum ImageActions {
         }
     }
 
-    /// Writes the image to a temporary file and opens it in the default app (Preview).
+    /// Writes the image to a temporary file and returns the file URL.
     /// Prefers `base64Data` (full resolution), falling back to PNG-encoding the NSImage.
-    static func openInPreview(_ image: NSImage, filename: String, base64Data: String? = nil) {
+    /// Returns nil if the image could not be written.
+    static func writeTempFile(_ image: NSImage, filename: String, base64Data: String? = nil) -> URL? {
         let tempDir = FileManager.default.temporaryDirectory
         let sanitized = (filename as NSString).lastPathComponent
         let fallbackName = sanitized.isEmpty ? "image.png" : sanitized
@@ -101,13 +102,19 @@ private enum ImageActions {
         }
         let fileURL = tempDir.appendingPathComponent(fileName)
 
-        guard let fileData else { return }
+        guard let fileData else { return nil }
         do {
             try fileData.write(to: fileURL)
-            NSWorkspace.shared.open(fileURL)
+            return fileURL
         } catch {
-            // Silently fail — not critical
+            return nil
         }
+    }
+
+    /// Writes the image to a temporary file and opens it in the default app (Preview).
+    static func openInPreview(_ image: NSImage, filename: String, base64Data: String? = nil) {
+        guard let fileURL = writeTempFile(image, filename: filename, base64Data: base64Data) else { return }
+        NSWorkspace.shared.open(fileURL)
     }
 
     /// Builds a SwiftUI context menu with Copy, Save As, and Open in Preview actions.
@@ -133,6 +140,40 @@ private enum ImageActions {
             openInPreview(image, filename: filename, base64Data: base64Data)
         } label: {
             Label { Text("Open in Preview") } icon: { VIconView(.eye, size: 12) }
+        }
+
+        // Write a temp file for sharing — NSSharingService.sharingServices
+        // returns far more services (AirDrop, Messages, Mail, etc.) when given
+        // a file URL vs a raw NSImage. The temp file write is lightweight
+        // (thumbnail image) to keep the view builder fast. Full-res file is
+        // written at action time when the user picks a service.
+        // NSSharingService.sharingServices is deprecated in macOS 13 but has
+        // no functional replacement for custom share UI (see AppSharePanelView).
+        if let tempURL = writeTempFile(image, filename: filename) {
+            let services = NSSharingService.sharingServices(forItems: [tempURL])
+            if !services.isEmpty {
+                Divider()
+                Menu {
+                    ForEach(Array(services.enumerated()), id: \.offset) { _, service in
+                        Button {
+                            // Write full-res file at action time, then share
+                            if let fullResURL = writeTempFile(image, filename: filename, base64Data: base64Data) {
+                                service.perform(withItems: [fullResURL])
+                            } else {
+                                service.perform(withItems: [tempURL])
+                            }
+                        } label: {
+                            Label {
+                                Text(service.title)
+                            } icon: {
+                                Image(nsImage: service.image)
+                            }
+                        }
+                    }
+                } label: {
+                    Label { Text("Share") } icon: { VIconView(.share, size: 12) }
+                }
+            }
         }
 
     }
