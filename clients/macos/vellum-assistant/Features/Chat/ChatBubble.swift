@@ -42,13 +42,103 @@ struct ChatBubble: View {
     /// Status text from the assistant activity state, forwarded for inline display.
     var processingStatusText: String?
     @State private var isHovered = false
-    /// Stores async-parsed segments for large messages (>2000 chars) that missed the
+    /// Stores async-parsed segments for large messages (>500 chars) that missed the
     /// synchronous cache. Keyed by text content so multiple segments can be in flight.
     @State var asyncSegments: [String: [MarkdownSegment]] = [:]
 
     @State private var showCopyConfirmation = false
     @State private var copyConfirmationTimer: DispatchWorkItem?
     @State private var mediaEmbedIntents: [MediaEmbedIntent] = []
+    // Cached interleaved content state — updated via .onChange(of:) to avoid
+    // recomputing O(n) grouping on every body evaluation.
+    // Eagerly initialized in init() to prevent first-frame flash where the
+    // wrong layout path renders before .onAppear fires.
+    @State var cachedHasInterleavedContent: Bool
+    @State var cachedContentGroups: [ContentGroup]
+    /// Set of stableIds for tool-call groups that have non-empty text after them.
+    @State var cachedToolGroupsWithTrailingText: Set<String>
+
+    init(
+        message: ChatMessage,
+        decidedConfirmation: ToolConfirmationData?,
+        onSurfaceAction: @escaping (String, String, [String: AnyCodable]?) -> Void,
+        onDismissDocumentWidget: @escaping (String) -> Void,
+        dismissedDocumentSurfaceIds: Set<String>,
+        onReportMessage: ((String?) -> Void)? = nil,
+        onForkFromMessage: ((String) -> Void)? = nil,
+        showInspectButton: Bool = false,
+        onInspectMessage: ((String?) -> Void)? = nil,
+        onSurfaceRefetch: ((String, String) -> Void)? = nil,
+        onRehydrate: (() -> Void)? = nil,
+        mediaEmbedSettings: MediaEmbedResolverSettings? = nil,
+        resolveHttpPort: @escaping (() -> Int?) = { nil },
+        onConfirmationAllow: ((String) -> Void)? = nil,
+        onConfirmationDeny: ((String) -> Void)? = nil,
+        onAlwaysAllow: ((String, String, String, String) -> Void)? = nil,
+        onTemporaryAllow: ((String, String) -> Void)? = nil,
+        activeConfirmationRequestId: String? = nil,
+        onRetryFailedMessage: ((UUID) -> Void)? = nil,
+        onRetryConversationError: (() -> Void)? = nil,
+        isLatestAssistantMessage: Bool = false,
+        isProcessingAfterTools: Bool = false,
+        processingStatusText: String? = nil,
+        activeSurfaceId: String? = nil
+    ) {
+        self.message = message
+        self.decidedConfirmation = decidedConfirmation
+        self.onSurfaceAction = onSurfaceAction
+        self.onDismissDocumentWidget = onDismissDocumentWidget
+        self.dismissedDocumentSurfaceIds = dismissedDocumentSurfaceIds
+        self.onReportMessage = onReportMessage
+        self.onForkFromMessage = onForkFromMessage
+        self.showInspectButton = showInspectButton
+        self.onInspectMessage = onInspectMessage
+        self.onSurfaceRefetch = onSurfaceRefetch
+        self.onRehydrate = onRehydrate
+        self.mediaEmbedSettings = mediaEmbedSettings
+        self.resolveHttpPort = resolveHttpPort
+        self.onConfirmationAllow = onConfirmationAllow
+        self.onConfirmationDeny = onConfirmationDeny
+        self.onAlwaysAllow = onAlwaysAllow
+        self.onTemporaryAllow = onTemporaryAllow
+        self.activeConfirmationRequestId = activeConfirmationRequestId
+        self.onRetryFailedMessage = onRetryFailedMessage
+        self.onRetryConversationError = onRetryConversationError
+        self.isLatestAssistantMessage = isLatestAssistantMessage
+        self.isProcessingAfterTools = isProcessingAfterTools
+        self.processingStatusText = processingStatusText
+        self.activeSurfaceId = activeSurfaceId
+
+        // Eagerly compute interleaved content cache so the first body
+        // evaluation uses the correct layout path (no flash).
+        let interleaved = Self.computeHasInterleavedContent(message.contentOrder)
+        _cachedHasInterleavedContent = State(initialValue: interleaved)
+
+        if interleaved {
+            let groups = Self.computeContentGroupsStatic(
+                contentOrder: message.contentOrder,
+                hasInterleavedContent: interleaved
+            )
+            _cachedContentGroups = State(initialValue: groups)
+
+            var trailingTextIds = Set<String>()
+            for group in groups {
+                guard case .toolCalls(let indices) = group else { continue }
+                if Self.computeHasTextAfterToolGroupStatic(
+                    toolIndices: indices,
+                    contentOrder: message.contentOrder,
+                    textSegments: message.textSegments,
+                    hasText: !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ) {
+                    trailingTextIds.insert(group.stableId)
+                }
+            }
+            _cachedToolGroupsWithTrailingText = State(initialValue: trailingTextIds)
+        } else {
+            _cachedContentGroups = State(initialValue: [])
+            _cachedToolGroupsWithTrailingText = State(initialValue: [])
+        }
+    }
     /// Injected from the parent instead of observing the shared singleton directly.
     /// This avoids every ChatBubble in the list re-rendering whenever the overlay
     /// manager publishes any change (the "thundering herd" problem).
@@ -154,6 +244,11 @@ struct ChatBubble: View {
         return formatter.string(from: message.timestamp)
     }
 
+    /// Surfaces not currently shown in the floating overlay, computed once per body evaluation.
+    private var visibleInlineSurfaces: [InlineSurfaceData] {
+        message.inlineSurfaces.filter { $0.id != activeSurfaceId }
+    }
+
     /// Whether the text/attachment bubble should be rendered.
     /// Tool calls for assistant messages render outside the bubble as separate chips,
     /// so only show the bubble when there's actual text or attachment content.
@@ -167,11 +262,10 @@ struct ChatBubble: View {
     /// that should not appear above the rendered dynamic UI surface.
     private var shouldShowBubble: Bool {
         if isUser { return true }
-        // Filter out the surface shown in the floating overlay
-        let visibleSurfaces = message.inlineSurfaces.filter { $0.id != activeSurfaceId }
-        if !visibleSurfaces.isEmpty {
+        let surfaces = visibleInlineSurfaces
+        if !surfaces.isEmpty {
             // Show bubble text when all visible surfaces are completed (collapsed to chips)
-            let allCompleted = visibleSurfaces.allSatisfy { $0.completionState != nil }
+            let allCompleted = surfaces.allSatisfy { $0.completionState != nil }
             if !allCompleted { return false }
         }
         return hasText || !message.attachments.isEmpty
@@ -185,7 +279,7 @@ struct ChatBubble: View {
             if isUser { Spacer(minLength: 0) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: VSpacing.sm) {
-                    if !isUser && hasInterleavedContent {
+                    if !isUser && cachedHasInterleavedContent {
                         interleavedContent
                     } else {
                         if message.isError && hasText {
@@ -200,8 +294,8 @@ struct ChatBubble: View {
 
                         // Inline surfaces render below the bubble as full-width cards
                         // Skip surfaces that are currently shown in the floating overlay
-                        if !message.inlineSurfaces.isEmpty {
-                            ForEach(message.inlineSurfaces.filter { $0.id != activeSurfaceId }) { surface in
+                        if !visibleInlineSurfaces.isEmpty {
+                            ForEach(visibleInlineSurfaces) { surface in
                                 InlineSurfaceRouter(surface: surface, onAction: onSurfaceAction, onRefetch: onSurfaceRefetch)
                             }
                         }
@@ -212,7 +306,7 @@ struct ChatBubble: View {
                         }
                     }
 
-                    if !hasInterleavedContent {
+                    if !cachedHasInterleavedContent {
                         attachmentWarningBanners(message.attachmentWarnings)
                     }
 
@@ -256,11 +350,14 @@ struct ChatBubble: View {
                 // where the complex view hierarchy makes re-compositing expensive —
                 // async task completions (markdown parsing, image decoding) would
                 // trigger full re-compositing of the entire message on every change.
-                .modifier(ConditionalCompositingGroup(isActive: !message.isStreaming && !hasInterleavedContent))
+                .modifier(ConditionalCompositingGroup(isActive: !message.isStreaming && !cachedHasInterleavedContent))
 
             if !isUser { Spacer(minLength: 0) }
         }
         .contentShape(Rectangle())
+        .onAppear { recomputeInterleavedContentCache() }
+        .onChange(of: message.contentOrder) { _, _ in recomputeInterleavedContentCache() }
+        .onChange(of: message.textSegments) { _, _ in recomputeInterleavedContentCache() }
         .onHover { hovering in
             isHovered = hovering
         }
@@ -407,6 +504,7 @@ struct ChatBubble: View {
                         codeBackgroundColor: isUser ? VColor.contentDefault.opacity(0.1) : VColor.surfaceActive,
                         hrColor: isUser ? VColor.contentDefault.opacity(0.3) : VColor.borderBase
                     )
+                    .equatable()
                 } else if !message.attachments.isEmpty {
                     Text(attachmentSummary)
                         .font(VFont.caption)
@@ -500,8 +598,10 @@ struct ChatBubble: View {
     }
 
     /// Length threshold above which a segment cache miss triggers async parsing
-    /// instead of blocking the main thread.
-    static let asyncParseThreshold = 2000
+    /// instead of blocking the main thread. Set to 500 so that most assistant
+    /// messages (routinely 1000+ chars) are parsed off the main thread on cache
+    /// miss, reducing scroll jank from synchronous markdown parsing.
+    static let asyncParseThreshold = 500
 
     // MARK: - LRU Caches
     //

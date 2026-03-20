@@ -8,27 +8,11 @@ extension ChatBubble {
     /// instead of in the trailing status area.
     var shouldRenderToolProgressInline: Bool {
         // Tool calls are never hidden; always consider inline rendering.
-        guard hasInterleavedContent else { return false }
+        guard cachedHasInterleavedContent else { return false }
         return message.contentOrder.contains(where: {
             if case .toolCall = $0 { return true }
             return false
         })
-    }
-
-    /// Whether this message has meaningful interleaved content (multiple block types).
-    var hasInterleavedContent: Bool {
-        // Use interleaved path when contentOrder has more than one distinct block type
-        guard message.contentOrder.count > 1 else { return false }
-        var hasTextBlock = false
-        var hasNonText = false
-        for ref in message.contentOrder {
-            switch ref {
-            case .text: hasTextBlock = true
-            case .toolCall, .surface: hasNonText = true
-            }
-            if hasTextBlock && hasNonText { return true }
-        }
-        return false
     }
 
     /// Groups consecutive tool call refs for rendering.
@@ -53,9 +37,68 @@ extension ChatBubble {
         }
     }
 
-    func groupContentBlocks() -> [ContentGroup] {
+    // MARK: - Cache Recomputation
+
+    /// Recomputes all cached interleaved content state. Called from `.onAppear`
+    /// and `.onChange(of: message.contentOrder)` / `.onChange(of: message.textSegments)`.
+    func recomputeInterleavedContentCache() {
+        let interleaved = Self.computeHasInterleavedContent(message.contentOrder)
+        cachedHasInterleavedContent = interleaved
+
+        guard interleaved else {
+            cachedContentGroups = []
+            cachedToolGroupsWithTrailingText = []
+            return
+        }
+
+        let groups = Self.computeContentGroupsStatic(
+            contentOrder: message.contentOrder,
+            hasInterleavedContent: interleaved
+        )
+        cachedContentGroups = groups
+
+        // Pre-compute which tool-call groups have trailing text so that
+        // `interleavedContent` can look up the set instead of scanning
+        // contentOrder per group during body evaluation.
+        var trailingTextIds = Set<String>()
+        for group in groups {
+            guard case .toolCalls(let indices) = group else { continue }
+            if Self.computeHasTextAfterToolGroupStatic(
+                toolIndices: indices,
+                contentOrder: message.contentOrder,
+                textSegments: message.textSegments,
+                hasText: hasText
+            ) {
+                trailingTextIds.insert(group.stableId)
+            }
+        }
+        cachedToolGroupsWithTrailingText = trailingTextIds
+    }
+
+    /// Whether this message has meaningful interleaved content (multiple block types).
+    static func computeHasInterleavedContent(_ contentOrder: [ContentBlockRef]) -> Bool {
+        // Use interleaved path when contentOrder has more than one distinct block type
+        guard contentOrder.count > 1 else { return false }
+        var hasTextBlock = false
+        var hasNonText = false
+        for ref in contentOrder {
+            switch ref {
+            case .text: hasTextBlock = true
+            case .toolCall, .surface: hasNonText = true
+            }
+            if hasTextBlock && hasNonText { return true }
+        }
+        return false
+    }
+
+    /// Static version of content group computation, callable from init() before
+    /// self is fully initialized. The instance method delegates to this.
+    static func computeContentGroupsStatic(
+        contentOrder: [ContentBlockRef],
+        hasInterleavedContent: Bool
+    ) -> [ContentGroup] {
         var groups: [ContentGroup] = []
-        for ref in message.contentOrder {
+        for ref in contentOrder {
             switch ref {
             case .text(let i):
                 if case .texts(let indices) = groups.last {
@@ -76,7 +119,12 @@ extension ChatBubble {
 
         // When tool calls render inline (visible progress views), they must
         // break text runs just like surfaces do — skip coalescing entirely.
-        guard !shouldRenderToolProgressInline else { return groups }
+        // Replicate shouldRenderToolProgressInline logic inline:
+        let shouldRenderInline = hasInterleavedContent && contentOrder.contains(where: {
+            if case .toolCall = $0 { return true }
+            return false
+        })
+        guard !shouldRenderInline else { return groups }
 
         // Post-process: coalesce text groups that are only separated by tool call
         // groups so that the user can drag-select across text that spans a tool
@@ -123,24 +171,28 @@ extension ChatBubble {
         return coalesced
     }
 
-    /// Returns true when there is non-empty text content after a tool-call group.
-    /// Used to decide whether the inline progress block should remain in
-    /// an active "thinking/processing" phase while the model continues.
-    private func hasTextAfterToolGroup(_ toolIndices: [Int]) -> Bool {
+    /// Static version of trailing text detection, callable from init() before
+    /// self is fully initialized. The instance method delegates to this.
+    static func computeHasTextAfterToolGroupStatic(
+        toolIndices: [Int],
+        contentOrder: [ContentBlockRef],
+        textSegments: [String],
+        hasText: Bool
+    ) -> Bool {
         let indexSet = Set(toolIndices)
-        guard let lastToolRefIndex = message.contentOrder.lastIndex(where: {
+        guard let lastToolRefIndex = contentOrder.lastIndex(where: {
             if case .toolCall(let i) = $0 { return indexSet.contains(i) }
             return false
         }) else {
             return hasText
         }
-        let start = message.contentOrder.index(after: lastToolRefIndex)
-        guard start < message.contentOrder.endIndex else { return false }
-        for ref in message.contentOrder[start...] {
+        let start = contentOrder.index(after: lastToolRefIndex)
+        guard start < contentOrder.endIndex else { return false }
+        for ref in contentOrder[start...] {
             guard case .text(let textIndex) = ref,
                   textIndex >= 0,
-                  textIndex < message.textSegments.count else { continue }
-            if !message.textSegments[textIndex].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                  textIndex < textSegments.count else { continue }
+            if !textSegments[textIndex].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return true
             }
         }
@@ -148,7 +200,7 @@ extension ChatBubble {
     }
 
     @ViewBuilder
-    private func inlineToolProgress(toolIndices: [Int], isLatestGroup: Bool) -> some View {
+    private func inlineToolProgress(toolIndices: [Int], isLatestGroup: Bool, hasTrailingText: Bool) -> some View {
         let groupedToolCalls: [ToolCallData] = toolIndices.compactMap { idx -> ToolCallData? in
             guard idx < message.toolCalls.count else { return nil }
             return message.toolCalls[idx]
@@ -185,7 +237,7 @@ extension ChatBubble {
             AssistantProgressView(
                 toolCalls: groupedToolCalls,
                 isStreaming: isLatestGroup ? message.isStreaming : false,
-                hasText: hasTextAfterToolGroup(toolIndices),
+                hasText: hasTrailingText,
                 isProcessing: isLatestGroup && isProcessingAfterTools,
                 processingStatusText: isLatestGroup && isProcessingAfterTools ? processingStatusText : nil,
                 streamingCodePreview: isLatestGroup ? message.streamingCodePreview : nil,
@@ -207,7 +259,7 @@ extension ChatBubble {
 
     @ViewBuilder
     var interleavedContent: some View {
-        let groups = groupContentBlocks()
+        let groups = cachedContentGroups
         let latestToolGroup: [Int]? = groups.reversed().compactMap { group in
             guard case .toolCalls(let indices) = group else { return nil }
             return indices
@@ -233,7 +285,11 @@ extension ChatBubble {
                 }
             case .toolCalls(let indices):
                 if shouldRenderToolProgressInline {
-                    inlineToolProgress(toolIndices: indices, isLatestGroup: indices == latestToolGroup)
+                    inlineToolProgress(
+                        toolIndices: indices,
+                        isLatestGroup: indices == latestToolGroup,
+                        hasTrailingText: cachedToolGroupsWithTrailingText.contains(group.stableId)
+                    )
                 } else {
                     // Tool calls are rendered by trailingStatus below the message
                     EmptyView()

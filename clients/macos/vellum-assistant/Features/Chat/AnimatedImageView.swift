@@ -18,6 +18,32 @@ struct AnimatedImageView: View {
     @State private var isLoading = true
     @Environment(\.displayScale) private var displayScale
 
+    // MARK: - In-memory cache
+
+    /// Wrapper that stores both the decoded image and optional GIF data together,
+    /// ensuring they are evicted atomically. This prevents the edge case where
+    /// the image survives eviction but the GIF data doesn't, which would cause
+    /// animated GIFs to silently degrade to static images.
+    private class CachedImageEntry: NSObject {
+        let image: NSImage
+        let gifData: Data?
+        init(image: NSImage, gifData: Data?) {
+            self.image = image
+            self.gifData = gifData
+        }
+    }
+
+    /// Single cache for decoded images + optional GIF data.
+    /// Keyed by resolved absolute path or full URL string to avoid cross-assistant
+    /// collisions on relative workspace paths.
+    private static let cache: NSCache<NSString, CachedImageEntry> = {
+        let cache = NSCache<NSString, CachedImageEntry>()
+        cache.countLimit = 50
+        // ~50 MB — estimated cost is set per-entry based on pixel dimensions + GIF data size.
+        cache.totalCostLimit = 50 * 1024 * 1024
+        return cache
+    }()
+
     /// Maximum display dimension in points (matches text bubble maxWidth).
     private let maxDimension: CGFloat = VSpacing.chatBubbleMaxWidth
 
@@ -69,26 +95,19 @@ struct AnimatedImageView: View {
         return CGSize(width: size.width * scale, height: size.height * scale)
     }
 
-    private func loadImage() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        // Support local file paths
+    /// Resolves the cache key for the given URL string. For workspace-relative paths,
+    /// this includes the resolved absolute path so different assistants don't collide.
+    private func resolveCacheKey() -> (key: NSString, fileURL: URL?)  {
+        // Absolute local paths — already unique.
         if urlString.hasPrefix("/") || urlString.hasPrefix("file://") {
             let fileURL = urlString.hasPrefix("file://")
                 ? URL(string: urlString)
                 : URL(fileURLWithPath: urlString)
-            if let fileURL {
-                imageData = try? Data(contentsOf: fileURL)
-                loadedImage = imageData.flatMap { NSImage(data: $0) }
-            }
-            return
+            return (urlString as NSString, fileURL)
         }
 
-        // Resolve relative workspace paths (e.g. "data/avatar/avatar-image.png")
+        // Relative workspace paths — resolve to absolute to avoid cross-assistant collisions.
         if !urlString.contains("://") {
-            // Use the connected assistant's workspace dir for multi-instance support,
-            // falling back to the default ~/.vellum/workspace path.
             let workspaceDir: String
             if let assistantId = UserDefaults.standard.string(forKey: "connectedAssistantId"),
                let assistant = LockfileAssistant.loadByName(assistantId),
@@ -97,21 +116,80 @@ struct AnimatedImageView: View {
             } else {
                 workspaceDir = NSHomeDirectory() + "/.vellum/workspace"
             }
-            let fileURL = URL(fileURLWithPath: workspaceDir + "/" + urlString)
-            imageData = try? Data(contentsOf: fileURL)
-            loadedImage = imageData.flatMap { NSImage(data: $0) }
+            let absolutePath = workspaceDir + "/" + urlString
+            let fileURL = URL(fileURLWithPath: absolutePath)
+            return (absolutePath as NSString, fileURL)
+        }
+
+        // Remote URLs — use as-is.
+        return (urlString as NSString, nil)
+    }
+
+    /// Returns a cache key that incorporates the file's modification date so
+    /// overwritten local images (e.g. regenerated avatars) are not served stale.
+    private func localCacheKey(path: String) -> NSString {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let mtime = attrs[.modificationDate] as? Date {
+            return "\(path)?\(mtime.timeIntervalSince1970)" as NSString
+        }
+        return path as NSString
+    }
+
+    private func loadImage() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        let (cacheKey, localFileURL) = resolveCacheKey()
+
+        // For local files, incorporate mtime so overwritten files bust the cache.
+        let effectiveKey: NSString = localFileURL != nil
+            ? localCacheKey(path: cacheKey as String)
+            : cacheKey
+
+        // Check in-memory cache first to avoid redundant disk reads / decoding.
+        if let entry = Self.cache.object(forKey: effectiveKey) {
+            self.loadedImage = entry.image
+            self.imageData = entry.gifData
             return
         }
 
+        // Local file paths (absolute or workspace-relative, already resolved).
+        if let fileURL = localFileURL {
+            imageData = try? Data(contentsOf: fileURL)
+            loadedImage = imageData.flatMap { NSImage(data: $0) }
+            cacheLoadedImage(forKey: effectiveKey)
+            return
+        }
+
+        // Remote URL.
         guard let url = URL(string: urlString) else { return }
 
         do {
             let data = try await ImageCache.shared.imageData(for: url)
             self.imageData = data
             self.loadedImage = NSImage(data: data)
+            cacheLoadedImage(forKey: effectiveKey)
         } catch {
             // Keep placeholder on failure
         }
+    }
+
+    /// Stores the currently loaded image (and GIF data if applicable) into the
+    /// static in-memory cache. Cost is estimated from pixel dimensions so the
+    /// `totalCostLimit` on NSCache approximates real memory pressure.
+    private func cacheLoadedImage(forKey key: NSString) {
+        guard let image = loadedImage else { return }
+
+        // Estimate memory cost: width * height * 4 bytes (RGBA) + GIF data size
+        let rep = image.representations.first
+        let pixelWidth = rep?.pixelsWide ?? Int(image.size.width)
+        let pixelHeight = rep?.pixelsHigh ?? Int(image.size.height)
+        let imageCost = pixelWidth * pixelHeight * 4
+        let gifDataCost = imageData.map { isAnimatedGIF($0) ? $0.count : 0 } ?? 0
+        let gifData = imageData.flatMap { isAnimatedGIF($0) ? $0 : nil }
+
+        let entry = CachedImageEntry(image: image, gifData: gifData)
+        Self.cache.setObject(entry, forKey: key, cost: imageCost + gifDataCost)
     }
 
     private func isAnimatedGIF(_ data: Data) -> Bool {
