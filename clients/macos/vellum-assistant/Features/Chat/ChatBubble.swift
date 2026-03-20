@@ -381,15 +381,9 @@ struct ChatBubble: View {
             Text("Failed to send")
                 .font(VFont.caption)
                 .foregroundColor(VColor.systemNegativeStrong)
-            Button {
+            VButton(label: "Retry", style: .ghost, size: .inline) {
                 onRetryFailedMessage?(message.id)
-            } label: {
-                Text("Retry")
-                    .font(VFont.caption.weight(.medium))
-                    .foregroundColor(VColor.primaryBase)
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
         }
     }
 
