@@ -13,7 +13,7 @@
  *   bun run scripts/generate-bundled-tool-registry.ts
  */
 import type { SkillToolScript } from "../tools/skills/script-contract.js";
-// ── acp ─────────────────────────────────────────────────────────────────────────
+// ── acp ────────────────────────────────────────────────────────────────────────
 import * as acpAbort from "./bundled-skills/acp/tools/acp-abort.js";
 import * as acpSpawn from "./bundled-skills/acp/tools/acp-spawn.js";
 import * as acpStatus from "./bundled-skills/acp/tools/acp-status.js";
@@ -39,8 +39,6 @@ import * as browserWaitFor from "./bundled-skills/browser/tools/browser-wait-for
 import * as browserWaitForDownload from "./bundled-skills/browser/tools/browser-wait-for-download.js";
 // ── chatgpt-import ─────────────────────────────────────────────────────────────
 import * as chatgptImport from "./bundled-skills/chatgpt-import/tools/chatgpt-import.js";
-// ── claude-code ────────────────────────────────────────────────────────────────
-import * as claudeCode from "./bundled-skills/claude-code/tools/claude-code.js";
 // ── computer-use ───────────────────────────────────────────────────────────────
 import * as computerUseClick from "./bundled-skills/computer-use/tools/computer-use-click.js";
 import * as computerUseDone from "./bundled-skills/computer-use/tools/computer-use-done.js";
@@ -107,8 +105,6 @@ import * as messagingSend from "./bundled-skills/messaging/tools/messaging-send.
 import * as messagingSenderDigest from "./bundled-skills/messaging/tools/messaging-sender-digest.js";
 // ── notifications ──────────────────────────────────────────────────────────────
 import * as sendNotification from "./bundled-skills/notifications/tools/send-notification.js";
-// ── orchestration ──────────────────────────────────────────────────────────────
-import * as swarmDelegate from "./bundled-skills/orchestration/tools/swarm-delegate.js";
 // ── phone-calls ────────────────────────────────────────────────────────────────
 import * as callEnd from "./bundled-skills/phone-calls/tools/call-end.js";
 import * as callStart from "./bundled-skills/phone-calls/tools/call-start.js";
@@ -210,9 +206,6 @@ export const bundledToolRegistry = new Map<string, SkillToolScript>([
   // chatgpt-import
   ["chatgpt-import:tools/chatgpt-import.ts", chatgptImport],
 
-  // claude-code
-  ["claude-code:tools/claude-code.ts", claudeCode],
-
   // computer-use
   ["computer-use:tools/computer-use-observe.ts", computerUseObserve],
   ["computer-use:tools/computer-use-click.ts", computerUseClick],
@@ -297,9 +290,6 @@ export const bundledToolRegistry = new Map<string, SkillToolScript>([
 
   // notifications
   ["notifications:tools/send-notification.ts", sendNotification],
-
-  // orchestration
-  ["orchestration:tools/swarm-delegate.ts", swarmDelegate],
 
   // phone-calls
   ["phone-calls:tools/call-start.ts", callStart],
