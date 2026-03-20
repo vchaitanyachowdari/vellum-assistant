@@ -405,15 +405,17 @@ describe("ContextWindowManager", () => {
         if (block.type === "tool_result") {
           // Every tool_result must have a matching tool_use in a preceding assistant message
           const toolUseId = (block as { tool_use_id: string }).tool_use_id;
-          const hasMatchingToolUse = keptMessages.slice(0, i).some(
-            (prev) =>
-              prev.role === "assistant" &&
-              prev.content.some(
-                (b) =>
-                  b.type === "tool_use" &&
-                  (b as { id: string }).id === toolUseId,
-              ),
-          );
+          const hasMatchingToolUse = keptMessages
+            .slice(0, i)
+            .some(
+              (prev) =>
+                prev.role === "assistant" &&
+                prev.content.some(
+                  (b) =>
+                    b.type === "tool_use" &&
+                    (b as { id: string }).id === toolUseId,
+                ),
+            );
           expect(hasMatchingToolUse).toBe(true);
         }
       }

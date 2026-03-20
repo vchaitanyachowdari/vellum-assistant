@@ -233,9 +233,7 @@ describe("Memory lifecycle E2E (simplified path)", () => {
     expect(injected[0].content).toHaveLength(2);
 
     // Stripped by prefix-based stripping
-    const cleaned = stripUserTextBlocksByPrefix(injected, [
-      "<memory_brief>",
-    ]);
+    const cleaned = stripUserTextBlocksByPrefix(injected, ["<memory_brief>"]);
     expect(cleaned).toHaveLength(1);
     expect(cleaned[0].content).toHaveLength(1);
     const cb0 = cleaned[0].content[0];

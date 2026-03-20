@@ -491,7 +491,9 @@ describe("runReducer — error handling", () => {
   });
 
   test("returns EMPTY_REDUCER_RESULT when provider throws a transient error", async () => {
-    const transientError = Object.assign(new Error("Server error"), { status: 500 });
+    const transientError = Object.assign(new Error("Server error"), {
+      status: 500,
+    });
     mockSendMessage.mockRejectedValueOnce(transientError);
 
     const result = await runReducer(makeInput());
@@ -500,7 +502,9 @@ describe("runReducer — error handling", () => {
   });
 
   test("re-throws permanent provider errors (fatal)", async () => {
-    const fatalError = Object.assign(new Error("prompt too long"), { status: 400 });
+    const fatalError = Object.assign(new Error("prompt too long"), {
+      status: 400,
+    });
     mockSendMessage.mockRejectedValueOnce(fatalError);
 
     await expect(runReducer(makeInput())).rejects.toThrow("prompt too long");

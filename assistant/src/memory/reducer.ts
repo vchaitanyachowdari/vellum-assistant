@@ -211,7 +211,10 @@ export async function runReducer(
     // (e.g. force-advancing the dirty tail to break retry loops).
     const category = classifyError(err);
     if (category === "fatal") {
-      log.error({ err }, "Memory reducer provider call failed with permanent error");
+      log.error(
+        { err },
+        "Memory reducer provider call failed with permanent error",
+      );
       throw err;
     }
 

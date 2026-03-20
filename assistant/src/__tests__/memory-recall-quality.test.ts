@@ -64,10 +64,7 @@ import {
   extractKeywords,
 } from "../memory/archive-recall.js";
 import { getDb, initializeDb, resetDb } from "../memory/db.js";
-import {
-  memoryEpisodes,
-  memoryObservations,
-} from "../memory/schema.js";
+import { memoryEpisodes, memoryObservations } from "../memory/schema.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -131,7 +128,6 @@ function insertObservation(
     .run();
 }
 
-
 function insertEpisode(
   db: ReturnType<typeof getDb>,
   opts: {
@@ -192,18 +188,18 @@ describe("Memory Recall Quality (Simplified Archive)", () => {
 
   describe("trigger classification", () => {
     test("explicit past-reference patterns trigger recall", () => {
-      expect(classifyRecallTrigger("do you remember what we discussed?", 0)).toBe(
-        "explicit_past_reference",
-      );
+      expect(
+        classifyRecallTrigger("do you remember what we discussed?", 0),
+      ).toBe("explicit_past_reference");
       expect(classifyRecallTrigger("what did I tell you last time?", 0)).toBe(
         "explicit_past_reference",
       );
     });
 
     test("analogy/debugging patterns trigger recall", () => {
-      expect(classifyRecallTrigger("this is similar to that bug before", 0)).toBe(
-        "analogy_debug",
-      );
+      expect(
+        classifyRecallTrigger("this is similar to that bug before", 0),
+      ).toBe("analogy_debug");
       expect(classifyRecallTrigger("I keep getting this error", 0)).toBe(
         "analogy_debug",
       );
@@ -226,7 +222,9 @@ describe("Memory Recall Quality (Simplified Archive)", () => {
 
   describe("keyword extraction", () => {
     test("filters short words and stop words", () => {
-      const keywords = extractKeywords("I want to use TypeScript for my project");
+      const keywords = extractKeywords(
+        "I want to use TypeScript for my project",
+      );
       expect(keywords).toContain("typescript");
       expect(keywords).toContain("project");
       expect(keywords).not.toContain("want");
@@ -251,14 +249,22 @@ describe("Memory Recall Quality (Simplified Archive)", () => {
       const convId = "conv-episode-recall";
 
       insertConversation(db, convId, now);
-      insertMessage(db, "msg-1", convId, "user", "Deploy Kubernetes cluster", now);
+      insertMessage(
+        db,
+        "msg-1",
+        convId,
+        "user",
+        "Deploy Kubernetes cluster",
+        now,
+      );
 
       insertEpisode(db, {
         id: uuid(),
         scopeId: "default",
         conversationId: convId,
         title: "Kubernetes Deployment",
-        summary: "Deployed a Kubernetes cluster on AWS with 3 worker nodes using EKS",
+        summary:
+          "Deployed a Kubernetes cluster on AWS with 3 worker nodes using EKS",
         createdAt: now,
       });
 
