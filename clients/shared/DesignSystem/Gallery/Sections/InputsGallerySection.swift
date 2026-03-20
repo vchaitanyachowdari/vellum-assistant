@@ -23,6 +23,8 @@ struct InputsGallerySection: View {
     @State private var dropdownErrorValue = "a"
     @State private var formName = ""
     @State private var formDropdown = ""
+    @State private var focusDemoValue = ""
+    @FocusState private var isFocusDemoFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: VSpacing.xxl) {
@@ -165,6 +167,54 @@ struct InputsGallerySection: View {
                                 text: $textFieldValue,
                                 maxWidth: 400
                             )
+                        }
+
+                        Divider().background(VColor.borderBase)
+
+                        // --- Custom Font ---
+                        Text("Custom font").font(VFont.captionMedium).foregroundColor(VColor.contentTertiary)
+
+                        HStack(alignment: .top, spacing: VSpacing.xl) {
+                            VStack(alignment: .leading, spacing: VSpacing.md) {
+                                Text("Monospaced (VFont.mono)").font(VFont.caption).foregroundColor(VColor.contentTertiary)
+                                VTextField(
+                                    placeholder: "Enter command...",
+                                    text: $textFieldValue,
+                                    font: VFont.mono
+                                )
+                            }
+
+                            VStack(alignment: .leading, spacing: VSpacing.md) {
+                                Text("Monospaced secure").font(VFont.caption).foregroundColor(VColor.contentTertiary)
+                                VTextField(
+                                    placeholder: "Enter secret...",
+                                    text: $secureFieldValue,
+                                    isSecure: true,
+                                    font: VFont.mono
+                                )
+                            }
+                        }
+
+                        Divider().background(VColor.borderBase)
+
+                        // --- External Focus Control ---
+                        Text("External focus control").font(VFont.captionMedium).foregroundColor(VColor.contentTertiary)
+
+                        VStack(alignment: .leading, spacing: VSpacing.md) {
+                            Text("Pass a FocusState<Bool>.Binding via isFocused: to control focus programmatically.")
+                                .font(VFont.caption).foregroundColor(VColor.contentTertiary)
+                            VAdaptiveStack(horizontalAlignment: .bottom) {
+                                VTextField(
+                                    "Focusable field",
+                                    placeholder: "Click the button to focus me...",
+                                    text: $focusDemoValue,
+                                    isFocused: $isFocusDemoFocused
+                                )
+                                .frame(maxWidth: 400)
+                                VButton(label: isFocusDemoFocused ? "Blur" : "Focus", style: .outlined) {
+                                    isFocusDemoFocused.toggle()
+                                }
+                            }
                         }
                     }
                 }
