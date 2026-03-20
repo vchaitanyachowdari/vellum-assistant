@@ -19,6 +19,7 @@ import {
   type MessageRow,
   updateConversationTitle,
 } from "./conversation-crud.js";
+import { extractTextFromStoredMessageContent } from "./message-content.js";
 
 const log = getLogger("conversation-title-service");
 
@@ -363,7 +364,9 @@ function buildRegenerationPrompt(recentMessages: MessageRow[]): string {
 
   for (const msg of recentMessages) {
     const role = msg.role === "user" ? "User" : "Assistant";
-    parts.push(`${role}: ${truncate(msg.content, 200, "")}`);
+    parts.push(
+      `${role}: ${truncate(extractTextFromStoredMessageContent(msg.content), 200, "")}`,
+    );
   }
 
   return parts.join("\n");
