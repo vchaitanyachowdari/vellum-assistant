@@ -309,17 +309,13 @@ extension AppDelegate {
         errorCode: String?
     ) {
         guard let deliveryId else { return }
-        let result = NotificationIntentResult(
-            type: "notification_intent_result",
-            deliveryId: deliveryId,
-            success: success,
-            errorMessage: errorMessage,
-            errorCode: errorCode
-        )
-        do {
-            try daemonClient.send(result)
-        } catch {
-            log.warning("Failed to send notification_intent_result for deliveryId \(deliveryId): \(error.localizedDescription)")
+        Task {
+            await NotificationClient().sendIntentResult(
+                deliveryId: deliveryId,
+                success: success,
+                errorMessage: errorMessage,
+                errorCode: errorCode
+            )
         }
     }
 

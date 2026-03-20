@@ -243,7 +243,6 @@ public final class SettingsStore: ObservableObject {
     // MARK: - Platform Config State
 
     @Published var platformBaseUrl: String = ""
-    private var pendingPlatformUrl: String?
 
     // MARK: - Ingress Config State
 
@@ -544,25 +543,6 @@ public final class SettingsStore: ObservableObject {
         // Wire up ingress config response (for SSE-pushed updates)
         daemonClient?.onIngressConfigResponse = { [weak self] response in
             self?.handleIngressConfigResponse(response)
-        }
-
-        // Wire up platform config response
-        daemonClient?.onPlatformConfigResponse = { [weak self] response in
-            guard let self else { return }
-            if response.success {
-                self.platformBaseUrl = response.baseUrl
-                AuthService.shared.configuredBaseURL = response.baseUrl
-            } else {
-                // Revert optimistic state on failure
-                if let previous = self.pendingPlatformUrl {
-                    self.platformBaseUrl = previous
-                    AuthService.shared.configuredBaseURL = previous
-                    self.pendingPlatformUrl = nil
-                }
-                if let error = response.error {
-                    log.error("Platform config update failed: \(error)")
-                }
-            }
         }
 
         // Wire up Telegram config response
@@ -2075,26 +2055,33 @@ public final class SettingsStore: ObservableObject {
     // MARK: - Platform Config
 
     func refreshPlatformConfig() {
-        do {
-            try daemonClient?.send(PlatformConfigRequestMessage(action: "get"))
-        } catch {
-            log.error("Failed to send platform config get: \(error)")
+        Task {
+            guard let response = await settingsClient.fetchPlatformConfig() else { return }
+            if response.success {
+                self.platformBaseUrl = response.baseUrl
+                AuthService.shared.configuredBaseURL = response.baseUrl
+            }
         }
     }
 
     func savePlatformBaseUrl(_ raw: String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let previous = platformBaseUrl
-        pendingPlatformUrl = previous
         platformBaseUrl = trimmed
         AuthService.shared.configuredBaseURL = trimmed
-        do {
-            try daemonClient?.send(PlatformConfigRequestMessage(action: "set", baseUrl: trimmed))
-        } catch {
-            pendingPlatformUrl = nil
-            platformBaseUrl = previous
-            AuthService.shared.configuredBaseURL = previous
-            log.error("Failed to send platform config set: \(error)")
+        Task {
+            guard let response = await settingsClient.setPlatformConfig(baseUrl: trimmed) else {
+                self.platformBaseUrl = previous
+                AuthService.shared.configuredBaseURL = previous
+                return
+            }
+            if !response.success {
+                self.platformBaseUrl = previous
+                AuthService.shared.configuredBaseURL = previous
+                if let error = response.error {
+                    log.error("Platform config update failed: \(error)")
+                }
+            }
         }
     }
 
