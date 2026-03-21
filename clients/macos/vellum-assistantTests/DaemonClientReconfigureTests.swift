@@ -21,32 +21,30 @@ final class DaemonClientReconfigureTests: XCTestCase {
 
     func testResetPreservesObjectIdentity() {
         let originalIdentity = ObjectIdentifier(client!)
-        client.resetConnectionState(instanceDir: "/tmp/test")
+        client.reconfigure(instanceDir: "/tmp/test")
         XCTAssertEqual(ObjectIdentifier(client!), originalIdentity,
-            "resetConnectionState must preserve object identity")
+            "reconfigure must preserve object identity")
     }
 
     func testResetUpdatesInstanceDir() {
-        client.resetConnectionState(instanceDir: "/tmp/test-instance")
+        client.reconfigure(instanceDir: "/tmp/test-instance")
         XCTAssertEqual(client.instanceDir, "/tmp/test-instance")
     }
 
     func testResetClearsConnectionState() {
-        client.httpPort = 7821
         client.currentModel = "claude-3"
 
-        client.resetConnectionState()
+        client.reconfigure(instanceDir: nil)
 
-        XCTAssertNil(client.httpPort)
         XCTAssertNil(client.currentModel)
-        XCTAssertNil(client.daemonVersion)
+        XCTAssertNil(client.assistantVersion)
         XCTAssertNil(client.latestMemoryStatus)
         XCTAssertFalse(client.isConnected)
     }
 
     func testResetSetsIsConnectedToFalse() {
         client.isConnected = true
-        client.resetConnectionState()
+        client.reconfigure(instanceDir: nil)
         XCTAssertFalse(client.isConnected)
     }
 
@@ -55,7 +53,7 @@ final class DaemonClientReconfigureTests: XCTestCase {
         _ = { weakClient = nil }
 
         XCTAssertNotNil(weakClient)
-        client.resetConnectionState()
+        client.reconfigure(instanceDir: nil)
         XCTAssertNotNil(weakClient)
         XCTAssertTrue(weakClient === client)
     }
