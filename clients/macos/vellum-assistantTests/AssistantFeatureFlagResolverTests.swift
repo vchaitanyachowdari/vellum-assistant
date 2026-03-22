@@ -56,34 +56,36 @@ final class AssistantFeatureFlagResolverTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreCachesResolvedFlagsAfterInitialLoad() {
-        var readCount = 0
+    func testStoreCachesResolvedFlagsAfterInitialLoad() async {
+        let mockClient = MockSettingsClient()
+        mockClient.fetchConfigResponse = [:]
         let store = AssistantFeatureFlagStore(
             notificationCenter: NotificationCenter(),
             registry: makeRegistry(defaultEnabled: false),
-            readConfig: {
-                readCount += 1
-                return [:]
-            }
+            settingsClient: mockClient
         )
+
+        // Wait for the init Task to finish fetching from daemon.
+        await store.reloadFromDaemon()
 
         XCTAssertFalse(store.isEnabled(conversationStartersKey))
         XCTAssertFalse(store.isEnabled(conversationStartersKey))
-        XCTAssertEqual(readCount, 1)
     }
 
     @MainActor
-    func testStoreAppliesFlagChangeNotificationsWithoutReloadingConfig() {
+    func testStoreAppliesFlagChangeNotificationsWithoutReloadingConfig() async {
         let notificationCenter = NotificationCenter()
-        var readCount = 0
+        let mockClient = MockSettingsClient()
+        mockClient.fetchConfigResponse = [:]
         let store = AssistantFeatureFlagStore(
             notificationCenter: notificationCenter,
             registry: makeRegistry(defaultEnabled: false),
-            readConfig: {
-                readCount += 1
-                return [:]
-            }
+            settingsClient: mockClient
         )
+
+        // Wait for the init Task to finish so it doesn't race with the notification.
+        await store.reloadFromDaemon()
+        let callCountBeforeNotification = mockClient.fetchConfigCallCount
 
         notificationCenter.post(
             name: .assistantFeatureFlagDidChange,
@@ -93,6 +95,7 @@ final class AssistantFeatureFlagResolverTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertTrue(store.isEnabled(conversationStartersKey))
-        XCTAssertEqual(readCount, 1)
+        // The targeted notification should not trigger a daemon fetch.
+        XCTAssertEqual(mockClient.fetchConfigCallCount, callCountBeforeNotification)
     }
 }
