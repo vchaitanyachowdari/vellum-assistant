@@ -23,13 +23,14 @@ import {
   loadBootstrapSecret,
   saveBootstrapSecret,
 } from "../lib/guardian-token";
+import { restoreBackup } from "../lib/backup-ops.js";
 import { emitCliError, categorizeUpgradeError } from "../lib/cli-error.js";
-import { commitWorkspaceState } from "../lib/workspace-git.js";
 import {
   broadcastUpgradeEvent,
   captureContainerEnv,
   waitForReady,
-} from "./upgrade";
+} from "../lib/upgrade-lifecycle.js";
+import { commitWorkspaceState } from "../lib/workspace-git.js";
 
 function parseArgs(): { name: string | null } {
   const args = process.argv.slice(3);
@@ -291,6 +292,33 @@ export async function rollback(): Promise<void> {
     const ready = await waitForReady(entry.runtimeUrl);
 
     if (ready) {
+      // Restore data from the backup created for the specific upgrade being
+      // rolled back. We use the persisted preUpgradeBackupPath rather than
+      // scanning for the latest backup on disk — if the most recent upgrade's
+      // backup failed, a global scan would find a stale backup from a prior
+      // cycle and overwrite newer user data.
+      const backupPath = entry.preUpgradeBackupPath as string | undefined;
+      if (backupPath) {
+        console.log(`📦 Restoring data from pre-upgrade backup...`);
+        console.log(`   Source: ${backupPath}`);
+        const restored = await restoreBackup(
+          entry.runtimeUrl,
+          entry.assistantId,
+          backupPath,
+        );
+        if (restored) {
+          console.log("   ✅ Data restored successfully\n");
+        } else {
+          console.warn(
+            "   ⚠️  Data restore failed (rollback continues without data restoration)\n",
+          );
+        }
+      } else {
+        console.log(
+          "ℹ️  No pre-upgrade backup was created for this upgrade, skipping data restoration\n",
+        );
+      }
+
       // Capture new digests from the rolled-back containers
       const newDigests = await captureImageRefs(res);
 
@@ -309,6 +337,8 @@ export async function rollback(): Promise<void> {
         },
         previousServiceGroupVersion: entry.serviceGroupVersion,
         previousContainerInfo: entry.containerInfo,
+        // Clear the backup path — it belonged to the upgrade we just rolled back
+        preUpgradeBackupPath: undefined,
       };
       saveAssistantEntry(updatedEntry);
 

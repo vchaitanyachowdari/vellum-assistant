@@ -13,7 +13,6 @@ import type { AssistantEntry } from "../lib/assistant-config";
 import {
   captureImageRefs,
   clearSigningKeyBootstrapLock,
-  DOCKER_READY_TIMEOUT_MS,
   GATEWAY_INTERNAL_PORT,
   dockerResourceNames,
   migrateCesSecurityFiles,
@@ -30,10 +29,19 @@ import {
 import {
   loadBootstrapSecret,
   saveBootstrapSecret,
-  loadGuardianToken,
 } from "../lib/guardian-token";
+import {
+  createBackup,
+  pruneOldBackups,
+  restoreBackup,
+} from "../lib/backup-ops.js";
 import { emitCliError, categorizeUpgradeError } from "../lib/cli-error.js";
-import { exec, execOutput } from "../lib/step-runner";
+import { exec } from "../lib/step-runner.js";
+import {
+  broadcastUpgradeEvent,
+  captureContainerEnv,
+  waitForReady,
+} from "../lib/upgrade-lifecycle.js";
 import { commitWorkspaceState } from "../lib/workspace-git.js";
 
 interface UpgradeArgs {
@@ -150,101 +158,6 @@ function resolveTargetAssistant(nameArg: string | null): AssistantEntry {
   process.exit(1);
 }
 
-/**
- * Capture environment variables from a running Docker container so they
- * can be replayed onto the replacement container after upgrade.
- */
-export async function captureContainerEnv(
-  containerName: string,
-): Promise<Record<string, string>> {
-  const captured: Record<string, string> = {};
-  try {
-    const raw = await execOutput("docker", [
-      "inspect",
-      "--format",
-      "{{json .Config.Env}}",
-      containerName,
-    ]);
-    const entries = JSON.parse(raw) as string[];
-    for (const entry of entries) {
-      const eqIdx = entry.indexOf("=");
-      if (eqIdx > 0) {
-        captured[entry.slice(0, eqIdx)] = entry.slice(eqIdx + 1);
-      }
-    }
-  } catch {
-    // Container may not exist or not be inspectable
-  }
-  return captured;
-}
-
-/**
- * Poll the gateway `/readyz` endpoint until it returns 200 or the timeout
- * elapses. Returns whether the assistant became ready.
- */
-export async function waitForReady(runtimeUrl: string): Promise<boolean> {
-  const readyUrl = `${runtimeUrl}/readyz`;
-  const start = Date.now();
-
-  while (Date.now() - start < DOCKER_READY_TIMEOUT_MS) {
-    try {
-      const resp = await fetch(readyUrl, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (resp.ok) {
-        const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-        console.log(`Assistant ready after ${elapsedSec}s`);
-        return true;
-      }
-      let detail = "";
-      try {
-        const body = await resp.text();
-        const json = JSON.parse(body);
-        const parts = [json.status];
-        if (json.upstream != null) parts.push(`upstream=${json.upstream}`);
-        detail = ` — ${parts.join(", ")}`;
-      } catch {
-        // ignore parse errors
-      }
-      console.log(`Readiness check: ${resp.status}${detail} (retrying...)`);
-    } catch {
-      // Connection refused / timeout — not up yet
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  return false;
-}
-
-/**
- * Best-effort broadcast of an upgrade lifecycle event to connected clients
- * via the gateway's upgrade-broadcast proxy. Uses guardian token auth.
- * Failures are logged but never block the upgrade flow.
- */
-export async function broadcastUpgradeEvent(
-  gatewayUrl: string,
-  assistantId: string,
-  event: Record<string, unknown>,
-): Promise<void> {
-  try {
-    const token = loadGuardianToken(assistantId);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (token?.accessToken) {
-      headers["Authorization"] = `Bearer ${token.accessToken}`;
-    }
-    await fetch(`${gatewayUrl}/v1/admin/upgrade-broadcast`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(event),
-      signal: AbortSignal.timeout(3000),
-    });
-  } catch {
-    // Best-effort — gateway/daemon may already be shutting down or not yet ready
-  }
-}
-
 async function upgradeDocker(
   entry: AssistantEntry,
   version: string | null,
@@ -358,6 +271,33 @@ async function upgradeDocker(
     saveBootstrapSecret(instanceName, bootstrapSecret);
   }
 
+  // Create pre-upgrade backup (best-effort, daemon must be running)
+  console.log("📦 Creating pre-upgrade backup...");
+  const backupPath = await createBackup(entry.runtimeUrl, entry.assistantId, {
+    prefix: `${entry.assistantId}-pre-upgrade`,
+    description: `Pre-upgrade snapshot before ${entry.serviceGroupVersion ?? "unknown"} → ${versionTag}`,
+  });
+  if (backupPath) {
+    console.log(`   Backup saved: ${backupPath}\n`);
+    // Clean up old pre-upgrade backups, keep last 3
+    pruneOldBackups(entry.assistantId, 3);
+  } else {
+    console.warn("⚠️  Pre-upgrade backup failed (continuing with upgrade)\n");
+  }
+
+  // Persist the backup path so `vellum rollback` can restore the exact backup
+  // created for this upgrade attempt — never a stale backup from a prior cycle.
+  // Re-read the entry to pick up the rollback state saved earlier.
+  {
+    const current = findAssistantByName(entry.assistantId);
+    if (current) {
+      saveAssistantEntry({
+        ...current,
+        preUpgradeBackupPath: backupPath ?? undefined,
+      });
+    }
+  }
+
   // Notify connected clients that an upgrade is about to begin.
   console.log("📢 Notifying connected clients...");
   await broadcastUpgradeEvent(entry.runtimeUrl, entry.assistantId, {
@@ -444,6 +384,8 @@ async function upgradeDocker(
       },
       previousServiceGroupVersion: entry.serviceGroupVersion,
       previousContainerInfo: entry.containerInfo,
+      // Preserve the backup path so `vellum rollback` can restore it later
+      preUpgradeBackupPath: backupPath ?? undefined,
     };
     saveAssistantEntry(updatedEntry);
 
@@ -510,6 +452,31 @@ async function upgradeDocker(
 
         const rollbackReady = await waitForReady(entry.runtimeUrl);
         if (rollbackReady) {
+          // Restore data from the backup created for THIS upgrade attempt.
+          // Only use the specific backupPath — never scan for the latest
+          // backup on disk, which could be from a previous upgrade cycle
+          // and contain stale data.
+          if (backupPath) {
+            console.log(`📦 Restoring data from pre-upgrade backup...`);
+            console.log(`   Source: ${backupPath}`);
+            const restored = await restoreBackup(
+              entry.runtimeUrl,
+              entry.assistantId,
+              backupPath,
+            );
+            if (restored) {
+              console.log("   ✅ Data restored successfully\n");
+            } else {
+              console.warn(
+                "   ⚠️  Data restore failed (rollback continues without data restoration)\n",
+              );
+            }
+          } else {
+            console.log(
+              "ℹ️  No pre-upgrade backup was created for this attempt, skipping data restoration\n",
+            );
+          }
+
           // Capture fresh digests from the now-running rolled-back containers.
           const rollbackDigests = await captureImageRefs(res);
 
@@ -539,6 +506,8 @@ async function upgradeDocker(
             },
             previousServiceGroupVersion: undefined,
             previousContainerInfo: undefined,
+            // Clear the backup path — the upgrade that created it just failed
+            preUpgradeBackupPath: undefined,
           };
           saveAssistantEntry(rolledBackEntry);
 

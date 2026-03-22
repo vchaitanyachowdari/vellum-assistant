@@ -1,21 +1,9 @@
 import { mkdirSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import { dirname, join } from "path";
 
 import { findAssistantByName } from "../lib/assistant-config";
+import { getBackupsDir, formatSize } from "../lib/backup-ops.js";
 import { loadGuardianToken, leaseGuardianToken } from "../lib/guardian-token";
-
-function getBackupsDir(): string {
-  const dataHome =
-    process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
-  return join(dataHome, "vellum", "backups");
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export async function backup(): Promise<void> {
   const args = process.argv.slice(3);
@@ -104,6 +92,33 @@ export async function backup(): Promise<void> {
       body: JSON.stringify({ description: "CLI backup" }),
       signal: AbortSignal.timeout(120_000),
     });
+
+    // Retry once with a fresh token on 401 — the cached token may be stale
+    // after a container restart that generated a new gateway signing key.
+    if (response.status === 401) {
+      let refreshedToken: string | null = null;
+      try {
+        const freshToken = await leaseGuardianToken(
+          entry.runtimeUrl,
+          entry.assistantId,
+        );
+        refreshedToken = freshToken.accessToken;
+      } catch {
+        // If token refresh fails, fall through to the !response.ok handler below
+      }
+      if (refreshedToken) {
+        accessToken = refreshedToken;
+        response = await fetch(`${entry.runtimeUrl}/v1/migrations/export`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ description: "CLI backup" }),
+          signal: AbortSignal.timeout(120_000),
+        });
+      }
+    }
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       console.error("Error: Export request timed out after 2 minutes.");
