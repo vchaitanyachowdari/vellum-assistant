@@ -12,7 +12,6 @@ import {
 import type { AssistantEntry } from "../lib/assistant-config";
 import {
   captureImageRefs,
-  clearSigningKeyBootstrapLock,
   GATEWAY_INTERNAL_PORT,
   dockerResourceNames,
   migrateCesSecurityFiles,
@@ -292,6 +291,11 @@ async function upgradeDocker(
     saveBootstrapSecret(instanceName, bootstrapSecret);
   }
 
+  // Extract or generate the shared JWT signing key. Pre-env-var instances
+  // won't have it in capturedEnv, so generate fresh in that case.
+  const signingKey =
+    capturedEnv["ACTOR_TOKEN_SIGNING_KEY"] || randomBytes(32).toString("hex");
+
   // Create pre-upgrade backup (best-effort, daemon must be running)
   await broadcastUpgradeEvent(entry.runtimeUrl, entry.assistantId, {
     type: "progress",
@@ -339,6 +343,7 @@ async function upgradeDocker(
     "VELLUM_ASSISTANT_NAME",
     "RUNTIME_HTTP_HOST",
     "PATH",
+    "ACTOR_TOKEN_SIGNING_KEY",
   ]);
   // Only exclude keys that serviceDockerRunArgs will actually set
   for (const envVar of ["ANTHROPIC_API_KEY", "VELLUM_PLATFORM_URL"]) {
@@ -359,19 +364,10 @@ async function upgradeDocker(
   console.log("🔄 Migrating credential files to CES security volume...");
   await migrateCesSecurityFiles(res, (msg) => console.log(msg));
 
-  console.log("🔑 Clearing signing key bootstrap lock...");
-  try {
-    await clearSigningKeyBootstrapLock(res);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `⚠️  Failed to clear signing key bootstrap lock (${message}), continuing...`,
-    );
-  }
-
   console.log("🚀 Starting upgraded containers...");
   await startContainers(
     {
+      signingKey,
       bootstrapSecret,
       cesServiceToken,
       extraAssistantEnv,
@@ -452,17 +448,10 @@ async function upgradeDocker(
 
         await migrateGatewaySecurityFiles(res, (msg) => console.log(msg));
         await migrateCesSecurityFiles(res, (msg) => console.log(msg));
-        try {
-          await clearSigningKeyBootstrapLock(res);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `⚠️  Failed to clear signing key bootstrap lock (${message}), continuing...`,
-          );
-        }
 
         await startContainers(
           {
+            signingKey,
             bootstrapSecret,
             cesServiceToken,
             extraAssistantEnv,

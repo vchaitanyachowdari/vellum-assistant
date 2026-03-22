@@ -466,6 +466,7 @@ async function buildAllImages(
  * can be restarted independently.
  */
 export function serviceDockerRunArgs(opts: {
+  signingKey?: string;
   bootstrapSecret?: string;
   cesServiceToken?: string;
   extraAssistantEnv?: Record<string, string>;
@@ -522,6 +523,9 @@ export function serviceDockerRunArgs(opts: {
       if (cesServiceToken) {
         args.push("-e", `CES_SERVICE_TOKEN=${cesServiceToken}`);
       }
+      if (opts.signingKey) {
+        args.push("-e", `ACTOR_TOKEN_SIGNING_KEY=${opts.signingKey}`);
+      }
       for (const envVar of [
         ...Object.values(PROVIDER_ENV_VAR_NAMES),
         "VELLUM_PLATFORM_URL",
@@ -567,6 +571,9 @@ export function serviceDockerRunArgs(opts: {
       `CES_CREDENTIAL_URL=http://${res.cesContainer}:8090`,
       ...(cesServiceToken
         ? ["-e", `CES_SERVICE_TOKEN=${cesServiceToken}`]
+        : []),
+      ...(opts.signingKey
+        ? ["-e", `ACTOR_TOKEN_SIGNING_KEY=${opts.signingKey}`]
         : []),
       ...(opts.bootstrapSecret
         ? ["-e", `GUARDIAN_BOOTSTRAP_SECRET=${opts.bootstrapSecret}`]
@@ -754,6 +761,7 @@ export const SERVICE_START_ORDER: ServiceName[] = [
 /** Start all three containers in dependency order. */
 export async function startContainers(
   opts: {
+    signingKey?: string;
     bootstrapSecret?: string;
     cesServiceToken?: string;
     extraAssistantEnv?: Record<string, string>;
@@ -781,26 +789,6 @@ export async function stopContainers(
   await removeContainer(res.assistantContainer);
 }
 
-/**
- * Remove the signing-key-bootstrap lockfile from the gateway security volume.
- * This allows the daemon to re-fetch the signing key from the gateway on the
- * next startup — necessary during upgrades where the gateway may generate a
- * new key.
- */
-export async function clearSigningKeyBootstrapLock(
-  res: ReturnType<typeof dockerResourceNames>,
-): Promise<void> {
-  await exec("docker", [
-    "run",
-    "--rm",
-    "-v",
-    `${res.gatewaySecurityVolume}:/gateway-security`,
-    "busybox",
-    "rm",
-    "-f",
-    "/gateway-security/signing-key-bootstrap.lock",
-  ]);
-}
 
 /** Stop containers without removing them (preserves state for `docker start`). */
 export async function sleepContainers(
@@ -1134,28 +1122,17 @@ export async function hatchDocker(
       "/workspace",
     ]);
 
-    // Clear any stale signing-key bootstrap lockfile so the daemon can
-    // fetch the key from the gateway on first startup.
-    await exec("docker", [
-      "run",
-      "--rm",
-      "-v",
-      `${res.gatewaySecurityVolume}:/gateway-security`,
-      "busybox",
-      "rm",
-      "-f",
-      "/gateway-security/signing-key-bootstrap.lock",
-    ]);
-
     // Write --config key=value pairs to a temp file that gets bind-mounted
     // into the assistant container and read via VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH.
     const defaultWorkspaceConfigPath = writeInitialConfig(configValues);
 
     const cesServiceToken = randomBytes(32).toString("hex");
+    const signingKey = randomBytes(32).toString("hex");
     const bootstrapSecret = randomBytes(32).toString("hex");
     saveBootstrapSecret(instanceName, bootstrapSecret);
     await startContainers(
       {
+        signingKey,
         bootstrapSecret,
         cesServiceToken,
         gatewayPort,

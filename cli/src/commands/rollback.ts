@@ -10,7 +10,6 @@ import {
 import type { AssistantEntry } from "../lib/assistant-config";
 import {
   captureImageRefs,
-  clearSigningKeyBootstrapLock,
   GATEWAY_INTERNAL_PORT,
   dockerResourceNames,
   migrateCesSecurityFiles,
@@ -211,12 +210,17 @@ export async function rollback(): Promise<void> {
       saveBootstrapSecret(instanceName, bootstrapSecret);
     }
 
+    // Extract or generate the shared JWT signing key.
+    const signingKey =
+      capturedEnv["ACTOR_TOKEN_SIGNING_KEY"] || randomBytes(32).toString("hex");
+
     // Build extra env vars, excluding keys managed by serviceDockerRunArgs
     const envKeysSetByRunArgs = new Set([
       "CES_SERVICE_TOKEN",
       "VELLUM_ASSISTANT_NAME",
       "RUNTIME_HTTP_HOST",
       "PATH",
+      "ACTOR_TOKEN_SIGNING_KEY",
     ]);
     for (const envVar of ["ANTHROPIC_API_KEY", "VELLUM_PLATFORM_URL"]) {
       if (process.env[envVar]) {
@@ -269,19 +273,10 @@ export async function rollback(): Promise<void> {
     console.log("🔄 Migrating credential files to CES security volume...");
     await migrateCesSecurityFiles(res, (msg) => console.log(msg));
 
-    console.log("🔑 Clearing signing key bootstrap lock...");
-    try {
-      await clearSigningKeyBootstrapLock(res);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `⚠️  Failed to clear signing key bootstrap lock (${message}), continuing...`,
-      );
-    }
-
     console.log("🚀 Starting containers with previous version...");
     await startContainers(
       {
+        signingKey,
         bootstrapSecret,
         cesServiceToken,
         extraAssistantEnv,
