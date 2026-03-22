@@ -61,10 +61,25 @@ const store = new SessionStore();
 /**
  * Host patterns that are allowed by default through the proxy policy engine,
  * regardless of session configuration. Supports exact matches (e.g.
- * `"localhost"`) and wildcard subdomain patterns (e.g. `"*.vellum.ai"`
- * matches `platform.vellum.ai`, `dev-platform.vellum.ai`, etc.).
+ * `"localhost"`) and wildcard subdomain patterns (e.g. `"*.example.com"`
+ * matches `api.example.com`, `dev.example.com`, etc.).
+ *
+ * Additional patterns can be added via the `PROXY_ALLOWED_HOSTS` env var
+ * (comma-separated, e.g. `"*.example.com,api.foo.bar"`).
  */
-const ALLOWED_HOST_PATTERNS: readonly string[] = ["*.vellum.ai", "localhost"];
+const ALLOWED_HOST_PATTERNS: readonly string[] = (() => {
+  const extra = process.env.PROXY_ALLOWED_HOSTS?.trim();
+  const defaults = ["localhost"];
+  if (extra) {
+    defaults.push(
+      ...extra
+        .split(",")
+        .map((h) => h.trim())
+        .filter(Boolean),
+    );
+  }
+  return defaults;
+})();
 
 /**
  * Returns `true` when `hostname` matches any entry in
@@ -73,7 +88,7 @@ const ALLOWED_HOST_PATTERNS: readonly string[] = ["*.vellum.ai", "localhost"];
 function isAllowedHost(hostname: string): boolean {
   for (const pattern of ALLOWED_HOST_PATTERNS) {
     if (pattern.startsWith("*.")) {
-      const suffix = pattern.slice(1); // e.g. ".vellum.ai"
+      const suffix = pattern.slice(1); // e.g. ".example.com"
       if (hostname.endsWith(suffix) || hostname === pattern.slice(2)) {
         return true;
       }

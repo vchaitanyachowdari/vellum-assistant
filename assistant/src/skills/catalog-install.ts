@@ -88,11 +88,7 @@ function getConfigPlatformUrl(): string | undefined {
 }
 
 function getPlatformUrl(): string {
-  return (
-    process.env.VELLUM_PLATFORM_URL ??
-    getConfigPlatformUrl() ??
-    "https://platform.vellum.ai"
-  );
+  return process.env.VELLUM_PLATFORM_URL ?? getConfigPlatformUrl() ?? "";
 }
 
 function buildHeaders(): Record<string, string> {
@@ -107,7 +103,11 @@ function buildHeaders(): Record<string, string> {
 // ─── Catalog operations ──────────────────────────────────────────────────────
 
 export async function fetchCatalog(): Promise<CatalogSkill[]> {
-  const url = `${getPlatformUrl()}/v1/skills/`;
+  const platformUrl = getPlatformUrl();
+  if (!platformUrl) {
+    return [];
+  }
+  const url = `${platformUrl}/v1/skills/`;
   const response = await fetch(url, {
     headers: buildHeaders(),
     signal: AbortSignal.timeout(10000),
@@ -214,7 +214,13 @@ export async function fetchAndExtractSkill(
   skillId: string,
   destDir: string,
 ): Promise<void> {
-  const url = `${getPlatformUrl()}/v1/skills/${encodeURIComponent(skillId)}/`;
+  const platformUrl = getPlatformUrl();
+  if (!platformUrl) {
+    throw new Error(
+      `Cannot fetch skill "${skillId}": VELLUM_PLATFORM_URL is not configured.`,
+    );
+  }
+  const url = `${platformUrl}/v1/skills/${encodeURIComponent(skillId)}/`;
   const response = await fetch(url, {
     headers: buildHeaders(),
     signal: AbortSignal.timeout(15000),

@@ -9,7 +9,7 @@ import {
 import { homedir } from "os";
 import { join, dirname } from "path";
 
-const DEFAULT_PLATFORM_URL = "https://platform.vellum.ai";
+const DEFAULT_PLATFORM_URL = "";
 
 function getXdgConfigHome(): string {
   return process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
@@ -21,6 +21,20 @@ function getPlatformTokenPath(): string {
 
 export function getPlatformUrl(): string {
   return process.env.VELLUM_PLATFORM_URL ?? DEFAULT_PLATFORM_URL;
+}
+
+/**
+ * Returns the platform URL, throwing a clear error if it is not configured.
+ * Use this in functions that need a valid URL to make HTTP requests.
+ */
+function requirePlatformUrl(): string {
+  const url = getPlatformUrl();
+  if (!url) {
+    throw new Error(
+      "VELLUM_PLATFORM_URL is not configured. Set it in your environment or .env file.",
+    );
+  }
+  return url;
 }
 
 export function readPlatformToken(): string | null {
@@ -60,7 +74,7 @@ interface OrganizationListResponse {
 }
 
 export async function fetchOrganizationId(token: string): Promise<string> {
-  const platformUrl = getPlatformUrl();
+  const platformUrl = requirePlatformUrl();
   const url = `${platformUrl}/v1/organizations/`;
   const response = await fetch(url, {
     headers: { "X-Session-Token": token },
@@ -92,7 +106,7 @@ interface AllauthSessionResponse {
 }
 
 export async function fetchCurrentUser(token: string): Promise<PlatformUser> {
-  const url = `${getPlatformUrl()}/_allauth/app/v1/auth/session`;
+  const url = `${requirePlatformUrl()}/_allauth/app/v1/auth/session`;
   const response = await fetch(url, {
     headers: { "X-Session-Token": token },
   });
