@@ -5,7 +5,7 @@
  * Covers:
  *   - Flag OFF blocks all exposure paths
  *   - Missing persisted value falls back to code default
- *   - New assistantFeatureFlagValues is the sole override mechanism
+ *   - Protected feature-flags.json is the sole override mechanism
  *   - Undeclared keys default to enabled
  */
 import {
@@ -119,7 +119,7 @@ mock.module("../tools/credentials/metadata-store.js", () => ({
 }));
 
 const { buildSystemPrompt } = await import("../prompts/system-prompt.js");
-const { isAssistantFeatureFlagEnabled } =
+const { isAssistantFeatureFlagEnabled, _setOverridesForTesting } =
   await import("../config/assistant-feature-flags.js");
 const { skillFlagKey } = await import("../config/skill-state.js");
 
@@ -129,6 +129,7 @@ const { skillFlagKey } = await import("../config/skill-state.js");
 
 beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
+  _setOverridesForTesting({});
   currentConfig = {
     services: {
       inference: {
@@ -147,6 +148,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _setOverridesForTesting({});
   if (existsSync(TEST_DIR)) {
     rmSync(TEST_DIR, { recursive: true, force: true });
   }
@@ -197,11 +199,12 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
       "browser",
     );
 
+    _setOverridesForTesting({
+      [DECLARED_FLAG_KEY]: false,
+      "feature_flags.browser.enabled": true,
+    });
+
     currentConfig = {
-      assistantFeatureFlagValues: {
-        [DECLARED_FLAG_KEY]: false,
-        "feature_flags.browser.enabled": true,
-      },
       services: {
         inference: {
           mode: "your-own",
@@ -281,11 +284,12 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
       "email-channel",
     );
 
+    _setOverridesForTesting({
+      [DECLARED_FLAG_KEY]: false,
+      "feature_flags.email-channel.enabled": false,
+    });
+
     currentConfig = {
-      assistantFeatureFlagValues: {
-        [DECLARED_FLAG_KEY]: false,
-        "feature_flags.email-channel.enabled": false,
-      },
       services: {
         inference: {
           mode: "your-own",
@@ -310,7 +314,7 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
     expect(result).not.toContain("**email-channel**");
   });
 
-  test("assistantFeatureFlagValues overrides control visibility", () => {
+  test("file-based overrides control visibility", () => {
     createSkillOnDisk(
       DECLARED_SKILL_ID,
       "Contacts",
@@ -318,8 +322,9 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
       DECLARED_FLAG_ID,
     );
 
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: true });
+
     currentConfig = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: true },
       services: {
         inference: {
           mode: "your-own",
@@ -351,8 +356,9 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
       "browser",
     );
 
+    _setOverridesForTesting({ "feature_flags.browser.enabled": false });
+
     currentConfig = {
-      assistantFeatureFlagValues: { "feature_flags.browser.enabled": false },
       services: {
         inference: {
           mode: "your-own",
@@ -445,18 +451,16 @@ describe("buildSystemPrompt assistant feature flag filtering", () => {
 // ---------------------------------------------------------------------------
 
 describe("isAssistantFeatureFlagEnabled", () => {
-  test("reads from assistantFeatureFlagValues", () => {
-    const config = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: true },
-    } as any;
+  test("reads from file-based overrides", () => {
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: true });
+    const config = {} as any;
 
     expect(isAssistantFeatureFlagEnabled(DECLARED_FLAG_KEY, config)).toBe(true);
   });
 
-  test("explicit false override in assistantFeatureFlagValues", () => {
-    const config = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: false },
-    } as any;
+  test("explicit false override in file-based overrides", () => {
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: false });
+    const config = {} as any;
 
     expect(isAssistantFeatureFlagEnabled(DECLARED_FLAG_KEY, config)).toBe(
       false,
@@ -482,10 +486,9 @@ describe("isAssistantFeatureFlagEnabled", () => {
     ).toBe(true);
   });
 
-  test("undeclared flag respects persisted canonical override", () => {
-    const config = {
-      assistantFeatureFlagValues: { "feature_flags.browser.enabled": false },
-    } as any;
+  test("undeclared flag respects persisted override", () => {
+    _setOverridesForTesting({ "feature_flags.browser.enabled": false });
+    const config = {} as any;
 
     expect(
       isAssistantFeatureFlagEnabled("feature_flags.browser.enabled", config),
@@ -495,9 +498,8 @@ describe("isAssistantFeatureFlagEnabled", () => {
 
 describe("isAssistantFeatureFlagEnabled with skillFlagKey", () => {
   test("resolves skill flag via canonical path", () => {
-    const config = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: false },
-    } as any;
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: false });
+    const config = {} as any;
 
     expect(
       isAssistantFeatureFlagEnabled(

@@ -7,10 +7,7 @@ import { CesRpcMethod } from "@vellumai/ces-contracts";
 // ---------------------------------------------------------------------------
 
 const callFn = mock(
-  async (
-    _method: string,
-    _request: unknown,
-  ): Promise<unknown> => ({}),
+  async (_method: string, _request: unknown): Promise<unknown> => ({}),
 );
 
 const isReadyFn = mock((): boolean => true);

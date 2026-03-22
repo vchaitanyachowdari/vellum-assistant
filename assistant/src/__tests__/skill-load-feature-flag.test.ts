@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { _setOverridesForTesting } from "../config/assistant-feature-flags.js";
+
 const TEST_DIR = join(
   tmpdir(),
   `vellum-skill-load-flag-test-${crypto.randomUUID()}`,
@@ -112,9 +114,11 @@ describe("skill_load feature flag enforcement", () => {
   beforeEach(() => {
     mkdirSync(join(TEST_DIR, "skills"), { recursive: true });
     currentConfig = {};
+    _setOverridesForTesting({});
   });
 
   afterEach(() => {
+    _setOverridesForTesting({});
     if (existsSync(TEST_DIR)) {
       rmSync(TEST_DIR, { recursive: true, force: true });
     }
@@ -132,9 +136,7 @@ describe("skill_load feature flag enforcement", () => {
       `- ${DECLARED_SKILL_ID}\n`,
     );
 
-    currentConfig = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: false },
-    };
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: false });
 
     const result = await executeSkillLoad({ skill: DECLARED_SKILL_ID });
 
@@ -155,9 +157,7 @@ describe("skill_load feature flag enforcement", () => {
       `- ${DECLARED_SKILL_ID}\n`,
     );
 
-    currentConfig = {
-      assistantFeatureFlagValues: { [DECLARED_FLAG_KEY]: true },
-    };
+    _setOverridesForTesting({ [DECLARED_FLAG_KEY]: true });
 
     const result = await executeSkillLoad({ skill: DECLARED_SKILL_ID });
 
@@ -177,9 +177,7 @@ describe("skill_load feature flag enforcement", () => {
       `- ${DECLARED_SKILL_ID}\n`,
     );
 
-    currentConfig = {
-      assistantFeatureFlagValues: {},
-    };
+    // No overrides — uses registry defaults
 
     const result = await executeSkillLoad({ skill: DECLARED_SKILL_ID });
 

@@ -300,7 +300,14 @@ struct SettingsPanel: View {
                             // Persist the flag so it survives relaunch
                             Task {
                                 do {
-                                    try await featureFlagClient.setFeatureFlag(key: Self.developerFeatureFlagKey, enabled: true)
+                                    if connectionManager != nil {
+                                        try await featureFlagClient.setFeatureFlag(key: Self.developerFeatureFlagKey, enabled: true)
+                                    } else {
+                                        try AssistantFeatureFlagResolver.mergePersistedFlag(
+                                            key: Self.developerFeatureFlagKey,
+                                            enabled: true
+                                        )
+                                    }
                                 } catch {
                                     // Flag is already set in memory; persistence failure is non-fatal
                                 }
@@ -634,13 +641,9 @@ struct SettingsPanel: View {
             }
         }
         // Build resolved values: start with bundled registry defaults, then overlay persisted overrides
-        let registry = loadFeatureFlagRegistry()
-        let registryDefaults = Dictionary(
-            uniqueKeysWithValues: (registry?.assistantScopeFlags() ?? []).map { ($0.key, $0.defaultEnabled) }
+        let resolved = AssistantFeatureFlagResolver.resolvedFlags(
+            registry: loadFeatureFlagRegistry()
         )
-        let config = await SettingsClient().fetchConfig() ?? [:]
-        let persistedFlags = (config["assistantFeatureFlagValues"] as? [String: Bool]) ?? [:]
-        let resolved = registryDefaults.merging(persistedFlags) { _, persisted in persisted }
 
         if let developerEnabled = resolved[Self.developerFeatureFlagKey] {
             isDeveloperEnabled = developerEnabled
