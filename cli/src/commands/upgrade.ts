@@ -44,6 +44,7 @@ import {
   buildUpgradeCommitMessage,
   captureContainerEnv,
   CONTAINER_ENV_EXCLUDE_KEYS,
+  rollbackMigrations,
   UPGRADE_PROGRESS,
   waitForReady,
 } from "../lib/upgrade-lifecycle.js";
@@ -198,6 +199,26 @@ async function upgradeDocker(
     );
   }
 
+  // Capture current migration state for rollback targeting.
+  // Must happen while daemon is still running (before containers are stopped).
+  let preMigrationState: {
+    dbVersion?: number;
+    lastWorkspaceMigrationId?: string;
+  } = {};
+  try {
+    const healthResp = await fetch(`${entry.runtimeUrl}/healthz`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (healthResp.ok) {
+      const health = (await healthResp.json()) as {
+        migrations?: { dbVersion?: number; lastWorkspaceMigrationId?: string };
+      };
+      preMigrationState = health.migrations ?? {};
+    }
+  } catch {
+    // Best-effort — if we can't get migration state, rollback will skip migration reversal
+  }
+
   // Persist rollback state to lockfile BEFORE any destructive changes.
   // This enables the `vellum rollback` command to restore the previous version.
   if (entry.serviceGroupVersion && entry.containerInfo) {
@@ -205,6 +226,8 @@ async function upgradeDocker(
       ...entry,
       previousServiceGroupVersion: entry.serviceGroupVersion,
       previousContainerInfo: { ...entry.containerInfo },
+      previousDbMigrationVersion: preMigrationState.dbVersion,
+      previousWorkspaceMigrationId: preMigrationState.lastWorkspaceMigrationId,
     };
     saveAssistantEntry(rollbackEntry);
     console.log(`   Saved rollback state: ${entry.serviceGroupVersion}\n`);
@@ -405,6 +428,8 @@ async function upgradeDocker(
       },
       previousServiceGroupVersion: entry.serviceGroupVersion,
       previousContainerInfo: entry.containerInfo,
+      previousDbMigrationVersion: preMigrationState.dbVersion,
+      previousWorkspaceMigrationId: preMigrationState.lastWorkspaceMigrationId,
       // Preserve the backup path so `vellum rollback` can restore it later
       preUpgradeBackupPath: backupPath ?? undefined,
     };
@@ -453,6 +478,26 @@ async function upgradeDocker(
       );
       console.log(`\n🔄 Rolling back to previous images...`);
       try {
+        // Attempt to roll back migrations before swapping containers.
+        // The new daemon may be partially up — try best-effort.
+        if (
+          preMigrationState.dbVersion !== undefined ||
+          preMigrationState.lastWorkspaceMigrationId !== undefined
+        ) {
+          console.log("🔄 Reverting database changes...");
+          await broadcastUpgradeEvent(
+            entry.runtimeUrl,
+            entry.assistantId,
+            buildProgressEvent(UPGRADE_PROGRESS.REVERTING_MIGRATIONS),
+          );
+          await rollbackMigrations(
+            entry.runtimeUrl,
+            entry.assistantId,
+            preMigrationState.dbVersion,
+            preMigrationState.lastWorkspaceMigrationId,
+          );
+        }
+
         await stopContainers(res);
 
         await migrateGatewaySecurityFiles(res, (msg) => console.log(msg));
@@ -533,6 +578,8 @@ async function upgradeDocker(
             },
             previousServiceGroupVersion: undefined,
             previousContainerInfo: undefined,
+            previousDbMigrationVersion: undefined,
+            previousWorkspaceMigrationId: undefined,
             // Clear the backup path — the upgrade that created it just failed
             preUpgradeBackupPath: undefined,
           };

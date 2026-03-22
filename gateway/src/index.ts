@@ -61,6 +61,7 @@ import {
   createMigrationExportProxyHandler,
   createMigrationImportProxyHandler,
 } from "./http/routes/migration-proxy.js";
+import { createMigrationRollbackProxyHandler } from "./http/routes/migration-rollback-proxy.js";
 import { createWorkspaceCommitProxyHandler } from "./http/routes/workspace-commit-proxy.js";
 import { createBrainGraphProxyHandler } from "./http/routes/brain-graph-proxy.js";
 import {
@@ -292,6 +293,7 @@ async function main() {
   const upgradeBroadcastProxy = createUpgradeBroadcastProxyHandler(config);
   const migrationExportProxy = createMigrationExportProxyHandler(config);
   const migrationImportProxy = createMigrationImportProxyHandler(config);
+  const migrationRollbackProxy = createMigrationRollbackProxyHandler(config);
   const workspaceCommitProxy = createWorkspaceCommitProxyHandler(config);
   const brainGraphProxy = createBrainGraphProxyHandler(config);
   const handleFeatureFlagsGet = createFeatureFlagsGetHandler();
@@ -780,6 +782,14 @@ async function main() {
       handler: (req) => workspaceCommitProxy(req),
     },
 
+    // ── Migration rollback ──
+    {
+      path: "/v1/admin/rollback-migrations",
+      method: "POST",
+      auth: "edge",
+      handler: (req) => migrationRollbackProxy(req),
+    },
+
     // ── Channel readiness ──
     {
       path: "/v1/channels/readiness",
@@ -1003,6 +1013,29 @@ async function main() {
       // ── Pre-router: health/readiness probes ──
       // These bypass rate limiting and tracing for minimal overhead.
       if (url.pathname === "/healthz") {
+        // Also fetch the daemon's /healthz to surface migration state
+        // (dbVersion, lastWorkspaceMigrationId) so the CLI can capture
+        // pre-upgrade migration state through the gateway.
+        try {
+          const upstream = await fetch(
+            `${config.assistantRuntimeBaseUrl}/healthz`,
+            { signal: AbortSignal.timeout(3000) },
+          );
+          if (upstream.ok) {
+            const body = (await upstream.json()) as {
+              migrations?: {
+                dbVersion?: number;
+                lastWorkspaceMigrationId?: string;
+              };
+            };
+            return Response.json({
+              status: "ok",
+              ...(body.migrations ? { migrations: body.migrations } : {}),
+            });
+          }
+        } catch {
+          // Daemon unreachable — graceful degradation, still return ok
+        }
         return Response.json({ status: "ok" });
       }
 
