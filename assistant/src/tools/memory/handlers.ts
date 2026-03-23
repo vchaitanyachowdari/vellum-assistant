@@ -310,7 +310,7 @@ export async function handleMemoryRecall(
         items: [],
         sources: {
           semantic: recall.semanticHits,
-          recency: recall.recencyHits,
+          recency: 0,
         },
       };
       return {
@@ -330,7 +330,7 @@ export async function handleMemoryRecall(
       })),
       sources: {
         semantic: recall.semanticHits,
-        recency: recall.recencyHits,
+        recency: 0,
       },
     };
 

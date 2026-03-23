@@ -16,35 +16,32 @@ import { withCrashRecovery } from "./validate-migration-state.js";
  * 2. source_message_role from the earliest source message's role via subquery
  */
 export function migrateAddSourceTypeColumns(database: DrizzleDb): void {
-  withCrashRecovery(
-    database,
-    "migration_add_source_type_columns_v1",
-    () => {
-      const raw = getSqliteFrom(database);
+  withCrashRecovery(database, "migration_add_source_type_columns_v1", () => {
+    const raw = getSqliteFrom(database);
 
-      // Add source_type column if it doesn't exist
-      if (!tableHasColumn(database, "memory_items", "source_type")) {
-        raw.exec(
-          /*sql*/ `ALTER TABLE memory_items ADD COLUMN source_type TEXT NOT NULL DEFAULT 'extraction'`,
-        );
-      }
-
-      // Add source_message_role column if it doesn't exist
-      if (!tableHasColumn(database, "memory_items", "source_message_role")) {
-        raw.exec(
-          /*sql*/ `ALTER TABLE memory_items ADD COLUMN source_message_role TEXT`,
-        );
-      }
-
-      // Backfill source_type = 'tool' for items that were explicitly saved
+    // Add source_type column if it doesn't exist
+    if (!tableHasColumn(database, "memory_items", "source_type")) {
       raw.exec(
-        /*sql*/ `UPDATE memory_items SET source_type = 'tool' WHERE verification_state = 'user_confirmed'`,
+        /*sql*/ `ALTER TABLE memory_items ADD COLUMN source_type TEXT NOT NULL DEFAULT 'extraction'`,
       );
+    }
 
-      // Backfill source_message_role from the earliest source message's role.
-      // Only backfill where source_message_role is currently NULL and a source
-      // message exists.
-      raw.exec(/*sql*/ `
+    // Add source_message_role column if it doesn't exist
+    if (!tableHasColumn(database, "memory_items", "source_message_role")) {
+      raw.exec(
+        /*sql*/ `ALTER TABLE memory_items ADD COLUMN source_message_role TEXT`,
+      );
+    }
+
+    // Backfill source_type = 'tool' for items that were explicitly saved
+    raw.exec(
+      /*sql*/ `UPDATE memory_items SET source_type = 'tool' WHERE verification_state = 'user_confirmed'`,
+    );
+
+    // Backfill source_message_role from the earliest source message's role.
+    // Only backfill where source_message_role is currently NULL and a source
+    // message exists.
+    raw.exec(/*sql*/ `
         UPDATE memory_items
         SET source_message_role = (
           SELECT m.role
@@ -61,8 +58,7 @@ export function migrateAddSourceTypeColumns(database: DrizzleDb): void {
             WHERE mis.memory_item_id = memory_items.id
           )
       `);
-    },
-  );
+  });
 }
 
 /**

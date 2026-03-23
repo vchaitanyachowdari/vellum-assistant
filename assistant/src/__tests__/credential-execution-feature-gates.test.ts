@@ -56,7 +56,12 @@ const ALL_CES_FLAG_KEYS = [
 
 /** All CES predicate functions paired with their flag keys and expected defaults. */
 const ALL_CES_PREDICATES = [
-  { name: "isCesToolsEnabled", fn: isCesToolsEnabled, key: CES_TOOLS_FLAG_KEY, defaultEnabled: false },
+  {
+    name: "isCesToolsEnabled",
+    fn: isCesToolsEnabled,
+    key: CES_TOOLS_FLAG_KEY,
+    defaultEnabled: false,
+  },
   {
     name: "isCesShellLockdownEnabled",
     fn: isCesShellLockdownEnabled,
@@ -110,7 +115,9 @@ describe("CES flags match registry defaults", () => {
   for (const pred of ALL_CES_PREDICATES) {
     test(`isAssistantFeatureFlagEnabled('${pred.key}') returns ${pred.defaultEnabled} with no overrides`, () => {
       const config = makeConfig();
-      expect(isAssistantFeatureFlagEnabled(pred.key, config)).toBe(pred.defaultEnabled);
+      expect(isAssistantFeatureFlagEnabled(pred.key, config)).toBe(
+        pred.defaultEnabled,
+      );
     });
   }
 });
@@ -130,7 +137,11 @@ describe("CES flags can be toggled independently", () => {
     test(`enabling ${key} does not change other CES flags from their defaults`, () => {
       _setOverridesForTesting({ [key]: true });
       const config = makeConfig();
-      for (const { fn: otherFn, key: otherKey, defaultEnabled } of ALL_CES_PREDICATES) {
+      for (const {
+        fn: otherFn,
+        key: otherKey,
+        defaultEnabled,
+      } of ALL_CES_PREDICATES) {
         if (otherKey === key) continue;
         expect(otherFn(config)).toBe(defaultEnabled);
       }
