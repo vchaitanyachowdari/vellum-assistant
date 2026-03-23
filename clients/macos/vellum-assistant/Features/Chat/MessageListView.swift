@@ -520,6 +520,10 @@ struct MessageListView: View {
     }
 
     private func applyAvatarDisplayY(forAnchorY anchorY: CGFloat) {
+        // Circuit breaker: suppress @State mutations when a scroll loop is detected.
+        let convIdString = conversationId?.uuidString ?? "unknown"
+        if scrollLoopGuard.isTripped(conversationId: convIdString) { return }
+
         let y = anchorY + ConversationAvatarFollower.verticalOffset
         // Dead-zone: skip @State update when position hasn't moved meaningfully.
         // Each avatarDisplayY change triggers a MessageListView body re-evaluation;
@@ -555,8 +559,13 @@ struct MessageListView: View {
         // the avatar to flash off-screen via shouldShowConversationTailAvatar.
         let nowVisible = anchorY.isFinite
             && ConversationAvatarFollower.shouldShow(anchorY: anchorY, viewportHeight: scrollViewportHeight)
+        let convIdString = conversationId?.uuidString ?? "unknown"
+        let isTripped = scrollLoopGuard.isTripped(conversationId: convIdString)
         if isAvatarVisible != nowVisible {
-            if nowVisible || !isSending {
+            // Circuit breaker: when tripped, only allow hiding (removing UI is safe).
+            // Showing (false→true) adds layout that could feed the loop — suppress it.
+            // Send guard: during send, don't hide on transient non-finite anchors.
+            if (!isTripped || !nowVisible) && (nowVisible || !isSending) {
                 isAvatarVisible = nowVisible
             }
         }
@@ -579,9 +588,9 @@ struct MessageListView: View {
             // the tail anchor view during re-layout (e.g. thinking indicator
             // insertion, rich UI expansion), producing a non-finite preference.
             // Keep the avatar at its last known position so it doesn't flash
-            // off-screen and back. Once the layout settles, a finite anchor
-            // will arrive and the avatar resumes normal tracking.
-            if !isSending && avatarDisplayY != .infinity {
+            // off-screen and back. Also suppress when circuit breaker is tripped
+            // to avoid @State mutations that feed the scroll loop.
+            if !isTripped && !isSending && avatarDisplayY != .infinity {
                 avatarDisplayY = .infinity
             }
             return
@@ -610,7 +619,10 @@ struct MessageListView: View {
             avatarSmoothingTask?.cancel()
             avatarSmoothingTask = nil
             scrollTracking.pendingAvatarY = nil
-            applyAvatarDisplayY(forAnchorY: anchorY)
+            // Only apply @State avatar position when circuit breaker isn't tripped
+            if !isTripped {
+                applyAvatarDisplayY(forAnchorY: anchorY)
+            }
             return
         }
 
@@ -629,7 +641,10 @@ struct MessageListView: View {
                 return
             }
             scrollTracking.pendingAvatarY = nil
-            applyAvatarDisplayY(forAnchorY: pending)
+            // Only apply @State avatar position when circuit breaker isn't tripped
+            if !scrollLoopGuard.isTripped(conversationId: conversationId?.uuidString ?? "unknown") {
+                applyAvatarDisplayY(forAnchorY: pending)
+            }
             avatarSmoothingTask = nil
         }
     }
