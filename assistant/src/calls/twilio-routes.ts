@@ -188,6 +188,7 @@ export async function handleVoiceWebhook(req: Request): Promise<Response> {
         task: session.task,
         toNumber: callerTo,
         fromNumber: callerFrom,
+        direction: "inbound",
         inviteFriendName: null,
         inviteGuardianName: null,
       },
@@ -222,6 +223,7 @@ export async function handleVoiceWebhook(req: Request): Promise<Response> {
       task: session.task,
       toNumber: session.toNumber,
       fromNumber: session.fromNumber,
+      direction: "outbound",
       inviteFriendName: session.inviteFriendName,
       inviteGuardianName: session.inviteGuardianName,
     },
@@ -245,6 +247,7 @@ function buildVoiceWebhookTwiml(
     task: string | null;
     toNumber: string;
     fromNumber: string;
+    direction: "inbound" | "outbound";
     inviteFriendName: string | null;
     inviteGuardianName: string | null;
   } | null,
