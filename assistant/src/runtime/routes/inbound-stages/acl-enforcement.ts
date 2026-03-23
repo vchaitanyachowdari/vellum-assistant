@@ -8,7 +8,10 @@
  */
 import { isInviteCodeRedemptionEnabled } from "../../../channels/config.js";
 import type { ChannelId } from "../../../channels/types.js";
-import { findContactChannel } from "../../../contacts/contact-store.js";
+import {
+  findContactChannel,
+  findGuardianForChannel,
+} from "../../../contacts/contact-store.js";
 import { touchChannelLastSeen } from "../../../contacts/contacts-write.js";
 import type {
   ChannelStatus,
@@ -21,6 +24,7 @@ import {
   findByInviteCodeHash,
   findByInviteCodeHashAnyChannel,
 } from "../../../memory/invite-store.js";
+import { resolveGuardianName } from "../../../prompts/user-reference.js";
 import { getLogger } from "../../../util/logger.js";
 import { hashVoiceCode } from "../../../util/voice-code.js";
 import { notifyGuardianOfAccessRequest } from "../../access-request-helper.js";
@@ -32,6 +36,7 @@ import {
   resolveBootstrapToken,
 } from "../../channel-verification-service.js";
 import { deliverChannelReply } from "../../gateway-client.js";
+import { ensureVellumGuardianBinding } from "../../guardian-vellum-migration.js";
 import {
   redeemInvite,
   redeemInviteByCode,
@@ -39,6 +44,42 @@ import {
 import { getInviteRedemptionReply } from "../../invite-redemption-templates.js";
 
 const log = getLogger("runtime-http");
+
+/**
+ * Resolve the guardian's display name for use in requester-facing messages.
+ *
+ * Uses the assistant's anchored vellum principal to validate the guardian
+ * contact, matching the same strategy used by `notifyGuardianOfAccessRequest`.
+ * This prevents stale or cross-assistant contacts from leaking a wrong name.
+ */
+function resolveGuardianLabel(
+  sourceChannel: ChannelId,
+  canonicalAssistantId: string,
+): string {
+  const anchoredPrincipalId = ensureVellumGuardianBinding(canonicalAssistantId);
+
+  // Try source-channel guardian, but only accept it when the principal
+  // matches the assistant's anchor.
+  const sourceGuardian = findGuardianForChannel(sourceChannel);
+  if (
+    sourceGuardian &&
+    sourceGuardian.contact.principalId === anchoredPrincipalId
+  ) {
+    return resolveGuardianName(sourceGuardian.contact.displayName);
+  }
+
+  // Fall back to the vellum-channel guardian with the same anchor check.
+  const vellumGuardian = findGuardianForChannel("vellum");
+  if (
+    vellumGuardian &&
+    vellumGuardian.contact.principalId === anchoredPrincipalId
+  ) {
+    return resolveGuardianName(vellumGuardian.contact.displayName);
+  }
+
+  // No anchored guardian found — use generic fallback.
+  return resolveGuardianName(undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -349,7 +390,7 @@ export async function enforceIngressAcl(
                   dmCallbackUrl,
                   {
                     chatId: senderUserId,
-                    text: "I don't recognize you yet! I've let my owner know you're trying to reach me. They'll need to share a 6-digit verification code with you — ask them directly if you know them. Once you have the code, reply here with it.",
+                    text: `I don't recognize you yet! I've let ${resolveGuardianLabel(sourceChannel, canonicalAssistantId)} know you're trying to reach me. They'll need to share a 6-digit verification code with you — ask them directly if you know them. Once you have the code, reply here with it.`,
                     assistantId,
                   },
                   mintBearerToken(),
@@ -398,7 +439,7 @@ export async function enforceIngressAcl(
 
         if (replyCallbackUrl) {
           const replyText = guardianNotified
-            ? "Hmm looks like you don't have access to talk to me. I'll let them know you tried talking to me and get back to you."
+            ? `Hmm looks like you don't have access to talk to me. I'll let ${resolveGuardianLabel(sourceChannel, canonicalAssistantId)} know you tried talking to me and get back to you.`
             : "Sorry, you haven't been approved to message this assistant.";
           const replyPayload: Parameters<typeof deliverChannelReply>[1] = {
             chatId: conversationExternalId,
@@ -603,7 +644,7 @@ export async function enforceIngressAcl(
                     dmCallbackUrl,
                     {
                       chatId: senderUserId,
-                      text: "I don't recognize you yet! I've let my owner know you're trying to reach me. They'll need to share a 6-digit verification code with you — ask them directly if you know them. Once you have the code, reply here with it.",
+                      text: `I don't recognize you yet! I've let ${resolveGuardianLabel(sourceChannel, canonicalAssistantId)} know you're trying to reach me. They'll need to share a 6-digit verification code with you — ask them directly if you know them. Once you have the code, reply here with it.`,
                       assistantId,
                     },
                     mintBearerToken(),
@@ -657,7 +698,7 @@ export async function enforceIngressAcl(
 
           if (replyCallbackUrl) {
             const replyText = guardianNotified
-              ? "Hmm looks like you don't have access to talk to me. I'll let them know you tried talking to me and get back to you."
+              ? `Hmm looks like you don't have access to talk to me. I'll let ${resolveGuardianLabel(sourceChannel, canonicalAssistantId)} know you tried talking to me and get back to you.`
               : "Sorry, you haven't been approved to message this assistant.";
             const inactiveReplyPayload: Parameters<
               typeof deliverChannelReply
