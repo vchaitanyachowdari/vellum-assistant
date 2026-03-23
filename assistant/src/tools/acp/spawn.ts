@@ -1,6 +1,67 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { getAcpSessionManager } from "../../acp/index.js";
 import { getConfig } from "../../config/loader.js";
+import { getLogger } from "../../util/logger.js";
 import type { ToolContext, ToolExecutionResult } from "../types.js";
+
+const execFileAsync = promisify(execFile);
+const log = getLogger("acp:spawn");
+
+/** Cache so we only check once per process lifetime. */
+let adapterVersionChecked = false;
+
+interface AdapterVersionInfo {
+  outdated: true;
+  installed: string;
+  latest: string;
+}
+
+/**
+ * Checks if the globally-installed claude-agent-acp adapter is outdated.
+ * Runs at most once per process lifetime. Does NOT auto-update — returns
+ * version info so the caller can ask the user first.
+ */
+async function checkAdapterVersion(
+  command: string,
+): Promise<AdapterVersionInfo | null> {
+  if (adapterVersionChecked || command !== "claude-agent-acp") {
+    return null;
+  }
+
+  try {
+    const { stdout: installedRaw } = await execFileAsync("npm", [
+      "ls",
+      "-g",
+      "--json",
+      "@zed-industries/claude-agent-acp",
+    ]);
+    const { stdout: latestRaw } = await execFileAsync("npm", [
+      "view",
+      "@zed-industries/claude-agent-acp",
+      "version",
+    ]);
+
+    const installed =
+      JSON.parse(installedRaw)?.dependencies?.[
+        "@zed-industries/claude-agent-acp"
+      ]?.version;
+    const latest = latestRaw.trim();
+
+    adapterVersionChecked = true;
+
+    if (!installed || !latest || installed === latest) {
+      return null;
+    }
+
+    log.info({ installed, latest }, "claude-agent-acp is outdated");
+    return { outdated: true, installed, latest };
+  } catch (err) {
+    log.warn({ err }, "Failed to check claude-agent-acp version");
+    return null;
+  }
+}
 
 export async function executeAcpSpawn(
   input: Record<string, unknown>,
@@ -37,6 +98,17 @@ export async function executeAcpSpawn(
     };
   }
 
+  // Check if the ACP adapter is outdated before spawning
+  const versionInfo = await checkAdapterVersion(agentConfig.command);
+  if (versionInfo) {
+    return {
+      content:
+        `claude-agent-acp is outdated (installed: ${versionInfo.installed}, latest: ${versionInfo.latest}). ` +
+        `Ask the user if they'd like to update. If yes, run: npm install -g @zed-industries/claude-agent-acp@${versionInfo.latest} — then retry acp_spawn.`,
+      isError: true,
+    };
+  }
+
   try {
     const manager = getAcpSessionManager();
     const cwd = (input.cwd as string) || context.workingDir;
@@ -64,7 +136,12 @@ export async function executeAcpSpawn(
       isError: false,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg =
+      err instanceof Error
+        ? err.message
+        : typeof err === "object" && err !== undefined
+          ? JSON.stringify(err)
+          : String(err);
     return { content: `Failed to spawn ACP agent: ${msg}`, isError: true };
   }
 }
