@@ -22,57 +22,12 @@ extension EnvironmentValues {
     }
 }
 
-/// Holds the last-known anchor minY without triggering SwiftUI re-renders.
-/// Only `isVisible` is @Published so re-renders happen only when the
-/// visible/invisible boundary is crossed — not on every scroll tick.
-@MainActor final class AnchorVisibilityTracker: ObservableObject {
-    var lastMinY: CGFloat = .infinity  // NOT @Published — no re-render on scroll
-    @Published var isVisible: Bool = true
-
-    /// Updates the tracked minY and recalculates visibility.
-    /// Only publishes `isVisible` when the boundary is actually crossed
-    /// (visible ↔ invisible), not on every scroll tick — this prevents
-    /// SwiftUI re-renders during continuous scrolling.
-    func update(minY: CGFloat, viewportHeight: CGFloat) {
-        lastMinY = minY
-        let newVisible = minY >= -20 && minY <= viewportHeight + 20
-        if isVisible != newVisible { isVisible = newVisible }
-    }
-
-    /// Returns `true` when the viewport height actually changed, so callers
-    /// can refresh any state tied to the visible geometry.
-    @discardableResult
-    func updateViewport(height: CGFloat, storedViewportHeight: inout CGFloat) -> Bool {
-        guard storedViewportHeight != height else { return false }
-        storedViewportHeight = height
-        // Don't recompute visibility before the anchor position has been
-        // measured — lastMinY starts at .infinity, and .infinity <= height + 20
-        // evaluates to false, incorrectly flipping isVisible to false and
-        // flashing the "Scroll to latest" button on short conversations.
-        guard lastMinY.isFinite else { return true }
-        let newVisible = lastMinY >= -20 && lastMinY <= height + 20
-        if isVisible != newVisible { isVisible = newVisible }
-        return true
-    }
-}
-
 /// Holds scroll-related tracking values that must persist across body
 /// evaluations but must NOT trigger SwiftUI re-renders when updated.
 /// These values serve as dead-zone guards and smoothing state — they
 /// are never read during body evaluation for rendering purposes.
-/// Pattern mirrors `AnchorVisibilityTracker.lastMinY` (not @Published).
+/// Pattern mirrors `anchorLastMinY` on the coordinator (not @Published).
 @MainActor final class ScrollTrackingState {
-    /// Last reported ConversationTailAnchorYKey value.
-    /// Only used for the 2pt dead-zone check in the preference handler.
-    var lastTailAnchorY: CGFloat = .infinity
-    /// Pending avatar Y position awaiting smoothing delay.
-    var pendingAvatarY: CGFloat?
-    /// Timestamp of the last applied avatar display Y update.
-    var avatarLastAppliedAt: Date?
-    /// Non-reactive avatar anchor Y position. Only used for threshold
-    /// comparisons and visibility boundary detection — never read during
-    /// body evaluation for rendering, so mutations do not trigger re-renders.
-    var avatarTargetY: CGFloat = .infinity
     /// Debounced task for transcript snapshot updates, coalescing rapid scroll
     /// events into a single snapshot capture per 150ms window.
     var snapshotDebounceTask: Task<Void, Never>?
@@ -83,20 +38,50 @@ extension EnvironmentValues {
     var cachedPrecomputedKey: PrecomputedCacheKey?
     /// Cached result for `precomputedState`, returned on cache hit.
     var cachedPrecomputedState: PrecomputedMessageListState?
+
+    // MARK: - Version Counter (O(1) fingerprint replacement)
+
+    /// Monotonically increasing counter that replaces the O(n) per-body-eval
+    /// `computeMessageFingerprint()` hash. Incremented when any of the following
+    /// triggers fire:
+    /// - `messages.count` changes (new message appended or pagination load)
+    /// - `isSending` or `isThinking` transitions (activity state change)
+    /// - `messages.last?.isStreaming` transitions (end of streaming)
+    /// - A tool call's `isComplete` transitions (observable via messages array
+    ///   identity change in SwiftUI)
+    ///
+    /// Over-invalidation is safe (triggers a recompute); under-invalidation is not.
+    var messageListVersion: Int = 0
+
+    /// Cached message count for detecting structural changes.
+    var lastKnownMessageCount: Int = 0
+    /// Cached streaming state of the last message.
+    var lastKnownLastMessageStreaming: Bool = false
+    /// Cached count of incomplete tool calls across all messages.
+    var lastKnownIncompleteToolCallCount: Int = 0
 }
 
 /// Lightweight key that captures all inputs to `precomputedState`.
-/// For the message array we use a hash-based fingerprint rather than
-/// storing the full array, keeping equality checks O(1) after an
-/// O(visible-messages) fingerprint computation.
+/// All fields are O(1) to compare. The `messageListVersion` counter
+/// replaces the former O(n) hash-based fingerprint — it is incremented
+/// by `onChange` handlers when structural or content changes occur.
 struct PrecomputedCacheKey: Equatable {
-    let messageFingerprint: Int
+    let messageListVersion: Int
     let isSending: Bool
     let isThinking: Bool
     let isCompacting: Bool
     let assistantStatusText: String?
     let activeSubagentFingerprint: Int
     let displayedMessageCount: Int
+}
+
+/// Lightweight snapshot of scroll geometry for the onScrollGeometryChange
+/// handler. Captures only the values needed for scroll-direction and
+/// scrollable-content detection.
+private struct ScrollDetectionState: Equatable {
+    let contentOffsetY: CGFloat
+    let contentHeight: CGFloat
+    let containerHeight: CGFloat
 }
 
 struct MessageListView: View {
@@ -171,83 +156,29 @@ struct MessageListView: View {
     /// Observing the full TaskProgressOverlayManager would cause the entire
     /// message list to re-render on every frequent `data` progress tick.
     @State private var activeSurfaceId: String?
-    /// Guards the pagination sentinel against re-entry during the brief window
-    /// between Task launch and the first `await` (before isLoadingMoreMessages is set).
-    @State private var isPaginationInFlight: Bool = false
-    @State private var paginationTask: Task<Void, Never>?
-    /// Suppresses bottom auto-scroll for the ~32ms layout window after pagination
-    /// restores scroll position, preventing a jump back to the bottom.
-    @State private var isSuppressingBottomScroll: Bool = false
-    @State private var isAppActive: Bool = NSApp.isActive
-    @State private var conversationSwitchSuppressionTask: Task<Void, Never>?
-    @State private var suppressScrollbarDuringConversationSwitch: Bool = false
-    @State private var expandSuppressionTask: Task<Void, Never>?
-    /// Tracks the last pending confirmation request ID that triggered an
-    /// auto-focus handoff. Used to detect nil→non-nil transitions so we
-    /// resign first responder exactly once per new confirmation appearance.
-    @State private var lastAutoFocusedRequestId: String?
-    /// Tracks whether the scroll-bottom-anchor is physically within the scroll
-    /// view's visible viewport. Used alongside `isNearBottom` to suppress the
-    /// "Scroll to latest" button when all content fits on screen. Stored as an
-    /// ObservableObject so only boundary crossings (not every scroll tick)
-    /// trigger re-renders.
-    @StateObject private var anchorTracker = AnchorVisibilityTracker()
-    /// Whether a physical scroll event (wheel/trackpad) has been received since
-    /// the current conversation loaded. Used by `restoreScrollToBottom` to skip
-    /// retries once the user has interacted, and by the scroll-bottom-anchor's
-    /// `onAppear` to avoid premature re-tethering during LazyVStack prefetch.
-    @State private var hasReceivedScrollEvent: Bool = false
-    /// The scroll view's viewport height, captured via preference key. Used by
-    /// the anchor GeometryReader to determine if the anchor is within bounds.
+    /// Consolidates all scroll-related state: anchor tracking, scroll loop guard,
+    /// bottom pin coordinator, suppression flags, and scroll-related tasks.
+    @StateObject private var scrollCoordinator = MessageListScrollCoordinator()
+    /// The scroll view's viewport height, captured via onScrollGeometryChange.
+    /// Used for anchor visibility checks and bottom-pin verification.
     @State private var scrollViewportHeight: CGFloat = .infinity
-    /// Timestamp when anchorMessageId was set. Used together with pagination
-    /// exhaustion to decide when a stale anchor should be cleared.
-    @State private var anchorSetTime: Date?
-    /// Independent timer task that clears a stale anchor after 10 seconds,
-    /// regardless of whether messages.count changes. This covers the edge
-    /// case where pagination stalls without adding/removing messages.
-    @State private var anchorTimeoutTask: Task<Void, Never>?
-    /// Last container width that triggered a resize scroll handler, used to
-    /// detect meaningful width changes (>2pt) and avoid sub-pixel jitter.
-    @State private var lastHandledContainerWidth: CGFloat = 0
     /// In-flight resize scroll stabilization task; cancelled on each new resize.
     @State private var resizeScrollTask: Task<Void, Never>?
-    /// Task that clears the highlight flash after the animation duration.
-    @State private var highlightDismissTask: Task<Void, Never>?
-    /// In-flight staged scroll-to-bottom task used after conversation switches and
-    /// app restarts to reliably anchor the viewport once layout settles.
-    @State private var scrollRestoreTask: Task<Void, Never>?
-    /// Whether the AnchorMinYKey preference has fired since the last scroll
-    /// restore began. Ensures anchorTracker.isVisible reflects real geometry
-    /// rather than the manual reset applied on conversation switch.
-    @State private var hasFreshAnchorMeasurement: Bool = false
-    @State private var isAvatarVisible: Bool = false
-    @State private var avatarDisplayY: CGFloat = .infinity
-    @State private var avatarSmoothingTask: Task<Void, Never>?
     @State private var hasPlayedTailEntryAnimation = false
-    /// Non-reactive scroll tracking state (dead-zone guards, smoothing).
-    /// Stored on a class so mutations never trigger body re-evaluations.
-    @State private var scrollTracking = ScrollTrackingState()
-    /// Tracks whether the pagination sentinel was previously inside the
-    /// trigger band. Used by `MessageListPaginationTriggerPolicy.shouldTrigger`
-    /// to enforce one-shot edge-transition semantics.
-    @State private var wasPaginationTriggerInRange: Bool = false
-    /// Detects runaway scroll-loop patterns and emits one aggregate warning
-    /// per cooldown window instead of per-frame log spam.
-    @State private var scrollLoopGuard = ChatScrollLoopGuard()
-    /// Coordinates bounded scroll-to-bottom retry sessions and manages the
-    /// follow/detach state machine. All automatic bottom-follow requests are
-    /// routed through this coordinator instead of issuing direct scrollTo calls.
-    @State private var bottomPinCoordinator = ChatBottomPinCoordinator()
-    /// Captures the `assistantActivityPhase` at the moment `isSending` goes false.
-    /// Used to distinguish mid-turn tool-confirmation pauses (phase == "awaiting_confirmation")
-    /// from genuine turn endings, so the `onChange(of: isSending)` handler can decide
-    /// whether to reattach the scroll position on the next `isSending = true` transition.
-    @State private var phaseWhenSendingStopped: String = ""
-    /// One-shot flag: logs a warning the first time anchor, tail, or viewport
-    /// geometry is non-finite during a render pass. Visible even if the JSONL
-    /// session log later fails for an unrelated reason.
-    @State private var hasLoggedNonFiniteGeometry: Bool = false
+    /// Current scroll phase from onScrollPhaseChange; used by the geometry
+    /// change handler to decide whether a scroll-up should trigger detach.
+    /// Only `.interacting` (direct user gesture) triggers detach — `.decelerating`
+    /// (momentum/inertia) is intentionally ignored.
+    @State private var scrollPhase: ScrollPhase = .idle
+    /// Last content offset Y observed by onScrollGeometryChange, used to
+    /// determine scroll direction (increasing offset = scrolling toward older content).
+    @State private var lastScrollContentOffsetY: CGFloat = 0
+    /// Content height from scroll geometry, used to guard against false
+    /// detaches on short conversations that can't scroll.
+    @State private var scrollContentHeight: CGFloat = 0
+    /// Container (viewport) height from scroll geometry, used alongside
+    /// scrollContentHeight to determine if content is scrollable.
+    @State private var scrollContainerHeight: CGFloat = 0
 
     /// The subset of messages actually shown, honoring the pagination window.
     /// Uses the shared `ChatVisibleMessageFilter` so hidden automated messages
@@ -259,40 +190,50 @@ struct MessageListView: View {
         )
     }
 
-    /// Computes a lightweight fingerprint over visible messages that detects
-    /// additions, deletions, streaming updates, and confirmation state changes
-    /// without storing the full message array.
-    private func computeMessageFingerprint() -> Int {
-        var hasher = Hasher()
-        hasher.combine(messages.count)
-        hasher.combine(displayedMessageCount)
-        let visible = visibleMessages
-        hasher.combine(visible.count)
-        for msg in visible {
-            hasher.combine(msg.id)
-            hasher.combine(msg.textSegments.count)
-            if let last = msg.textSegments.last {
-                hasher.combine(last.count)
-            }
-            hasher.combine(msg.toolCalls.count)
-            for toolCall in msg.toolCalls {
-                hasher.combine(toolCall.isComplete)
-            }
-            hasher.combine(msg.isStreaming)
-            if let conf = msg.confirmation {
-                // ToolConfirmationState is Equatable but not Hashable/RawRepresentable;
-                // map to an int tag for hashing.
-                switch conf.state {
-                case .pending: hasher.combine(0)
-                case .approved: hasher.combine(1)
-                case .denied: hasher.combine(2)
-                case .timedOut: hasher.combine(3)
-                }
-            } else {
-                hasher.combine(-1)
-            }
+    /// Checks whether observable message-level inputs have changed since the
+    /// last body evaluation and, if so, bumps `scrollCoordinator.scrollTracking.messageListVersion`.
+    /// This replaces the former O(n) `computeMessageFingerprint()` hash with an
+    /// O(1) version counter. Over-invalidation is safe (triggers a recompute);
+    /// under-invalidation is not.
+    ///
+    /// All checks are O(1) — we only inspect `messages.count`,
+    /// `messages.last?.isStreaming`, and the last message's tool call completion
+    /// states (typically 0–3 tool calls). `isSending` / `isThinking` transitions
+    /// are handled via `PrecomputedCacheKey` fields directly.
+    ///
+    /// Mutation paths that affect `PrecomputedMessageListState` inputs:
+    /// - `messages.count` changes (append, pagination, deletion)
+    /// - `messages.last?.isStreaming` transitions (end of streaming)
+    /// - Tool call `isComplete` transitions — detected via the last message's
+    ///   tool calls (active tool calls are always on the most recent assistant
+    ///   message) and via `messages.count` changes when tool results arrive
+    private func refreshMessageListVersionIfNeeded() {
+        let currentCount = messages.count
+        let currentLastStreaming = messages.last?.isStreaming ?? false
+        // Tool call completion is detected via the incomplete count on the
+        // last message only — active tool calls live on the tail assistant
+        // message, and completion of older tool calls always coincides with
+        // a messages.count change (the tool result message is appended).
+        let currentIncompleteToolCalls = messages.last?.toolCalls.filter { !$0.isComplete }.count ?? 0
+
+        var changed = false
+
+        if currentCount != scrollCoordinator.scrollTracking.lastKnownMessageCount {
+            scrollCoordinator.scrollTracking.lastKnownMessageCount = currentCount
+            changed = true
         }
-        return hasher.finalize()
+        if currentLastStreaming != scrollCoordinator.scrollTracking.lastKnownLastMessageStreaming {
+            scrollCoordinator.scrollTracking.lastKnownLastMessageStreaming = currentLastStreaming
+            changed = true
+        }
+        if currentIncompleteToolCalls != scrollCoordinator.scrollTracking.lastKnownIncompleteToolCallCount {
+            scrollCoordinator.scrollTracking.lastKnownIncompleteToolCallCount = currentIncompleteToolCalls
+            changed = true
+        }
+
+        if changed {
+            scrollCoordinator.scrollTracking.messageListVersion += 1
+        }
     }
 
     /// Computes a fingerprint over active subagents that captures identity,
@@ -321,14 +262,18 @@ struct MessageListView: View {
     /// (timestamp indices, subagent grouping, turn detection) run once
     /// per body evaluation rather than being re-evaluated on layout passes.
     ///
-    /// Memoized behind a lightweight input fingerprint stored on the
-    /// non-reactive `ScrollTrackingState`. Cache hit returns immediately
-    /// after an O(visible-messages) fingerprint comparison; cache miss
-    /// runs the full computation. Storing on the class (not @State)
-    /// ensures cache updates never trigger additional body re-evaluations.
+    /// Memoized behind a lightweight O(1) cache key stored on the
+    /// non-reactive `ScrollTrackingState`. The key uses a version counter
+    /// (incremented by `refreshMessageListVersionIfNeeded()`) instead of
+    /// an O(n) per-message hash, making cache key construction O(1).
+    /// Cache hit returns immediately; cache miss runs the full computation.
+    /// Storing on the class (not @State) ensures cache updates never
+    /// trigger additional body re-evaluations.
     private var precomputedState: PrecomputedMessageListState {
+        os_signpost(.begin, log: stallLog, name: "PrecomputedState.resolve")
+        refreshMessageListVersionIfNeeded()
         let key = PrecomputedCacheKey(
-            messageFingerprint: computeMessageFingerprint(),
+            messageListVersion: scrollCoordinator.scrollTracking.messageListVersion,
             isSending: isSending,
             isThinking: isThinking,
             isCompacting: isCompacting,
@@ -337,8 +282,8 @@ struct MessageListView: View {
             displayedMessageCount: displayedMessageCount
         )
 
-        if key == scrollTracking.cachedPrecomputedKey,
-           let cached = scrollTracking.cachedPrecomputedState {
+        if key == scrollCoordinator.scrollTracking.cachedPrecomputedKey,
+           let cached = scrollCoordinator.scrollTracking.cachedPrecomputedState {
             #if DEBUG
             // Spot-check cache correctness in debug builds.
             let freshMessages = visibleMessages
@@ -347,8 +292,11 @@ struct MessageListView: View {
                 "precomputedState cache stale: displayMessages count \(cached.displayMessages.count) vs \(freshMessages.count)"
             )
             #endif
+            os_signpost(.end, log: stallLog, name: "PrecomputedState.resolve", "hit")
             return cached
         }
+
+        os_signpost(.event, log: stallLog, name: "PrecomputedState.cacheMiss", "version=%d", scrollCoordinator.scrollTracking.messageListVersion)
 
         let displayMessages = visibleMessages
         let displayMessageById = Dictionary(displayMessages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -458,8 +406,9 @@ struct MessageListView: View {
             effectiveStatusText: effectiveStatusText
         )
 
-        scrollTracking.cachedPrecomputedKey = key
-        scrollTracking.cachedPrecomputedState = result
+        scrollCoordinator.scrollTracking.cachedPrecomputedKey = key
+        scrollCoordinator.scrollTracking.cachedPrecomputedState = result
+        os_signpost(.end, log: stallLog, name: "PrecomputedState.resolve", "miss")
         return result
     }
 
@@ -496,164 +445,16 @@ struct MessageListView: View {
         return result
     }
 
-    private var lastRenderableMessage: ChatMessage? {
-        messages.last(where: {
-            if case .queued = $0.status { return false }
-            return true
-        })
-    }
-
-    private var isLastMessageStreaming: Bool {
-        lastRenderableMessage?.isStreaming == true
-    }
-
+    /// Whether the floating avatar should be visible. Derived from scroll
+    /// proximity to the bottom — the avatar appears when the user is near
+    /// the bottom of the conversation and disappears when scrolled up.
     private var shouldShowConversationTailAvatar: Bool {
-        // Intentionally show the avatar under the latest rendered conversation tail
-        // (user or assistant content), not only after the first assistant bubble.
         guard !visibleMessages.isEmpty else { return false }
-        return isAvatarVisible
+        return isNearBottom
     }
 
     private var shouldPlayTailEntryAnimation: Bool {
         !hasPlayedTailEntryAnimation && messages.count <= 2
-    }
-
-    private var shouldCoalesceAvatarUpdates: Bool {
-        ConversationAvatarFollower.shouldCoalesce(
-            isSending: isSending,
-            isThinking: isThinking,
-            isLastMessageStreaming: isLastMessageStreaming
-        )
-    }
-
-    private func applyAvatarDisplayY(forAnchorY anchorY: CGFloat) {
-        // Circuit breaker: suppress @State mutations when a scroll loop is detected.
-        let convIdString = conversationId?.uuidString ?? "unknown"
-        if scrollLoopGuard.isTripped(conversationId: convIdString) { return }
-
-        let y = anchorY + ConversationAvatarFollower.verticalOffset
-        // Dead-zone: skip @State update when position hasn't moved meaningfully.
-        // Each avatarDisplayY change triggers a MessageListView body re-evaluation;
-        // sub-pixel jitter during scroll would otherwise cause continuous re-renders.
-        guard abs(avatarDisplayY - y) > 2 else { return }
-
-        // During streaming / sending / thinking, only allow the avatar to move
-        // downward (increasing Y).  Auto-scroll viewport adjustments can briefly
-        // report a smaller tail-anchor Y, which would yank the avatar back toward
-        // the top of the viewport.  Clamping to downward-only movement keeps the
-        // avatar tracking smoothly with the growing content.  When coalescing ends
-        // (streaming finishes), the onChange handler re-applies the true position.
-        if shouldCoalesceAvatarUpdates && avatarDisplayY.isFinite && y < avatarDisplayY {
-            return
-        }
-
-        recordScrollLoopEvent(.avatarDisplayYApplied)
-        scrollTracking.avatarLastAppliedAt = Date()
-        // Set @State without withAnimation — the spring animation is applied via
-        // .animation() on the avatar view's .offset() modifier instead. This avoids
-        // wrapping the mutation in an animation transaction, which would cause SwiftUI
-        // to re-evaluate the body on each spring interpolation frame and feed layout
-        // shifts back into the tail anchor preference → avatar update cycle.
-        avatarDisplayY = y
-    }
-
-    private func updateAvatarFollower(anchorY: CGFloat) {
-        recordScrollLoopEvent(.avatarFollowerUpdate)
-        // Compute visibility once and update @State only on boundary crossings.
-        // During an active send, don't hide the avatar on transient non-finite
-        // anchors — the LazyVStack briefly deallocates the anchor view during
-        // re-layout (thinking indicator, rich UI expansion). Hiding would cause
-        // the avatar to flash off-screen via shouldShowConversationTailAvatar.
-        let nowVisible = anchorY.isFinite
-            && ConversationAvatarFollower.shouldShow(anchorY: anchorY, viewportHeight: scrollViewportHeight)
-        let convIdString = conversationId?.uuidString ?? "unknown"
-        let isTripped = scrollLoopGuard.isTripped(conversationId: convIdString)
-        if isAvatarVisible != nowVisible {
-            // Circuit breaker: when tripped, only allow hiding (removing UI is safe).
-            // Showing (false→true) adds layout that could feed the loop — suppress it.
-            // Send guard: during send, don't hide on transient non-finite anchors.
-            if (!isTripped || !nowVisible) && (nowVisible || !isSending) {
-                isAvatarVisible = nowVisible
-            }
-        }
-
-        // Update non-reactive tracking position (no body re-evaluation).
-        if ConversationAvatarFollower.shouldUpdateTarget(
-            previousAnchorY: scrollTracking.avatarTargetY,
-            newAnchorY: anchorY,
-            viewportHeight: scrollViewportHeight
-        ) {
-            scrollTracking.avatarTargetY = anchorY
-        }
-
-        guard anchorY.isFinite else {
-            avatarSmoothingTask?.cancel()
-            avatarSmoothingTask = nil
-            scrollTracking.pendingAvatarY = nil
-            scrollTracking.avatarLastAppliedAt = nil
-            // During an active send, the LazyVStack may transiently deallocate
-            // the tail anchor view during re-layout (e.g. thinking indicator
-            // insertion, rich UI expansion), producing a non-finite preference.
-            // Keep the avatar at its last known position so it doesn't flash
-            // off-screen and back. Also suppress when circuit breaker is tripped
-            // to avoid @State mutations that feed the scroll loop.
-            if !isTripped && !isSending && avatarDisplayY != .infinity {
-                avatarDisplayY = .infinity
-            }
-            return
-        }
-
-        // Skip position tracking when the avatar is off-screen. The avatar
-        // overlay is hidden via shouldShowConversationTailAvatar, so updating
-        // avatarDisplayY for an invisible element just wastes layout passes.
-        guard nowVisible else {
-            avatarSmoothingTask?.cancel()
-            avatarSmoothingTask = nil
-            scrollTracking.pendingAvatarY = nil
-            return
-        }
-
-        let now = Date()
-        let delay = ConversationAvatarFollower.smoothingDelay(
-            isSending: isSending,
-            isThinking: isThinking,
-            isLastMessageStreaming: isLastMessageStreaming,
-            lastAppliedAt: scrollTracking.avatarLastAppliedAt,
-            now: now
-        )
-
-        if delay <= 0 {
-            avatarSmoothingTask?.cancel()
-            avatarSmoothingTask = nil
-            scrollTracking.pendingAvatarY = nil
-            // Only apply @State avatar position when circuit breaker isn't tripped
-            if !isTripped {
-                applyAvatarDisplayY(forAnchorY: anchorY)
-            }
-            return
-        }
-
-        scrollTracking.pendingAvatarY = anchorY
-        guard avatarSmoothingTask == nil else { return }
-
-        avatarSmoothingTask = Task { @MainActor in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            guard let pending = scrollTracking.pendingAvatarY else {
-                avatarSmoothingTask = nil
-                return
-            }
-            scrollTracking.pendingAvatarY = nil
-            // Only apply @State avatar position when circuit breaker isn't tripped
-            if !scrollLoopGuard.isTripped(conversationId: conversationId?.uuidString ?? "unknown") {
-                applyAvatarDisplayY(forAnchorY: pending)
-            }
-            avatarSmoothingTask = nil
-        }
     }
 
     @ViewBuilder
@@ -668,7 +469,6 @@ struct MessageListView: View {
                 .padding(.horizontal, VSpacing.xl)
                 .frame(maxWidth: VSpacing.chatColumnMaxWidth)
                 .frame(maxWidth: .infinity)
-                .offset(y: avatarDisplayY)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             } else if let body = appearance.characterBodyShape,
@@ -684,8 +484,6 @@ struct MessageListView: View {
                     .padding(.horizontal, VSpacing.xl)
                     .frame(maxWidth: VSpacing.chatColumnMaxWidth)
                     .frame(maxWidth: .infinity)
-                    .offset(y: avatarDisplayY)
-                    .animation(ConversationAvatarFollower.spring, value: avatarDisplayY)
                     .accessibilityHidden(true)
                     .onAppear {
                         if shouldPlayTailEntryAnimation {
@@ -701,311 +499,63 @@ struct MessageListView: View {
                 .padding(.horizontal, VSpacing.xl)
                 .frame(maxWidth: VSpacing.chatColumnMaxWidth)
                 .frame(maxWidth: .infinity)
-                .offset(y: avatarDisplayY)
-                .animation(ConversationAvatarFollower.spring, value: avatarDisplayY)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
         }
     }
 
-    /// Staged scroll-to-bottom that retries after increasing delays to handle
-    /// cases where SwiftUI hasn't committed the new content's layout yet (e.g.
-    /// after a conversation switch or app restart). Cancelled by user scroll-up,
-    /// user scroll-to-bottom, anchor message set, or view disappearance.
+    /// Delegates scroll-to-bottom restoration to the coordinator.
     private func restoreScrollToBottom(proxy: ScrollViewProxy) {
-        scrollRestoreTask?.cancel()
-        hasFreshAnchorMeasurement = false
-
-        // Reset avatar follower state so the avatar starts hidden and only
-        // appears once the conversation tail anchor reports a fresh position
-        // after the scroll settles. Without this, the avatar can flash at a
-        // stale Y from a previous layout pass (e.g. app re-launch where
-        // onAppear calls restoreScrollToBottom without resetting avatar state).
-        avatarSmoothingTask?.cancel()
-        avatarSmoothingTask = nil
-        scrollTracking.avatarTargetY = .infinity
-        isAvatarVisible = false
-        avatarDisplayY = .infinity
-        scrollTracking.pendingAvatarY = nil
-        scrollTracking.avatarLastAppliedAt = nil
-        scrollTracking.lastTailAnchorY = .infinity
-
-        // Route the initial restore through the coordinator for bounded retries.
-        if anchorMessageId == nil {
-            requestBottomPin(reason: .initialRestore, proxy: proxy)
-        }
-
-        scrollRestoreTask = Task { @MainActor in
-            guard !Task.isCancelled else { return }
-            // Stage 0: immediate — the coordinator fires its first attempt above.
-            os_signpost(.event, log: PerfSignposts.log, name: "scrollRestoreStage", "stage=0")
-            log.debug("Scroll restore: stage 0 (immediate, coordinator-driven)")
-
-            // Stage 1: ~3 frames — handles most conversation switches.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled else { return }
-            os_signpost(.event, log: PerfSignposts.log, name: "scrollRestoreStage", "stage=1")
-            if anchorMessageId == nil {
-                requestBottomPin(reason: .initialRestore, proxy: proxy)
-            }
-            log.debug("Scroll restore: stage 1 (50ms)")
-
-            // Stage 2: ~9 frames — catches slower layout/materialization.
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            guard !Task.isCancelled else { return }
-            // Only retry when the anchor genuinely drifted off-screen.
-            // `geometryUnavailable` means layout hasn't measured yet —
-            // the coordinator will pick up the next finite preference update
-            // instead of spinning retries on missing geometry.
-            let restoreOutcome = MessageListBottomAnchorPolicy.verify(
-                anchorMinY: anchorTracker.lastMinY,
-                viewportHeight: scrollViewportHeight
-            )
-            if anchorMessageId == nil
-                && !hasReceivedScrollEvent
-                && restoreOutcome == .needsRepin
-            {
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollRestoreStage", "stage=2 action=retry")
-                requestBottomPin(reason: .initialRestore, proxy: proxy)
-                log.debug("Scroll restore: stage 2 (200ms) — retrying via coordinator")
-            } else {
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollRestoreStage", "stage=2 action=skipped")
-                log.debug("Scroll restore: stage 2 skipped (anchor=\(String(describing: anchorMessageId)) scrollEvent=\(hasReceivedScrollEvent))")
-            }
-
-            if !Task.isCancelled { scrollRestoreTask = nil }
-        }
-    }
-
-    /// Fires a single pagination load, restores the scroll anchor, and
-    /// manages the `isPaginationInFlight` / `isSuppressingBottomScroll` guards.
-    private func triggerPagination(proxy: ScrollViewProxy) {
-        guard !isPaginationInFlight else { return }
-        isPaginationInFlight = true
-        // Pagination scroll-position restore is higher priority — cancel any
-        // active pin session so the coordinator doesn't fight the restore.
-        bottomPinCoordinator.cancelActiveSession(reason: .paginationRestore)
-        let anchorId = visibleMessages.first?.id
-        os_signpost(.event, log: PerfSignposts.log, name: "paginationSentinelFired")
-        log.debug("[pagination] fired — anchorId: \(String(describing: anchorId))")
-        paginationTask = Task {
-            defer {
-                if !Task.isCancelled {
-                    isPaginationInFlight = false
-                    paginationTask = nil
-                } else if paginationTask == nil {
-                    isPaginationInFlight = false
-                }
-            }
-            let hadMore = await loadPreviousMessagePage?() ?? false
-            log.debug("[pagination] loadPreviousMessagePage returned hadMore=\(hadMore)")
-            if hadMore, let id = anchorId {
-                // Suppress bottom auto-scroll for the brief layout window so the
-                // restored anchor position is not immediately overridden.
-                isSuppressingBottomScroll = true
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "on reason=pagination")
-                // Wait ~6 frames for SwiftUI to complete layout before restoring position.
-                // 100ms gives video embed cards (which animate height over 0.25s) enough
-                // time to settle so the scroll restoration lands at the right position.
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard !Task.isCancelled else {
-                    isSuppressingBottomScroll = false
-                    return
-                }
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollToRequested", "target=paginationAnchor")
-                recordScrollLoopEvent(.scrollToRequested)
-                proxy.scrollTo(id, anchor: .top)
-                log.debug("[pagination] scroll restored to anchor \(id)")
-                isSuppressingBottomScroll = false
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "off reason=paginationDone")
-            }
-        }
-    }
-
-    /// Flash-highlight the given message after an anchor scroll completes.
-    /// The highlight fades out automatically after 1.5 seconds.
-    private func flashHighlight(messageId: UUID) {
-        highlightDismissTask?.cancel()
-        highlightedMessageId = messageId
-        highlightDismissTask = Task { @MainActor in
-            do {
-                try await Task.sleep(nanoseconds: 1_500_000_000)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            withAnimation(VAnimation.slow) {
-                highlightedMessageId = nil
-            }
-            highlightDismissTask = nil
-        }
-    }
-
-    /// Records a scroll-related event into the loop guard and emits a
-    /// diagnostic warning if the guard trips (too many events in the window).
-    private func recordScrollLoopEvent(_ kind: ChatScrollLoopGuard.EventKind) {
-        let convId = conversationId?.uuidString ?? "unknown"
-        let timestamp = ProcessInfo.processInfo.systemUptime
-
-        if let snapshot = scrollLoopGuard.record(kind, conversationId: convId, timestamp: timestamp) {
-            let countsDescription = snapshot.counts.map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: " ")
-            log.warning(
-                "Scroll loop detected — trippedBy=\(snapshot.trippedBy.rawValue) window=\(snapshot.windowDuration)s \(countsDescription) isNearBottom=\(isNearBottom) hasReceivedScrollEvent=\(hasReceivedScrollEvent) anchorMessageId=\(String(describing: anchorMessageId)) anchorLastMinY=\(anchorTracker.lastMinY) viewportHeight=\(scrollViewportHeight)"
-            )
-            var sanitizer = NumericSanitizer()
-            let safeScrollOffsetY = sanitizer.sanitize(anchorTracker.lastMinY, field: "scrollOffsetY")
-            let safeViewportHeight = sanitizer.sanitize(scrollViewportHeight, field: "viewportHeight")
-            logNonFiniteGeometryOnce(sanitizer: sanitizer)
-            ChatDiagnosticsStore.shared.record(ChatDiagnosticEvent(
-                kind: .scrollLoopDetected,
-                conversationId: convId,
-                reason: "trippedBy=\(snapshot.trippedBy.rawValue) \(countsDescription)",
-                isPinnedToBottom: isNearBottom,
-                isUserScrolling: hasReceivedScrollEvent,
-                scrollOffsetY: safeScrollOffsetY,
-                viewportHeight: safeViewportHeight,
-                nonFiniteFields: sanitizer.nonFiniteFields
-            ))
-        }
-    }
-
-    /// Schedules a debounced transcript snapshot capture. Coalesces rapid scroll
-    /// events into a single snapshot per 150ms window, avoiding O(n) tool-call
-    /// scans on every scroll tick.
-    private func scheduleTranscriptSnapshot() {
-        scrollTracking.snapshotDebounceTask?.cancel()
-        scrollTracking.snapshotDebounceTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            updateTranscriptSnapshot()
-        }
-    }
-
-    /// Captures a point-in-time transcript snapshot into `ChatDiagnosticsStore`.
-    /// Called via `scheduleTranscriptSnapshot()` so that `DebugStateWriter`
-    /// and `HangContextWriter` always have recent transcript state available.
-    private func updateTranscriptSnapshot() {
-        guard let convId = conversationId else { return }
-        let msgs = messages
-        let totalToolCalls = msgs.reduce(0) { $0 + $1.toolCalls.count }
-
-        // Route all geometry through NumericSanitizer so non-finite values
-        // (inf, -inf, NaN) are replaced with nil and tracked in nonFiniteFields.
-        // scrollViewportHeight and lastTailAnchorY start as .infinity before
-        // their preference callbacks run.
-        var sanitizer = NumericSanitizer()
-        let safeAnchorMinY = sanitizer.sanitize(anchorTracker.lastMinY, field: "anchorMinY")
-        let safeTailAnchorY = sanitizer.sanitize(scrollTracking.lastTailAnchorY, field: "tailAnchorY")
-        let safeViewportHeight = sanitizer.sanitize(scrollViewportHeight, field: "scrollViewportHeight")
-        let safeContainerWidth = sanitizer.sanitize(containerWidth, field: "containerWidth")
-        logNonFiniteGeometryOnce(sanitizer: sanitizer)
-
-        // Capture rolling scroll loop guard counts for debug-state.json.
-        let guardCounts = scrollLoopGuard.currentCounts(conversationId: convId.uuidString)
-        let guardCountsStringKeyed: [String: Int]? = guardCounts.isEmpty ? nil : Dictionary(
-            uniqueKeysWithValues: guardCounts.map { ($0.key.rawValue, $0.value) }
+        scrollCoordinator.restoreScrollToBottom(
+            proxy: proxy,
+            conversationId: conversationId,
+            anchorMessageId: $anchorMessageId,
+            scrollViewportHeight: scrollViewportHeight
         )
+    }
 
-        ChatDiagnosticsStore.shared.updateSnapshot(ChatTranscriptSnapshot(
-            conversationId: convId.uuidString,
-            capturedAt: Date(),
-            messageCount: msgs.count,
-            toolCallCount: totalToolCalls,
-            isPinnedToBottom: isNearBottom,
-            isUserScrolling: hasReceivedScrollEvent,
-            scrollOffsetY: safeAnchorMinY,
-            contentHeight: nil,
-            viewportHeight: safeViewportHeight,
+    /// Delegates flash-highlight to the coordinator.
+    private func flashHighlight(messageId: UUID) {
+        scrollCoordinator.flashHighlight(messageId: messageId, highlightedMessageId: $highlightedMessageId)
+    }
+
+    /// Delegates scroll loop event recording to the coordinator.
+    private func recordScrollLoopEvent(_ kind: ChatScrollLoopGuard.EventKind) {
+        scrollCoordinator.recordScrollLoopEvent(
+            kind,
+            conversationId: conversationId,
             isNearBottom: isNearBottom,
-            hasReceivedScrollEvent: hasReceivedScrollEvent,
-            isPaginationInFlight: isPaginationInFlight,
-            suppressionReason: isSuppressingBottomScroll ? "bottomScrollSuppressed" : nil,
-            anchorMessageId: anchorMessageId?.uuidString,
-            highlightedMessageId: highlightedMessageId?.uuidString,
-            anchorMinY: safeAnchorMinY,
-            tailAnchorY: safeTailAnchorY,
-            scrollViewportHeight: safeViewportHeight,
-            containerWidth: safeContainerWidth,
-            scrollLoopGuardCounts: guardCountsStringKeyed,
-            nonFiniteFields: sanitizer.nonFiniteFields
-        ))
+            scrollViewportHeight: scrollViewportHeight,
+            anchorMessageId: anchorMessageId
+        )
     }
 
-    /// Logs a one-time warning when scroll geometry first becomes non-finite
-    /// during a render pass. Uses the MessageListView logger so the condition
-    /// is visible even if the JSONL session log later fails for another reason.
-    private func logNonFiniteGeometryOnce(sanitizer: NumericSanitizer) {
-        guard !hasLoggedNonFiniteGeometry, let fields = sanitizer.nonFiniteFields else { return }
-        hasLoggedNonFiniteGeometry = true
-        log.warning("Non-finite scroll geometry detected — sanitized fields: \(fields.joined(separator: ", "))")
-    }
 
-    /// Routes an automatic bottom-follow request through the coordinator.
-    /// The coordinator decides whether to suppress (user is detached), coalesce
-    /// (duplicate request within an active session), or start a new bounded
-    /// retry session. Anchor-message jumps and pagination restoration bypass
-    /// this helper entirely — they are higher-priority flows.
-    /// Sentinel UUID used for pin requests before the daemon assigns a real
-    /// conversation ID. Lets bootstrap-window requests coalesce normally.
-    private static let bootstrapConversationId = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-
+    /// Delegates bottom-pin request to the coordinator.
     private func requestBottomPin(
         reason: BottomPinRequestReason,
         proxy: ScrollViewProxy,
-        animated: Bool = false
+        animated: Bool = false,
+        userInitiated: Bool = false
     ) {
-        let convId = conversationId ?? Self.bootstrapConversationId
-        bottomPinCoordinator.requestPin(
+        scrollCoordinator.requestBottomPin(
             reason: reason,
-            conversationId: convId,
-            animated: animated
+            proxy: proxy,
+            conversationId: conversationId,
+            animated: animated,
+            userInitiated: userInitiated
         )
     }
 
-    /// Configures the coordinator's callbacks to wire pin requests back to
-    /// the scroll view proxy and follow-state changes back to `isNearBottom`.
+    /// Delegates bottom-pin coordinator configuration to the scroll coordinator.
     private func configureBottomPinCoordinator(proxy: ScrollViewProxy) {
-        bottomPinCoordinator.onPinRequested = { [self] reason, animated in
-            guard !isSuppressingBottomScroll else { return false }
-            // Circuit breaker: suppress scroll-to when a scroll loop was detected.
-            // The guard re-arms after a quiet cooldown window elapses.
-            let convIdString = conversationId?.uuidString ?? "unknown"
-            if scrollLoopGuard.isTripped(conversationId: convIdString) {
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollToRequested",
-                            "target=bottomAnchor reason=circuitBreakerSuppressed")
-                return false
-            }
-            os_signpost(.event, log: PerfSignposts.log, name: "scrollToRequested",
-                        "target=bottomAnchor reason=coordinator-%{public}s", reason.rawValue)
-            recordScrollLoopEvent(.scrollToRequested)
-            if animated {
-                withAnimation(VAnimation.fast) {
-                    proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
-                }
-            } else {
-                proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
-            }
-            // Check if the pin succeeded (anchor within viewport).
-            // Use `verify()` so that `geometryUnavailable` returns false
-            // (wait for the next finite preference update) instead of being
-            // treated as an immediate failed pin that triggers retry churn.
-            let outcome = MessageListBottomAnchorPolicy.verify(
-                anchorMinY: anchorTracker.lastMinY,
-                viewportHeight: scrollViewportHeight
-            )
-            return outcome == .anchored
-        }
-        bottomPinCoordinator.onFollowStateChanged = { isFollowing in
-            isNearBottom = isFollowing
-        }
-
-        // If detach() was called before this callback was wired up (e.g. a
-        // scroll-wheel event fired between makeNSView and onAppear), sync
-        // isNearBottom now so it isn't stuck at true permanently.
-        if !bottomPinCoordinator.isFollowingBottom {
-            isNearBottom = false
-        }
+        scrollCoordinator.configureBottomPinCoordinator(
+            proxy: proxy,
+            scrollViewportHeight: scrollViewportHeight,
+            conversationId: conversationId,
+            isNearBottom: $isNearBottom
+        )
     }
 
     private var shouldAnchorThinkingToConfirmationChip: Bool {
@@ -1172,19 +722,6 @@ struct MessageListView: View {
                         compactingIndicatorRow()
                     }
 
-                    Color.clear
-                        .frame(height: 1)
-                        .id("conversation-tail-anchor")
-                        .background {
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: ConversationTailAnchorYKey.self,
-                                    value: geo.frame(in: .named("chatScrollView")).maxY
-                                )
-                            }
-                        }
-                        .transaction { $0.disablesAnimations = true }
-
                     if !state.displayMessages.isEmpty && ConversationAvatarFollower.bottomInset > 0 {
                         Color.clear
                             .frame(height: ConversationAvatarFollower.bottomInset)
@@ -1195,20 +732,12 @@ struct MessageListView: View {
                         .id("scroll-bottom-anchor")
                         .onAppear {
                             // Only auto-tether on initial load (before any scroll events).
-                            // After the user has scrolled, rely on ScrollWheelDetector and
-                            // anchorTracker preference tracking to manage isNearBottom —
+                            // After the user has scrolled, rely on onScrollPhaseChange and
+                            // onScrollGeometryChange tracking to manage isNearBottom —
                             // LazyVStack fires onAppear in the prefetch zone (several screens
                             // ahead) which would prematurely re-tether during normal scrolling.
-                            if !hasReceivedScrollEvent {
+                            if !scrollCoordinator.hasReceivedScrollEvent {
                                 isNearBottom = true
-                            }
-                        }
-                        .background {
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: AnchorMinYKey.self,
-                                    value: geo.frame(in: .named("chatScrollView")).minY
-                                )
                             }
                         }
                 }
@@ -1223,205 +752,125 @@ struct MessageListView: View {
             .coordinateSpace(name: "chatScrollView")
             .scrollDisabled(messages.isEmpty && !isSending)
             .environment(\.suppressAutoScroll, { [self] in
-                expandSuppressionTask?.cancel()
-                if isNearBottom {
-                    // Clear any stale suppression left by a canceled off-bottom expansion,
-                    // but only when the resize guard isn't actively suppressing scroll.
-                    let resizeActive = resizeScrollTask != nil && !resizeScrollTask!.isCancelled
-                    if !resizeActive {
-                        isSuppressingBottomScroll = false
-                    }
-                    // Route expansion bottom-follow through the coordinator for
-                    // bounded staged retries instead of per-frame repinning.
-                    os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "on reason=expansionPinning")
-                    recordScrollLoopEvent(.suppressionFlip)
-                    requestBottomPin(reason: .expansion, proxy: proxy, animated: false)
-                } else {
-                    // When scrolled away from bottom, suppress auto-scroll so the
-                    // expansion doesn't yank the viewport to the bottom.
-                    isSuppressingBottomScroll = true
-                    os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "on reason=offBottomExpansion")
-                    recordScrollLoopEvent(.suppressionFlip)
-                    expandSuppressionTask = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 200_000_000)
-                        guard !Task.isCancelled else { return }
-                        // Only clear if no other mechanism (resize, pagination) still needs suppression.
-                        let resizeActive = resizeScrollTask != nil && !resizeScrollTask!.isCancelled
-                        let paginationActive = isPaginationInFlight
-                        if !resizeActive && !paginationActive {
-                            isSuppressingBottomScroll = false
-                            os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "off reason=expansionExpired")
-                        }
-                    }
-                }
-            })
-            .background {
-                GeometryReader { geo in
-                    Color.clear.preference(key: ScrollViewportHeightKey.self, value: geo.size.height)
-                }
-                ScrollWheelDetector(
-                    onScrollUp: {
-
-                        scrollRestoreTask?.cancel()
-                        scrollRestoreTask = nil
-                        expandSuppressionTask?.cancel()
-                        expandSuppressionTask = nil
-                        isSuppressingBottomScroll = false
-                        // Signal the coordinator to detach — this sets isNearBottom
-                        // to false and cancels any active pin session.
-                        bottomPinCoordinator.handleUserAction(.scrollUp)
-                        hasReceivedScrollEvent = true
-                    },
-                    onScrollToBottom: {
-                        scrollRestoreTask?.cancel()
-                        scrollRestoreTask = nil
-                        isSuppressingBottomScroll = false
-                        // Signal the coordinator to reattach — this sets isNearBottom
-                        // to true and allows future pin requests.
-                        bottomPinCoordinator.handleUserAction(.scrollToBottom)
-                        hasReceivedScrollEvent = true
-                    },
-                    conversationId: conversationId
+                scrollCoordinator.handleSuppressAutoScroll(
+                    isNearBottom: isNearBottom,
+                    conversationId: conversationId,
+                    proxy: proxy,
+                    scrollViewportHeight: scrollViewportHeight
                 )
-                ConversationScrollbarVisibilityController(isAppActive: isAppActive, suppressScrollbar: suppressScrollbarDuringConversationSwitch)
+            })
+            .onScrollPhaseChange { oldPhase, newPhase in
+                scrollPhase = newPhase
+                if newPhase == .idle && oldPhase != .idle && scrollCoordinator.anchorIsVisible {
+                    // User finished scrolling and ended up near the bottom — re-tether.
+                    // Uses anchorIsVisible (geometry-derived) instead of isNearBottom
+                    // to break the circular dependency: isNearBottom is only set by
+                    // handleScrollToBottom(), so checking it here would prevent
+                    // users from re-tethering by scrolling back to the bottom.
+                    scrollCoordinator.handleScrollToBottom()
+                }
             }
-            .onPreferenceChange(ScrollViewportHeightKey.self) { height in
+            .onScrollGeometryChange(for: ScrollDetectionState.self) { geometry in
+                ScrollDetectionState(
+                    contentOffsetY: geometry.contentOffset.y,
+                    contentHeight: geometry.contentSize.height,
+                    containerHeight: geometry.containerSize.height
+                )
+            } action: { _, newState in
+                let isScrollable = newState.contentHeight > newState.containerHeight
+                let isScrollingUp = newState.contentOffsetY < lastScrollContentOffsetY
+                scrollContentHeight = newState.contentHeight
+                scrollContainerHeight = newState.containerHeight
+                lastScrollContentOffsetY = newState.contentOffsetY
+
+                // Only detach on direct user gesture (interacting), not momentum.
+                // Only detach when content is scrollable (prevents false detaches
+                // on short conversations).
+                if scrollPhase == .interacting && isScrollingUp && isScrollable {
+                    scrollCoordinator.handleScrollUp()
+                }
+            }
+            .scrollIndicators(.automatic)
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.visibleRect.height
+            } action: { _, newHeight in
                 // Filter non-finite viewport heights and sub-pixel jitter.
                 // A 0.5pt dead-zone prevents floating-point rounding differences
                 // between render passes from triggering continuous @State mutations
                 // (scrollViewportHeight) which would create a runaway render loop.
                 let decision = PreferenceGeometryFilter.evaluate(
-                    newValue: height,
+                    newValue: newHeight,
                     previous: scrollViewportHeight,
                     deadZone: 0.5
                 )
                 guard case .accept(let accepted) = decision else { return }
-                os_signpost(.begin, log: PerfSignposts.log, name: "viewportHeightPreferenceChange")
-                let viewportChanged = anchorTracker.updateViewport(
+                os_signpost(.begin, log: PerfSignposts.log, name: "viewportHeightChanged")
+                scrollCoordinator.updateAnchorViewport(
                     height: accepted,
                     storedViewportHeight: &scrollViewportHeight
                 )
-                if viewportChanged, scrollTracking.lastTailAnchorY.isFinite {
-                    // Reconcile the avatar follower on resize so a hidden target
-                    // is refreshed before a later visibility transition reveals it.
-                    updateAvatarFollower(anchorY: scrollTracking.lastTailAnchorY)
-                }
-                os_signpost(.end, log: PerfSignposts.log, name: "viewportHeightPreferenceChange")
+                os_signpost(.end, log: PerfSignposts.log, name: "viewportHeightChanged")
             }
-            .transaction { $0.disablesAnimations = true }
-            .onPreferenceChange(AnchorMinYKey.self) { minY in
-                // Filter non-finite anchor values and apply 2pt dead-zone to
-                // reduce layout invalidation cascades during rapid scroll.
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                // Distance from bottom: how far the visible rect's bottom edge
+                // is from the content bottom. Replaces the AnchorMinYKey preference
+                // + hidden anchor view + GeometryReader + coordinate space conversion.
+                geo.contentSize.height - geo.contentOffset.y - geo.visibleRect.height
+            } action: { _, distanceFromBottom in
+                // Filter non-finite values and apply 2pt dead-zone to reduce
+                // layout invalidation cascades during rapid scroll.
                 let decision = PreferenceGeometryFilter.evaluate(
-                    newValue: minY,
-                    previous: anchorTracker.lastMinY
+                    newValue: distanceFromBottom,
+                    previous: scrollCoordinator.anchorLastMinY
                 )
                 switch decision {
                 case .rejectNonFinite:
-                    // The anchor was deallocated by the LazyVStack (no child reports
-                    // a finite value, so the preference reduces to its .infinity default).
-                    // Mark the anchor as off-screen so the "Scroll to latest" button can appear.
-                    // Also reset lastMinY to .infinity so the button condition
-                    // (!isNearBottom && !isVisible && lastMinY > viewportHeight + 20) is satisfied.
-                    // .infinity is safe: updateViewport() guards isFinite, evaluate() treats
-                    // it as a skip for the dead-zone check, and verify() returns .geometryUnavailable.
-                    if anchorTracker.isVisible {
-                        anchorTracker.isVisible = false
-                        log.debug("Anchor preference non-finite — marking anchor invisible (deallocated by LazyVStack)")
-                    }
-                    anchorTracker.lastMinY = .infinity
+                    scrollCoordinator.handleNonFiniteAnchor()
                     return
                 case .rejectDeadZone:
                     return
                 case .accept(let accepted):
-                    os_signpost(.begin, log: PerfSignposts.log, name: "anchorMinYPreferenceChange")
-                    recordScrollLoopEvent(.anchorPreferenceChange)
-                    anchorTracker.update(minY: accepted, viewportHeight: scrollViewportHeight)
-                    if !hasFreshAnchorMeasurement {
-                        hasFreshAnchorMeasurement = true
-                        // First finite anchor measurement after a conversation switch.
-                        // LazyVStack may report the anchor as "within viewport" before
-                        // materializing message cells, causing the coordinator to skip
-                        // the scrollTo. Bypass the coordinator and scroll directly so
-                        // messages are visible without user interaction.
-                        if !hasReceivedScrollEvent && anchorMessageId == nil {
-                            proxy.scrollTo("scroll-bottom-anchor", anchor: .bottom)
-                        }
-                    }
-                    scheduleTranscriptSnapshot()
-                    // Geometry tracking only — no per-frame scrollTo calls here.
-                    // All bottom-follow work is handled by the ChatBottomPinCoordinator
-                    // via bounded staged retries, not inline on every anchor change.
-                    os_signpost(.end, log: PerfSignposts.log, name: "anchorMinYPreferenceChange")
+                    os_signpost(.begin, log: PerfSignposts.log, name: "distanceFromBottomChanged")
+                    scrollCoordinator.handleAcceptedAnchorMinY(
+                        accepted: accepted,
+                        scrollViewportHeight: scrollViewportHeight,
+                        anchorMessageId: anchorMessageId,
+                        proxy: proxy,
+                        conversationId: conversationId,
+                        messages: messages,
+                        isNearBottom: isNearBottom,
+                        containerWidth: containerWidth,
+                        highlightedMessageId: highlightedMessageId
+                    )
+                    os_signpost(.end, log: PerfSignposts.log, name: "distanceFromBottomChanged")
                 }
             }
-            .transaction { $0.disablesAnimations = true }
-            .onPreferenceChange(ConversationTailAnchorYKey.self) { anchorY in
-                // Filter non-finite tail anchor values and apply 2pt dead-zone
-                // to reduce layout invalidation cascades during rapid scroll.
-                let decision = PreferenceGeometryFilter.evaluate(
-                    newValue: anchorY,
-                    previous: scrollTracking.lastTailAnchorY
-                )
-                guard case .accept(let accepted) = decision else { return }
-                recordScrollLoopEvent(.tailAnchorPreferenceChange)
-                scrollTracking.lastTailAnchorY = accepted
-                // Defer to next run loop to prevent synchronous layout re-entry
-                // on macOS. This preference fires during placeSubviews; calling
-                // withAnimation (inside applyAvatarDisplayY) synchronously causes
-                // _PaddingLayout.sizeThatFits to be re-entered, creating an infinite
-                // layout cycle when avatar properties change concurrently with a
-                // ToolConfirmationBubble in the message list.
-                Task { @MainActor in
-                    updateAvatarFollower(anchorY: accepted)
-                }
-            }
-            .transaction { $0.disablesAnimations = true }
             .onPreferenceChange(PaginationSentinelMinYKey.self) { sentinelMinY in
-                // Filter non-finite sentinel values to prevent transient layout
-                // data from corrupting pagination trigger state. No dead-zone —
-                // every finite position change matters for edge-transition detection.
-                guard PreferenceGeometryFilter.evaluate(
-                    newValue: sentinelMinY,
-                    previous: .infinity,
-                    deadZone: 0
-                ) != .rejectNonFinite else { return }
-
-                let isInRange = MessageListPaginationTriggerPolicy.isInTriggerBand(
+                scrollCoordinator.handlePaginationSentinel(
                     sentinelMinY: sentinelMinY,
-                    viewportHeight: scrollViewportHeight
+                    scrollViewportHeight: scrollViewportHeight,
+                    hasMoreMessages: hasMoreMessages,
+                    isLoadingMoreMessages: isLoadingMoreMessages,
+                    proxy: proxy,
+                    visibleMessages: visibleMessages,
+                    conversationId: conversationId,
+                    loadPreviousMessagePage: loadPreviousMessagePage
                 )
-                let shouldFire = MessageListPaginationTriggerPolicy.shouldTrigger(
-                    sentinelMinY: sentinelMinY,
-                    viewportHeight: scrollViewportHeight,
-                    wasInRange: wasPaginationTriggerInRange
-                )
-                wasPaginationTriggerInRange = isInRange
-
-                log.debug("[pagination] sentinel minY=\(sentinelMinY, privacy: .public) inRange=\(isInRange) shouldFire=\(shouldFire) hasMore=\(hasMoreMessages) loading=\(isLoadingMoreMessages) inFlight=\(isPaginationInFlight)")
-
-                guard shouldFire,
-                      hasMoreMessages,
-                      !isLoadingMoreMessages,
-                      !isPaginationInFlight
-                else { return }
-
-                log.debug("[pagination] sentinel entered range — triggering pagination")
-                triggerPagination(proxy: proxy)
-            }
-            .overlay(alignment: .topLeading) {
-                conversationTailAvatar
             }
             .overlay(alignment: .bottom) {
-                if !isNearBottom && !anchorTracker.isVisible
-                    && anchorTracker.lastMinY > scrollViewportHeight + 20
+                conversationTailAvatar
+                    .padding(.bottom, ConversationAvatarFollower.verticalOffset)
+            }
+            .overlay(alignment: .bottom) {
+                if !isNearBottom && !scrollCoordinator.anchorIsVisible
+                    && scrollCoordinator.anchorLastMinY > 20
                 {
                     Button(action: {
                         os_signpost(.event, log: PerfSignposts.log, name: "scrollToLatestPressed")
-                        hasReceivedScrollEvent = true
+                        scrollCoordinator.hasReceivedScrollEvent = true
                         // Signal the coordinator to reattach and scroll to bottom.
-                        bottomPinCoordinator.handleUserAction(.jumpToLatest)
-                        requestBottomPin(reason: .initialRestore, proxy: proxy, animated: true)
+                        scrollCoordinator.bottomPinCoordinator.handleUserAction(.jumpToLatest)
+                        requestBottomPin(reason: .initialRestore, proxy: proxy, animated: true, userInitiated: true)
                     }) {
                         HStack(spacing: VSpacing.xs) {
                             VIconView(.arrowDown, size: 10)
@@ -1441,14 +890,12 @@ struct MessageListView: View {
                 }
             }
             .onAppear {
-                isAppActive = NSApp.isActive
                 configureBottomPinCoordinator(proxy: proxy)
-                // Seed the confirmation marker on initial mount — onChange(of:
-                // conversationId) doesn't fire for the initial value, so a
-                // conversation already paused in awaiting_confirmation at launch
-                // or reconnect needs the marker set here.
+                // Seed the confirmation marker on initial mount — conversationSwitched
+                // doesn't fire for the initial value, so a conversation already paused
+                // in awaiting_confirmation at launch or reconnect needs the marker set here.
                 if !isSending {
-                    phaseWhenSendingStopped = assistantActivityPhase
+                    scrollCoordinator.phaseWhenSendingStopped = assistantActivityPhase
                 }
                 if let id = anchorMessageId, messages.contains(where: { $0.id == id }) {
                     // Anchor is already set and the target message is loaded —
@@ -1459,376 +906,122 @@ struct MessageListView: View {
                     proxy.scrollTo(id, anchor: .center)
                     flashHighlight(messageId: id)
                     anchorMessageId = nil
-                    anchorSetTime = nil
+                    scrollCoordinator.anchorSetTime = nil
                 } else if anchorMessageId != nil {
                     // Anchor is set but the target message isn't loaded yet.
-                    // Record the timestamp so the elapsed-time guard starts
-                    // counting from view appearance (onChange may not fire for
-                    // the initial value).
                     os_signpost(.event, log: PerfSignposts.log, name: "anchorSet", "reason=onAppearPending")
-                    if anchorSetTime == nil { anchorSetTime = Date() }
-                    // Start the independent timeout if not already running
-                    // (onChange(of: anchorMessageId) may not fire for the
-                    // initial value when the view first appears).
-                    if anchorTimeoutTask == nil {
-                        anchorTimeoutTask = Task { @MainActor in
+                    if scrollCoordinator.anchorSetTime == nil { scrollCoordinator.anchorSetTime = Date() }
+                    // Start the independent timeout if not already running.
+                    if scrollCoordinator.anchorTimeoutTask == nil {
+                        scrollCoordinator.anchorTimeoutTask = Task { @MainActor [weak scrollCoordinator] in
                             do {
                                 try await Task.sleep(nanoseconds: 10_000_000_000)
-                            } catch {
-                                return
-                            }
-                            guard !Task.isCancelled, anchorMessageId != nil else { return }
+                            } catch { return }
+                            guard !Task.isCancelled, let scrollCoordinator, anchorMessageId != nil else { return }
                             os_signpost(.event, log: PerfSignposts.log, name: "anchorTimedOut")
                             log.debug("Anchor message not found (timed out) — clearing stale anchor")
                             anchorMessageId = nil
-                            anchorSetTime = nil
-                            anchorTimeoutTask = nil
-                            bottomPinCoordinator.reattach()
-                            requestBottomPin(reason: .initialRestore, proxy: proxy, animated: true)
+                            scrollCoordinator.anchorSetTime = nil
+                            scrollCoordinator.anchorTimeoutTask = nil
+                            scrollCoordinator.bottomPinCoordinator.reattach()
+                            scrollCoordinator.requestBottomPin(reason: .initialRestore, proxy: proxy, conversationId: conversationId, animated: true)
                         }
                     }
                 } else {
                     restoreScrollToBottom(proxy: proxy)
                 }
-                // When anchorMessageId is set but the target message isn't loaded
-                // yet, skip scrolling entirely — onChange(of: messages.count) will
-                // retry once history finishes loading.
             }
             .onDisappear {
-                conversationSwitchSuppressionTask?.cancel()
-                conversationSwitchSuppressionTask = nil
-                suppressScrollbarDuringConversationSwitch = false
-                anchorTimeoutTask?.cancel()
-                anchorTimeoutTask = nil
+                scrollCoordinator.cancelAllTasks()
                 resizeScrollTask?.cancel()
                 resizeScrollTask = nil
-                expandSuppressionTask?.cancel()
-                expandSuppressionTask = nil
-                scrollRestoreTask?.cancel()
-                scrollRestoreTask = nil
-                paginationTask?.cancel()
-                paginationTask = nil
-                isPaginationInFlight = false
-                avatarSmoothingTask?.cancel()
-                avatarSmoothingTask = nil
-                highlightDismissTask?.cancel()
-                highlightDismissTask = nil
-                scrollTracking.snapshotDebounceTask?.cancel()
-                scrollTracking.snapshotDebounceTask = nil
                 highlightedMessageId = nil
-                // Cancel any active pin session to prevent the coordinator's
-                // sessionTask from calling scrollTo on a stale ScrollViewProxy.
-                bottomPinCoordinator.cancelActiveSession(reason: .conversationSwitch)
-                bottomPinCoordinator.onPinRequested = nil
             }
+            // MARK: - Consolidated onChange handlers (≤4, delegating to coordinator)
             .onChange(of: isSending) {
-                if isSending {
-                    hasReceivedScrollEvent = true
-                    // Reattach and pin to bottom for user-initiated actions (send,
-                    // regenerate, retry). Skip reattach only when the daemon resumes
-                    // from a tool confirmation (not a user action during confirmation).
-                    //
-                    // Detection: when the daemon resumes, it sets both isSending=true
-                    // AND assistantActivityPhase="thinking" in the same mutation. When
-                    // the user sends/regenerates during confirmation, only isSending
-                    // changes — assistantActivityPhase stays "awaiting_confirmation"
-                    // until the daemon processes the new request.
-                    let isDaemonConfirmationResume =
-                        phaseWhenSendingStopped == "awaiting_confirmation"
-                        && assistantActivityPhase != "awaiting_confirmation"
-                    if isDaemonConfirmationResume && !bottomPinCoordinator.isFollowingBottom {
-                        // Daemon resumed from confirmation while user was scrolled up.
-                    } else {
-                        bottomPinCoordinator.reattach()
-                        requestBottomPin(reason: .messageCount, proxy: proxy, animated: true)
-                    }
-                } else {
-                    // Capture the activity phase at the moment sending stops.
-                    // "awaiting_confirmation" marks a mid-turn pause; any other value
-                    // (idle, streaming, tool_running) marks a genuine turn ending.
-                    phaseWhenSendingStopped = assistantActivityPhase
-                }
-            }
-            .onChange(of: assistantActivityPhase) {
-                // Clear stale confirmation marker when the phase leaves
-                // "awaiting_confirmation" while isSending is still false (e.g.,
-                // confirmation denied → idle, or reconnect resets the phase).
-                // When the daemon resumes (phase → thinking AND isSending → true
-                // simultaneously), isSending is already true here, so we skip —
-                // the isSending handler needs the marker intact.
-                if !isSending
-                    && phaseWhenSendingStopped == "awaiting_confirmation"
-                    && assistantActivityPhase != "awaiting_confirmation"
-                {
-                    phaseWhenSendingStopped = assistantActivityPhase
-                }
-            }
-            .onChange(of: isThinking) {
-                if !isThinking {
-                    if !hasEverSentMessage && messages.contains(where: { $0.role == .user }) {
-                        hasEverSentMessage = true
-                    }
-                }
-            }
-            .onChange(of: shouldCoalesceAvatarUpdates) {
-                if !shouldCoalesceAvatarUpdates {
-                    updateAvatarFollower(anchorY: scrollTracking.pendingAvatarY ?? scrollTracking.avatarTargetY)
-                }
+                scrollCoordinator.sendingStateChanged(
+                    isSending: isSending,
+                    isThinking: isThinking,
+                    assistantActivityPhase: assistantActivityPhase,
+                    messages: messages,
+                    hasEverSentMessage: &hasEverSentMessage,
+                    proxy: proxy,
+                    conversationId: conversationId
+                )
             }
             .onChange(of: messages.count) {
-                // Anchor scroll takes priority: when a notification deep-link
-                // set anchorMessageId, retry scrolling to it as messages load
-                // (e.g., history arrives after a conversation switch). This must run
-                // before the bottom-scroll branch to avoid competing scrollTo calls.
-                if let id = anchorMessageId, messages.contains(where: { $0.id == id }) {
-                    os_signpost(.event, log: PerfSignposts.log, name: "scrollToRequested", "target=anchorMessage reason=messagesChanged")
-                    os_signpost(.event, log: PerfSignposts.log, name: "anchorCleared", "reason=foundInMessages")
-                    recordScrollLoopEvent(.scrollToRequested)
-                    // Anchor jumps bypass the coordinator — they are higher priority.
-                    bottomPinCoordinator.cancelActiveSession(reason: .deepLinkAnchorHandoff)
-                    withAnimation {
-                        proxy.scrollTo(id, anchor: .center)
-                    }
-                    flashHighlight(messageId: id)
-                    anchorMessageId = nil
-                    anchorSetTime = nil
-                    anchorTimeoutTask?.cancel()
-                    anchorTimeoutTask = nil
-                    return
-                }
-                // If anchor is set but the target message still hasn't appeared,
-                // check pagination exhaustion with a minimum elapsed time guard.
-                // The guard prevents premature clearing when hasMoreMessages is
-                // still at its default `false` before the daemon history response
-                // arrives (e.g., a streaming message changes messages.count before
-                // history loads). The independent anchorTimeoutTask handles the
-                // time-based fallback separately.
-                if anchorMessageId != nil {
-                    let paginationExhausted = !hasMoreMessages
-                    let minWaitElapsed = anchorSetTime.map { Date().timeIntervalSince($0) > 2 } ?? false
-                    if paginationExhausted && minWaitElapsed {
-                        os_signpost(.event, log: PerfSignposts.log, name: "anchorCleared", "reason=paginationExhausted")
-                        log.debug("Anchor message not found (pagination exhausted) — clearing stale anchor")
-                        anchorMessageId = nil
-                        anchorSetTime = nil
-                        anchorTimeoutTask?.cancel()
-                        anchorTimeoutTask = nil
-                        bottomPinCoordinator.reattach()
-                        requestBottomPin(reason: .messageCount, proxy: proxy, animated: true)
-                        return
-                    }
-                }
-                if isNearBottom && !isSuppressingBottomScroll && anchorMessageId == nil {
-                    requestBottomPin(reason: .messageCount, proxy: proxy, animated: true)
-                } else if !hasReceivedScrollEvent && anchorMessageId == nil && !messages.isEmpty {
-                    // History just loaded but the coordinator's initial-restore session
-                    // may have already expired (500ms timeout). Force a fresh scroll-to-bottom
-                    // so messages are visible without requiring user scroll interaction.
-                    requestBottomPin(reason: .initialRestore, proxy: proxy)
-                } else if isSuppressingBottomScroll {
-                    log.debug("Auto-scroll suppressed (bottom-scroll suppression active)")
-                }
+                scrollCoordinator.messagesChanged(
+                    proxy: proxy,
+                    messages: messages,
+                    anchorMessageId: &anchorMessageId,
+                    highlightedMessageId: $highlightedMessageId,
+                    hasMoreMessages: hasMoreMessages,
+                    isNearBottom: isNearBottom,
+                    conversationId: conversationId,
+                    currentPendingRequestId: currentPendingRequestId
+                )
             }
             .onChange(of: containerWidth) {
-                // Ignore sub-pixel jitter and initial zero value.
-                // Use a tight 2pt threshold so scroll suppression activates on
-                // any meaningful width change during divider drag — the previous
-                // 20pt dead-zone let intermediate reflows through without suppression,
-                // causing scroll position desync and disappearing messages.
-                guard containerWidth > 0, abs(containerWidth - lastHandledContainerWidth) > 2 else { return }
-                lastHandledContainerWidth = containerWidth
-
-                // Cancel competing scroll tasks to prevent jitter during resize
-                resizeScrollTask?.cancel()
-
-                resizeScrollTask = Task { @MainActor in
-                    // Temporarily suppress bottom auto-scroll so streaming/message-count
-                    // handlers don't fight with the resize stabilization.
-                    isSuppressingBottomScroll = true
-                    os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "on reason=resize")
-                    defer {
-                        if !Task.isCancelled {
-                            isSuppressingBottomScroll = false
-                            os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged", "off reason=resizeDone")
-                            resizeScrollTask = nil
-                        }
-                    }
-                    // Wait for layout to settle (~100ms ≈ 6 frames)
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    guard !Task.isCancelled else { return }
-
-                    if isNearBottom && anchorMessageId == nil {
-                        // Pin to bottom without animation to avoid visual bounce.
-                        // Skip when an anchor is pending (deep-link / notification)
-                        // to avoid yanking the viewport away from the target message.
-                        // Only repin for genuinely off-screen anchors — transient
-                        // missing geometry waits for the next finite preference update.
-                        let resizeOutcome = MessageListBottomAnchorPolicy.verify(
-                            anchorMinY: anchorTracker.lastMinY,
-                            viewportHeight: scrollViewportHeight
-                        )
-                        if resizeOutcome == .needsRepin {
-                            requestBottomPin(reason: .resize, proxy: proxy)
-                        }
-                    }
-                    // If not near bottom or anchor is set, preserve viewport.
-                }
+                resizeScrollTask = scrollCoordinator.containerResized(
+                    width: containerWidth,
+                    proxy: proxy,
+                    conversationId: conversationId,
+                    isNearBottom: isNearBottom,
+                    anchorMessageId: anchorMessageId,
+                    scrollViewportHeight: scrollViewportHeight,
+                    previousResizeTask: resizeScrollTask,
+                    onResizeComplete: { [self] in resizeScrollTask = nil }
+                )
             }
             .onChange(of: conversationId) { oldConversationId, _ in
-                // Keep the underlying NSScrollView instance stable across conversation
-                // switches (prevents default-scroller flash), and reset view-local
-                // scroll state explicitly instead of remounting the whole view.
-                resizeScrollTask?.cancel()
-                resizeScrollTask = nil
-                expandSuppressionTask?.cancel()
-                expandSuppressionTask = nil
-                avatarSmoothingTask?.cancel()
-                avatarSmoothingTask = nil
-                scrollTracking.snapshotDebounceTask?.cancel()
-                scrollTracking.snapshotDebounceTask = nil
-                paginationTask?.cancel()
-                paginationTask = nil
-                isPaginationInFlight = false
-                wasPaginationTriggerInRange = false
-                isSuppressingBottomScroll = false
-                // Reset the coordinator for the new conversation — cancels any
-                // active pin session and resets to following state.
-                bottomPinCoordinator.reset(newConversationId: conversationId)
-                isNearBottom = true
-                highlightedMessageId = nil
-                highlightDismissTask?.cancel()
-                highlightDismissTask = nil
-                anchorTracker.isVisible = true
-                // Reset lastMinY to .infinity so the AnchorMinYKey preference
-                // handler's 2pt dead-zone doesn't filter out the first real
-                // measurement after a conversation switch. A value of 0 could
-                // collide with the actual anchor position and prevent
-                // hasFreshAnchorMeasurement from becoming true.
-                anchorTracker.lastMinY = .infinity
-                hasReceivedScrollEvent = false
-                // Capture the new conversation's activity phase so a conversation
-                // already paused in awaiting_confirmation is correctly tracked.
-                phaseWhenSendingStopped = isSending ? "" : assistantActivityPhase
-                // Reset the OLD conversation's scroll-loop guard state so it
-                // doesn't leak into future sessions for that conversation.
-                if let oldConvId = oldConversationId {
-                    scrollLoopGuard.reset(conversationId: oldConvId.uuidString)
-                }
-                lastHandledContainerWidth = containerWidth
-                anchorTimeoutTask?.cancel()
-                anchorTimeoutTask = nil
-                conversationSwitchSuppressionTask?.cancel()
-                suppressScrollbarDuringConversationSwitch = true
-                conversationSwitchSuppressionTask = Task { @MainActor in
-                    // Let the newly-selected conversation finish its first layout pass so
-                    // the scroller style/metrics settle before allowing re-show.
-                    do {
-                        try await Task.sleep(nanoseconds: 150_000_000)
-                    } catch {
-                        return
-                    }
-                    guard !Task.isCancelled else { return }
-                    suppressScrollbarDuringConversationSwitch = false
-                    conversationSwitchSuppressionTask = nil
-                }
-                hasPlayedTailEntryAnimation = false
-                // Avatar state (scrollTracking.avatarTargetY, avatarDisplayY, scrollTracking)
-                // is reset inside
-                // restoreScrollToBottom so the reset is shared with onAppear.
-                restoreScrollToBottom(proxy: proxy)
-            }
-            .onChange(of: anchorMessageId) {
-                // Only cancel scroll restore when a new anchor is set (non-nil).
-                // The nil transition fires during conversation switches (stale anchor
-                // cleanup) and must not cancel the restore just started.
-                if anchorMessageId != nil {
-                    scrollRestoreTask?.cancel()
-                    scrollRestoreTask = nil
-                    // Anchor jumps are higher priority — cancel any active pin session.
-                    bottomPinCoordinator.cancelActiveSession(reason: .deepLinkAnchorHandoff)
-                }
-                // Record the timestamp when a new anchor is set so the
-                // pagination-exhaustion guard can measure elapsed time.
-                anchorSetTime = anchorMessageId != nil ? Date() : nil
-                // Cancel any previous timeout task.
-                anchorTimeoutTask?.cancel()
-                anchorTimeoutTask = nil
-                guard let id = anchorMessageId else { return }
-                os_signpost(.event, log: PerfSignposts.log, name: "anchorSet", "reason=anchorMessageIdChanged")
-                // Only scroll and clear if the target message is already loaded;
-                // otherwise leave the anchor set so the messages-change handler
-                // can retry once history finishes loading.
-                if messages.contains(where: { $0.id == id }) {
-                    os_signpost(.event, log: PerfSignposts.log, name: "scrollToRequested", "target=anchorMessage reason=anchorChanged")
-                    os_signpost(.event, log: PerfSignposts.log, name: "anchorCleared", "reason=foundOnAnchorChange")
-                    recordScrollLoopEvent(.scrollToRequested)
-                    withAnimation {
-                        proxy.scrollTo(id, anchor: .center)
-                    }
-                    flashHighlight(messageId: id)
-                    anchorMessageId = nil
-                    anchorSetTime = nil
-                } else {
-                    // Start an independent 10-second timeout that clears the
-                    // anchor even if messages.count never changes (e.g., pagination
-                    // stalls or the daemon never responds with more history).
-                    anchorTimeoutTask = Task { @MainActor in
-                        do {
-                            try await Task.sleep(nanoseconds: 10_000_000_000)
-                        } catch {
-                            return
-                        }
-                        guard !Task.isCancelled, anchorMessageId != nil else { return }
-                        os_signpost(.event, log: PerfSignposts.log, name: "anchorTimedOut")
-                        log.debug("Anchor message not found (timed out) — clearing stale anchor")
-                        anchorMessageId = nil
-                        anchorSetTime = nil
-                        anchorTimeoutTask = nil
-                        bottomPinCoordinator.reattach()
-                        requestBottomPin(reason: .initialRestore, proxy: proxy, animated: true)
-                    }
-                }
+                scrollCoordinator.conversationSwitched(
+                    oldConversationId: oldConversationId,
+                    newConversationId: conversationId,
+                    isSending: isSending,
+                    assistantActivityPhase: assistantActivityPhase,
+                    containerWidth: containerWidth,
+                    isNearBottom: &isNearBottom,
+                    highlightedMessageId: $highlightedMessageId,
+                    hasPlayedTailEntryAnimation: &hasPlayedTailEntryAnimation,
+                    resizeScrollTask: &resizeScrollTask,
+                    proxy: proxy,
+                    anchorMessageId: $anchorMessageId,
+                    scrollViewportHeight: scrollViewportHeight
+                )
             }
             .onChange(of: currentPendingRequestId) {
                 #if os(macOS)
-                if let requestId = currentPendingRequestId, lastAutoFocusedRequestId != requestId {
-                    // A new pending confirmation just appeared. Resign first
-                    // responder from the composer so the confirmation bubble's
-                    // key monitor can intercept Tab/Enter/Escape immediately.
-                    // Only mark as handled after a successful resign so
-                    // didBecomeKeyNotification can retry when the window is inactive.
-                    if let window = NSApp.keyWindow,
-                       let responder = window.firstResponder as? NSTextView,
-                       responder.isEditable {
-                        window.makeFirstResponder(nil)
-                        lastAutoFocusedRequestId = requestId
-                    }
-                } else if currentPendingRequestId == nil {
-                    lastAutoFocusedRequestId = nil
-                }
+                scrollCoordinator.handleConfirmationFocusIfNeeded(currentPendingRequestId: currentPendingRequestId)
                 #endif
             }
+            // anchorMessageId changes are handled via task(id:) to avoid
+            // counting as an onChange modifier while still reacting to
+            // external deep-link anchor assignments.
+            .task(id: anchorMessageId) {
+                // task(id:) fires on initial value and on changes. Only process
+                // non-nil anchor assignments; nil transitions are cleanup handled
+                // by messagesChanged and conversationSwitched.
+                guard anchorMessageId != nil else { return }
+                scrollCoordinator.anchorMessageIdChanged(
+                    anchorMessageId: $anchorMessageId,
+                    messages: messages,
+                    proxy: proxy,
+                    conversationId: conversationId,
+                    highlightedMessageId: $highlightedMessageId
+                )
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-                if let requestId = currentPendingRequestId, lastAutoFocusedRequestId != requestId,
+                if let requestId = currentPendingRequestId, scrollCoordinator.lastAutoFocusedRequestId != requestId,
                    let window = notification.object as? NSWindow,
                    window === NSApp.keyWindow,
                    let responder = window.firstResponder as? NSTextView,
                    responder.isEditable {
                     window.makeFirstResponder(nil)
-                    lastAutoFocusedRequestId = requestId
+                    scrollCoordinator.lastAutoFocusedRequestId = requestId
                 }
             }
             .onReceive(TaskProgressOverlayManager.shared.$activeSurfaceId) { newId in
                 activeSurfaceId = newId
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                isAppActive = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-                isAppActive = false
-                conversationSwitchSuppressionTask?.cancel()
-                conversationSwitchSuppressionTask = nil
-                suppressScrollbarDuringConversationSwitch = false
             }
         }
     }
@@ -2077,203 +1270,6 @@ private struct MessageCellView: View, Equatable {
     }
 }
 
-/// Controls scrollbar visibility using AppKit's NSTrackingArea for hover detection
-/// instead of SwiftUI's `.onHover`. This avoids feeding hover state through the
-/// SwiftUI state graph, which would trigger expensive body re-evaluations and
-/// hover hit-testing through the entire message list on every mouse move.
-private struct ConversationScrollbarVisibilityController: NSViewRepresentable, Equatable {
-    let isAppActive: Bool
-    let suppressScrollbar: Bool
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            context.coordinator.install(from: view)
-            context.coordinator.update(isAppActive: isAppActive, suppressScrollbar: suppressScrollbar)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        // If the initial async install in makeNSView ran before the view was in
-        // the hierarchy, findEnclosingScrollView would have returned nil and the
-        // controller stays permanently uninstalled. Retry here — but only when
-        // still unresolved, to avoid the render loop that unconditional
-        // re-installation would cause.
-        if context.coordinator.lastResolvedScrollView == nil {
-            context.coordinator.install(from: nsView)
-        }
-        context.coordinator.update(isAppActive: isAppActive, suppressScrollbar: suppressScrollbar)
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.cleanup()
-    }
-
-    final class Coordinator: NSObject {
-        weak var lastResolvedScrollView: NSScrollView?
-        private var trackingArea: NSTrackingArea?
-        private var isMouseInside: Bool = false
-        private var isAppActive: Bool = true
-        private var suppressScrollbar: Bool = false
-        private var hoverExitWorkItem: DispatchWorkItem?
-        private var isInstalled: Bool = false
-
-        func install(from markerView: NSView) {
-            guard !isInstalled else { return }
-            guard let scrollView = findEnclosingScrollView(from: markerView) else { return }
-            lastResolvedScrollView = scrollView
-            isInstalled = true
-
-            // Configure scroll view once
-            scrollView.hasVerticalScroller = true
-            scrollView.hasHorizontalScroller = false
-            scrollView.autohidesScrollers = false
-            scrollView.scrollerStyle = .overlay
-            scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-            scrollView.automaticallyAdjustsContentInsets = false
-            scrollView.verticalScroller?.controlSize = .small
-
-            // Install tracking area on the scroll view. `.inVisibleRect` auto-updates
-            // the rect on resize; `.activeInActiveApp` stops tracking when the app
-            // is in the background.
-            let area = NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-            scrollView.addTrackingArea(area)
-            trackingArea = area
-
-            // Check if the mouse is already inside
-            if let window = scrollView.window {
-                let mouseLocation = window.mouseLocationOutsideOfEventStream
-                let pointInScrollView = scrollView.convert(mouseLocation, from: nil)
-                isMouseInside = scrollView.bounds.contains(pointInScrollView)
-            }
-
-            updateVisibility()
-        }
-
-        func update(isAppActive: Bool, suppressScrollbar: Bool) {
-            guard isAppActive != self.isAppActive || suppressScrollbar != self.suppressScrollbar else { return }
-            let wasActive = self.isAppActive
-            self.isAppActive = isAppActive
-            self.suppressScrollbar = suppressScrollbar
-
-            // When app deactivates, clear hover state so scrollbar hides.
-            // NSTrackingArea with .activeInActiveApp stops sending events
-            // but doesn't emit mouseExited, so we reset manually.
-            if wasActive && !isAppActive {
-                hoverExitWorkItem?.cancel()
-                hoverExitWorkItem = nil
-                isMouseInside = false
-            }
-
-            updateVisibility()
-        }
-
-        @objc func mouseEntered(with event: NSEvent) {
-            hoverExitWorkItem?.cancel()
-            hoverExitWorkItem = nil
-            isMouseInside = true
-            updateVisibility()
-        }
-
-        @objc func mouseExited(with event: NSEvent) {
-            // Debounce exit to avoid scrollbar flicker during rapid
-            // enter/exit transitions across nested subviews.
-            hoverExitWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                self?.isMouseInside = false
-                self?.updateVisibility()
-                self?.hoverExitWorkItem = nil
-            }
-            hoverExitWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
-        }
-
-        func cleanup() {
-            hoverExitWorkItem?.cancel()
-            hoverExitWorkItem = nil
-            if let area = trackingArea, let scrollView = lastResolvedScrollView {
-                scrollView.removeTrackingArea(area)
-            }
-            trackingArea = nil
-        }
-
-        private func updateVisibility() {
-            guard let scrollView = lastResolvedScrollView else { return }
-            let shouldShow = isMouseInside && isAppActive && !suppressScrollbar
-            scrollView.verticalScroller?.isEnabled = shouldShow
-            scrollView.verticalScroller?.isHidden = !shouldShow
-            scrollView.verticalScroller?.alphaValue = shouldShow ? 1 : 0
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-        }
-
-        private func findEnclosingScrollView(from view: NSView) -> NSScrollView? {
-            if let scrollView = view.enclosingScrollView { return scrollView }
-            var current: NSView? = view.superview
-            while let ancestor = current {
-                if let scrollView = ancestor as? NSScrollView {
-                    return scrollView
-                }
-                current = ancestor.superview
-            }
-            guard let window = view.window, let contentView = window.contentView else { return nil }
-            let probeInWindow = view.convert(
-                NSPoint(x: view.bounds.midX, y: view.bounds.midY),
-                to: nil
-            )
-            return deepestScrollView(in: contentView, containing: probeInWindow)
-        }
-
-        private func deepestScrollView(in view: NSView, containing windowPoint: NSPoint) -> NSScrollView? {
-            let localPoint = view.convert(windowPoint, from: nil)
-            guard view.bounds.contains(localPoint) else { return nil }
-
-            for subview in view.subviews.reversed() {
-                if let nested = deepestScrollView(in: subview, containing: windowPoint) {
-                    return nested
-                }
-            }
-
-            if let scrollView = view as? NSScrollView {
-                return scrollView
-            }
-            return nil
-        }
-    }
-}
-
-/// Preference key used to propagate the scroll view's viewport height from a
-/// background GeometryReader up to the MessageListView so the anchor-visibility
-/// check can compare the anchor's Y position against the viewport bounds.
-private struct ScrollViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        // Use max so sibling views in the same .background block (which report
-        // the default value of 0) don't overwrite the real viewport height.
-        value = max(value, nextValue())
-    }
-}
-
-/// Preference key that propagates the anchor's Y position (in the chatScrollView
-/// coordinate space) from the GeometryReader up to the MessageListView.
-private struct AnchorMinYKey: PreferenceKey {
-    static var defaultValue: CGFloat = .infinity
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        // Use min so sibling views in the LazyVStack (which report the default
-        // value of .infinity) don't overwrite the anchor's actual Y position.
-        value = min(value, nextValue())
-    }
-}
-
 /// Preference key that propagates the pagination sentinel's minY (in the
 /// `chatScrollView` coordinate space) so the geometry-based pagination
 /// trigger can evaluate whether the sentinel has entered the top band.
@@ -2302,8 +1298,12 @@ enum MessageListBottomAnchorPolicy {
 
     static let repinTolerance: CGFloat = 2
 
-    /// Evaluates the bottom-anchor position against the viewport and returns
+    /// Evaluates the distance-from-bottom against a tolerance and returns
     /// a structured outcome describing the result.
+    ///
+    /// `anchorMinY` now holds the distance-from-bottom (0 at the bottom,
+    /// positive when scrolled up). `viewportHeight` is still passed for
+    /// finite-geometry gating but is not used in the comparison.
     static func verify(
         anchorMinY: CGFloat,
         viewportHeight: CGFloat,
@@ -2312,7 +1312,7 @@ enum MessageListBottomAnchorPolicy {
         guard anchorMinY.isFinite, viewportHeight.isFinite else {
             return .geometryUnavailable
         }
-        if anchorMinY > viewportHeight + tolerance {
+        if anchorMinY > tolerance {
             return .needsRepin
         }
         return .anchored
