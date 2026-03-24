@@ -31,6 +31,8 @@ import type {
 } from "@agentclientprotocol/sdk";
 
 import type { ServerMessage } from "../daemon/message-protocol.js";
+import type { UserDecision } from "../permissions/types.js";
+import * as pendingInteractions from "../runtime/pending-interactions.js";
 import { getLogger } from "../util/logger.js";
 
 const log = getLogger("acp:client-handler");
@@ -51,6 +53,8 @@ interface TerminalState {
 export class VellumAcpClientHandler implements Client {
   private terminals = new Map<string, TerminalState>();
   private accumulatedText = "";
+  /** Tracks pending ACP permission requestIds for cleanup on session close. */
+  readonly pendingRequestIds = new Set<string>();
 
   /** Returns the full agent response text accumulated from agent_message_chunk events. */
   get responseText(): string {
@@ -60,10 +64,7 @@ export class VellumAcpClientHandler implements Client {
   constructor(
     private readonly acpSessionId: string,
     private readonly sendToVellum: (msg: ServerMessage) => void,
-    private readonly pendingPermissions: Map<
-      string,
-      { resolve: (optionId: string) => void }
-    >,
+    private readonly parentConversationId: string,
   ) {}
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
@@ -152,33 +153,87 @@ export class VellumAcpClientHandler implements Client {
     params: RequestPermissionRequest,
   ): Promise<RequestPermissionResponse> {
     const requestId = randomUUID();
+    const toolTitle = params.toolCall.title ?? "Unknown tool";
+    const toolKind = params.toolCall.kind ?? "other";
+    const options = params.options;
+
     log.info(
       {
         acpSessionId: this.acpSessionId,
         requestId,
-        toolTitle: params.toolCall.title,
-        toolKind: params.toolCall.kind,
-        optionCount: params.options.length,
+        toolTitle,
+        toolKind,
+        optionCount: options.length,
       },
       "ACP permission requested",
     );
 
-    const optionIdPromise = new Promise<string>((resolve) => {
-      this.pendingPermissions.set(requestId, { resolve });
+    // Normalize rawInput into a Record for the confirmation_request shape
+    const rawInput = params.toolCall.rawInput;
+    const input: Record<string, unknown> =
+      rawInput != null &&
+      typeof rawInput === "object" &&
+      !Array.isArray(rawInput)
+        ? (rawInput as Record<string, unknown>)
+        : { command: rawInput };
+
+    const toolName = `ACP Agent: ${toolTitle}`;
+    const acpOptions = options.map((opt) => ({
+      optionId: opt.optionId,
+      name: opt.name,
+      kind: opt.kind,
+    }));
+
+    // Send the confirmation_request first — this triggers makeEventSender
+    // which registers a normal "confirmation" entry in pendingInteractions.
+    this.sendToVellum({
+      type: "confirmation_request",
+      requestId,
+      toolName,
+      input,
+      riskLevel: "medium",
+      allowlistOptions: [],
+      scopeOptions: [],
+      persistentDecisionsAllowed: false,
+      acpToolKind: toolKind,
+      acpOptions,
+      conversationId: this.parentConversationId,
     });
 
-    this.sendToVellum({
-      type: "acp_permission_request",
-      acpSessionId: this.acpSessionId,
-      requestId,
-      toolTitle: params.toolCall.title ?? "Unknown tool",
-      toolKind: params.toolCall.kind ?? "other",
-      rawInput: params.toolCall.rawInput,
-      options: params.options.map((opt) => ({
-        optionId: opt.optionId,
-        name: opt.name,
-        kind: opt.kind,
-      })),
+    // Now overwrite with our ACP registration that has directResolve.
+    // This must come AFTER sendToVellum so it wins over makeEventSender's
+    // registration.
+    const optionIdPromise = new Promise<string>((resolve) => {
+      const timeoutMs = 5 * 60 * 1000; // 5 minutes
+      const timer = setTimeout(() => {
+        const pending = pendingInteractions.resolve(requestId);
+        if (pending?.directResolve) {
+          pending.directResolve("deny");
+        }
+      }, timeoutMs);
+
+      this.pendingRequestIds.add(requestId);
+      pendingInteractions.register(requestId, {
+        conversation: null,
+        conversationId: this.parentConversationId,
+        kind: "acp_confirmation",
+        confirmationDetails: {
+          toolName,
+          input,
+          riskLevel: "medium",
+          allowlistOptions: [],
+          scopeOptions: [],
+          persistentDecisionsAllowed: false,
+          acpToolKind: toolKind,
+          acpOptions,
+        },
+        directResolve: (decision: UserDecision) => {
+          clearTimeout(timer);
+          this.pendingRequestIds.delete(requestId);
+          const optionId = mapDecisionToOptionId(decision, options);
+          resolve(optionId);
+        },
+      });
     });
 
     const optionId = await optionIdPromise;
@@ -336,18 +391,45 @@ export class VellumAcpClientHandler implements Client {
 }
 
 /**
- * Resolves a pending permission request by its request ID.
+ * Maps a UserDecision to the best-matching ACP option ID.
  */
-export function resolvePermission(
-  pendingPermissions: Map<string, { resolve: (optionId: string) => void }>,
-  requestId: string,
-  optionId: string,
-): void {
-  const pending = pendingPermissions.get(requestId);
-  if (pending) {
-    pending.resolve(optionId);
-    pendingPermissions.delete(requestId);
+function mapDecisionToOptionId(
+  decision: UserDecision,
+  options: Array<{ optionId: string; kind: string }>,
+): string {
+  const isAllow =
+    decision === "allow" ||
+    decision === "allow_10m" ||
+    decision === "allow_conversation" ||
+    decision === "always_allow" ||
+    decision === "always_allow_high_risk" ||
+    decision === "temporary_override" ||
+    decision === "dangerously_skip_permissions";
+
+  if (isAllow) {
+    // Prefer allow_always for persistent decisions, fallback to allow_once
+    if (decision === "always_allow" || decision === "always_allow_high_risk") {
+      const alwaysOpt = options.find((o) => o.kind === "allow_always");
+      if (alwaysOpt) return alwaysOpt.optionId;
+    }
+    const allowOpt =
+      options.find((o) => o.kind === "allow_once") ??
+      options.find((o) => o.kind === "allow_always");
+    if (allowOpt) return allowOpt.optionId;
   }
+
+  // Deny: prefer reject_always for persistent deny, fallback to reject_once
+  if (decision === "always_deny") {
+    const alwaysDeny = options.find((o) => o.kind === "reject_always");
+    if (alwaysDeny) return alwaysDeny.optionId;
+  }
+  const denyOpt =
+    options.find((o) => o.kind === "reject_once") ??
+    options.find((o) => o.kind === "reject_always");
+  if (denyOpt) return denyOpt.optionId;
+
+  // Fallback: return first option
+  return options[0]?.optionId ?? "deny";
 }
 
 /**
