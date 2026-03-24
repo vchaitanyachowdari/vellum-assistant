@@ -196,11 +196,13 @@ public struct EnsureSelfHostedLocalRegistrationRequest: Codable, Sendable {
     public let clientInstallationId: String
     public let runtimeAssistantId: String
     public let clientPlatform: String
+    public let assistantVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case clientInstallationId = "client_installation_id"
         case runtimeAssistantId = "runtime_assistant_id"
         case clientPlatform = "client_platform"
+        case assistantVersion = "assistant_version"
     }
 }
 
@@ -237,11 +239,13 @@ public struct ReprovisionSelfHostedLocalApiKeyRequest: Codable, Sendable {
     public let clientInstallationId: String
     public let runtimeAssistantId: String
     public let clientPlatform: String
+    public let assistantVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case clientInstallationId = "client_installation_id"
         case runtimeAssistantId = "runtime_assistant_id"
         case clientPlatform = "client_platform"
+        case assistantVersion = "assistant_version"
     }
 }
 
