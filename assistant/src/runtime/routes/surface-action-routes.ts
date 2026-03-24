@@ -4,12 +4,14 @@
  * POST /v1/surface-actions — dispatch a surface action to an active conversation.
  * Requires the conversation to already exist (does not create new conversations).
  */
+import { isHttpAuthDisabled } from "../../config/env.js";
 import { getLogger } from "../../util/logger.js";
 import { DAEMON_INTERNAL_ASSISTANT_ID } from "../assistant-scope.js";
 import type { AuthContext } from "../auth/types.js";
 import { healGuardianBindingDrift } from "../guardian-vellum-migration.js";
 import { httpError } from "../http-errors.js";
 import type { RouteDefinition } from "../http-router.js";
+import { resolveLocalTrustContext } from "../local-actor-identity.js";
 import {
   resolveTrustContext,
   withSourceChannel,
@@ -55,32 +57,39 @@ function applyTrustContext(
   const sourceChannel = "vellum";
 
   if (authContext.actorPrincipalId) {
-    const assistantId = DAEMON_INTERNAL_ASSISTANT_ID;
-    let trustCtx = resolveTrustContext({
-      assistantId,
-      sourceChannel,
-      conversationExternalId: "local",
-      actorExternalId: authContext.actorPrincipalId,
-    });
-    if (trustCtx.trustClass === "unknown") {
-      const healed = healGuardianBindingDrift(authContext.actorPrincipalId);
-      if (healed) {
-        trustCtx = resolveTrustContext({
-          assistantId,
-          sourceChannel,
-          conversationExternalId: "local",
-          actorExternalId: authContext.actorPrincipalId,
-        });
-        log.info(
-          {
-            actorPrincipalId: authContext.actorPrincipalId,
-            trustClass: trustCtx.trustClass,
-          },
-          "Trust re-resolved after guardian binding drift heal (surface action)",
-        );
+    // Dev bypass (HTTP auth disabled): the synthetic "dev-bypass" principal
+    // won't match any guardian binding. Resolve from the local guardian
+    // binding instead, which produces the correct guardian trust context.
+    if (isHttpAuthDisabled() && authContext.actorPrincipalId === "dev-bypass") {
+      conversation.setTrustContext(resolveLocalTrustContext(sourceChannel));
+    } else {
+      const assistantId = DAEMON_INTERNAL_ASSISTANT_ID;
+      let trustCtx = resolveTrustContext({
+        assistantId,
+        sourceChannel,
+        conversationExternalId: "local",
+        actorExternalId: authContext.actorPrincipalId,
+      });
+      if (trustCtx.trustClass === "unknown") {
+        const healed = healGuardianBindingDrift(authContext.actorPrincipalId);
+        if (healed) {
+          trustCtx = resolveTrustContext({
+            assistantId,
+            sourceChannel,
+            conversationExternalId: "local",
+            actorExternalId: authContext.actorPrincipalId,
+          });
+          log.info(
+            {
+              actorPrincipalId: authContext.actorPrincipalId,
+              trustClass: trustCtx.trustClass,
+            },
+            "Trust re-resolved after guardian binding drift heal (surface action)",
+          );
+        }
       }
+      conversation.setTrustContext(withSourceChannel(sourceChannel, trustCtx));
     }
-    conversation.setTrustContext(withSourceChannel(sourceChannel, trustCtx));
   } else {
     // Service principals or tokens without an actor ID get guardian context.
     conversation.setTrustContext({ trustClass: "guardian", sourceChannel });

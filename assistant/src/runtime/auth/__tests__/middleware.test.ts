@@ -187,6 +187,25 @@ describe("authenticateRequest", () => {
     }
   });
 
+  test("dev bypass context sets actorPrincipalId to 'dev-bypass' for explicit detection", () => {
+    // Regression: the "dev-bypass" actorPrincipalId used to cause trust
+    // resolution to classify the user as "unknown" because no guardian
+    // binding matches "dev-bypass". The route-level fix detects
+    // isHttpAuthDisabled() + actorPrincipalId === "dev-bypass" and resolves
+    // from the local guardian binding instead.
+    authDisabled = true;
+
+    const req = new Request("http://localhost/v1/messages", {
+      method: "POST",
+    });
+
+    const result = authenticateRequest(req);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.context.actorPrincipalId).toBe("dev-bypass");
+    }
+  });
+
   test("returns 401 with refresh_required when policy epoch is stale", async () => {
     // Mint a token with a very old policy epoch. The token service checks
     // isStaleEpoch which compares against CURRENT_POLICY_EPOCH.
