@@ -8,7 +8,6 @@ private let log = Logger(subsystem: "com.vellum.vellum-assistant", category: "Ch
 struct ChatView: View {
     let messages: [ChatMessage]
     @Binding var inputText: String
-    let hasAPIKey: Bool
     let isThinking: Bool
     let isCompacting: Bool
     let isSending: Bool
@@ -102,6 +101,15 @@ struct ChatView: View {
     /// Dismisses the credits-exhausted banner.
     var onDismissCreditsExhausted: (() -> Void)? = nil
 
+    // MARK: - Provider Not Configured (inline banner)
+
+    /// Non-nil when the conversation ended because no provider is configured.
+    var providerNotConfiguredError: ConversationError? = nil
+    /// Opens the Models & Services settings tab.
+    var onOpenModelsAndServices: (() -> Void)? = nil
+    /// Dismisses the provider-not-configured banner.
+    var onDismissProviderNotConfigured: (() -> Void)? = nil
+
     // MARK: - Pagination
 
     var displayedMessageCount: Int = .max
@@ -169,7 +177,6 @@ struct ChatView: View {
                     if isTemporaryChat {
                         ChatTemporaryChatEmptyStateView(
                             inputText: $inputText,
-                            hasAPIKey: hasAPIKey,
                             isSending: isSending,
                             isRecording: isRecording,
                             suggestion: suggestion,
@@ -190,7 +197,6 @@ struct ChatView: View {
                     } else {
                         ChatEmptyStateView(
                             inputText: $inputText,
-                            hasAPIKey: hasAPIKey,
                             isSending: isSending,
                             isRecording: isRecording,
                             suggestion: suggestion,
@@ -270,6 +276,16 @@ struct ChatView: View {
                             .padding(.bottom, -VSpacing.sm)
                         }
 
+                        if let _ = providerNotConfiguredError {
+                            MissingApiKeyBanner(
+                                onOpenSettings: { onOpenModelsAndServices?() },
+                                onDismiss: { onDismissProviderNotConfigured?() }
+                            )
+                            .frame(maxWidth: VSpacing.chatColumnMaxWidth - 2 * VSpacing.xl)
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, -VSpacing.sm)
+                        }
+
                         let composerMessages = ChatVisibleMessageFilter.paginatedMessages(
                             from: messages,
                             displayedMessageCount: displayedMessageCount
@@ -277,7 +293,6 @@ struct ChatView: View {
 
                         ComposerSection(
                             inputText: $inputText,
-                            hasAPIKey: hasAPIKey,
                             isSending: isSending,
                             hasPendingConfirmation: PendingConfirmationFocusSelector.activeRequestId(from: composerMessages) != nil,
                             onAllowPendingConfirmation: {

@@ -2149,7 +2149,6 @@ public final class SettingsStore: ObservableObject {
             }
         }
         scheduleRoutingSourceRefresh()
-        NotificationCenter.default.post(name: .inferenceConfigDidChange, object: nil)
     }
 
     func setImageGenMode(_ mode: String) {
@@ -2632,7 +2631,6 @@ public final class SettingsStore: ObservableObject {
             }
         }
         scheduleRoutingSourceRefresh()
-        NotificationCenter.default.post(name: .inferenceConfigDidChange, object: nil)
     }
 
     /// Schedules a delayed refresh of provider routing sources, giving the

@@ -579,8 +579,6 @@ struct MainWindowView: View {
             if let viewModel = conversationManager.activeViewModel {
                 ErrorToastOverlay(
                     errorManager: viewModel.errorManager,
-                    hasAPIKey: windowState.hasAPIKey,
-                    needsInferenceApiKey: windowState.needsInferenceApiKey,
                     onOpenModelsAndServices: {
                         settingsStore.pendingSettingsTab = .modelsAndServices
                         windowState.selection = .panel(.settings)
@@ -592,20 +590,6 @@ struct MainWindowView: View {
                     onRetryLastMessage: { viewModel.retryLastMessage() },
                     onDismissError: { viewModel.dismissError() }
                 )
-            } else if windowState.needsInferenceApiKey {
-                ChatConversationErrorToast(
-                    message: "Add an API key to start chatting.",
-                    icon: .keyRound,
-                    accentColor: VColor.systemMidStrong,
-                    actionLabel: "Open Settings",
-                    onAction: {
-                        settingsStore.pendingSettingsTab = .modelsAndServices
-                        windowState.selection = .panel(.settings)
-                    }
-                )
-                .containerRelativeFrame(.horizontal) { width, _ in width * 0.7 }
-                .padding(.top, VSpacing.sm)
-                .animation(VAnimation.fast, value: windowState.needsInferenceApiKey)
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -704,12 +688,6 @@ struct MainWindowView: View {
             .onReceive(NotificationCenter.default.publisher(for: .identityFileDidChange)) { _ in
                 cachedAssistantName = AssistantDisplayName.resolve(IdentityInfo.load()?.name, fallback: "Your Assistant")
             }
-            .onReceive(NotificationCenter.default.publisher(for: .apiKeyManagerDidChange)) { _ in
-                refreshWindowAPIStatus(isConnected: connectionManager.isConnected, isAuthenticated: authManager.isAuthenticated)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .inferenceConfigDidChange)) { _ in
-                windowState.refreshInferenceApiKeyStatus(isAuthenticated: authManager.isAuthenticated)
-            }
             .onReceive(connectionManager.$isConnected) { connected in
                 handleDaemonConnectionChange(connected)
             }
@@ -717,9 +695,6 @@ struct MainWindowView: View {
                 guard let outcome else { return }
                 handleUpdateOutcome(outcome)
                 connectionManager.clearLastUpdateOutcome()
-            }
-            .onChange(of: authManager.isAuthenticated) { _, isAuthenticated in
-                refreshWindowAPIStatus(isConnected: connectionManager.isConnected, isAuthenticated: isAuthenticated)
             }
             .onChange(of: conversationManager.conversations.isEmpty) { _, isEmpty in
                 if !isEmpty && showDaemonLoading {
@@ -799,7 +774,6 @@ struct MainWindowView: View {
         isAppChatOpen = false
         cachedAssistantName = AssistantDisplayName.resolve(IdentityInfo.load()?.name, fallback: "Your Assistant")
         startIdentityFileWatcher()
-        refreshWindowAPIStatus(isConnected: connectionManager.isConnected, isAuthenticated: authManager.isAuthenticated)
         selectedConversationId = conversationManager.activeConversationId
         if let activeId = conversationManager.activeConversationId {
             windowState.persistentConversationId = activeId
@@ -863,14 +837,7 @@ struct MainWindowView: View {
         identityFileWatcher = source
     }
 
-    private func refreshWindowAPIStatus(isConnected: Bool, isAuthenticated: Bool) {
-        windowState.refreshAPIKeyStatus(isConnected: isConnected, isAuthenticated: isAuthenticated)
-        windowState.refreshInferenceApiKeyStatus(isAuthenticated: isAuthenticated)
-    }
-
     private func handleDaemonConnectionChange(_ connected: Bool) {
-        refreshWindowAPIStatus(isConnected: connected, isAuthenticated: authManager.isAuthenticated)
-
         // Fallback for fresh users with 0 conversations: dismiss skeleton after a
         // short delay once the daemon is connected. Only applies during initial load.
         guard connected, showDaemonLoading else { return }
@@ -1261,8 +1228,6 @@ struct MainWindowView: View {
 /// toast is visible.
 private struct ErrorToastOverlay: View {
     @ObservedObject var errorManager: ChatErrorManager
-    let hasAPIKey: Bool
-    let needsInferenceApiKey: Bool
     let onOpenModelsAndServices: () -> Void
     let onRetryConversationError: () -> Void
     let onCopyDebugInfo: () -> Void
@@ -1273,18 +1238,7 @@ private struct ErrorToastOverlay: View {
 
     var body: some View {
         VStack(alignment: .center, spacing: VSpacing.xs) {
-            if needsInferenceApiKey {
-                ChatConversationErrorToast(
-                    message: "Add an API key to start chatting.",
-                    icon: .keyRound,
-                    accentColor: VColor.systemMidStrong,
-                    actionLabel: "Open Settings",
-                    onAction: onOpenModelsAndServices
-                )
-                .containerRelativeFrame(.horizontal) { width, _ in width * 0.7 }
-            }
-
-            if let conversationError = errorManager.conversationError, !conversationError.isCreditsExhausted, !errorManager.isConversationErrorDisplayedInline {
+            if let conversationError = errorManager.conversationError, !conversationError.isCreditsExhausted, !conversationError.isProviderNotConfigured, !errorManager.isConversationErrorDisplayedInline {
                 ChatConversationErrorToast(
                     error: conversationError,
                     onRetry: onRetryConversationError,
@@ -1306,7 +1260,6 @@ private struct ErrorToastOverlay: View {
             }
         }
         .padding(.top, VSpacing.sm)
-        .animation(VAnimation.fast, value: needsInferenceApiKey)
         .animation(VAnimation.fast, value: errorManager.conversationError != nil)
         .animation(VAnimation.fast, value: errorManager.errorText != nil)
     }
