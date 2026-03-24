@@ -152,6 +152,19 @@ struct InferenceServiceCard: View {
                     store.setInferenceMode("your-own")
                 }
             }
+
+            // Symmetric case: if the user is authenticated and the mode is
+            // still the default "your-own", switch to "managed" so signed-in
+            // users get managed inference out of the box — but only when the
+            // provider requires an API key and the user hasn't configured one.
+            // Providers like Ollama that don't use keys (apiKeyPlaceholder is
+            // nil) are left alone since the user intentionally set up a local
+            // provider.
+            let providerRequiresKey = store.dynamicProviderApiKeyPlaceholder(draftProvider) != nil
+            if isLoggedIn && draftMode == "your-own" && providerRequiresKey && !store.hasKeyForProvider(draftProvider) {
+                draftMode = "managed"
+                store.setInferenceMode("managed")
+            }
         }
         .onChange(of: store.inferenceMode) { _, newValue in
             // Sync draft when external changes arrive (e.g. daemon reload),
@@ -174,6 +187,15 @@ struct InferenceServiceCard: View {
                 // loading to authenticated), restore the persisted managed
                 // mode that onAppear may have temporarily overridden.
                 draftMode = "managed"
+            } else if isAuthenticated && store.inferenceMode == "your-own" {
+                // When a user signs in and has no BYO key for a key-based
+                // provider, default to managed. Keyless providers (e.g. Ollama)
+                // are left in your-own mode.
+                let requiresKey = store.dynamicProviderApiKeyPlaceholder(draftProvider) != nil
+                if requiresKey && !store.hasKeyForProvider(draftProvider) {
+                    draftMode = "managed"
+                    store.setInferenceMode("managed")
+                }
             }
         }
         .onChange(of: authManager.isLoading) { _, isLoading in
