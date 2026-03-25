@@ -1387,6 +1387,13 @@ public struct HostBashRequest: Decodable, Sendable {
     }
 }
 
+/// Cancellation signal from the daemon telling the client to abort an in-flight
+/// host bash execution identified by `requestId`.
+public struct HostBashCancelRequest: Decodable, Sendable {
+    public let type: String
+    public let requestId: String
+}
+
 /// Payload posted back to the daemon with the result of a host bash execution.
 public struct HostBashResultPayload: Codable, Sendable {
     public let requestId: String
@@ -1442,6 +1449,13 @@ public struct HostFileRequest: Decodable, Sendable {
     }
 }
 
+/// Cancellation signal from the daemon telling the client to abort an in-flight
+/// host file operation identified by `requestId`.
+public struct HostFileCancelRequest: Decodable, Sendable {
+    public let type: String
+    public let requestId: String
+}
+
 /// Payload posted back to the daemon with the result of a host file operation.
 public struct HostFileResultPayload: Codable, Sendable {
     public let requestId: String
@@ -1478,6 +1492,13 @@ public struct HostCuRequest: Decodable, Sendable {
         case stepNumber
         case reasoning
     }
+}
+
+/// Cancellation signal from the daemon telling the client to abort an in-flight
+/// host computer-use action identified by `requestId`.
+public struct HostCuCancelRequest: Decodable, Sendable {
+    public let type: String
+    public let requestId: String
 }
 
 /// Payload posted back to the daemon with the result of a host CU action execution.
@@ -2148,8 +2169,11 @@ public enum ServerMessage: Decodable, Sendable {
     case tokenRotated(TokenRotatedMessage)
     case identityChanged(IdentityChanged)
     case hostBashRequest(HostBashRequest)
+    case hostBashCancel(HostBashCancelRequest)
     case hostFileRequest(HostFileRequest)
+    case hostFileCancel(HostFileCancelRequest)
     case hostCuRequest(HostCuRequest)
+    case hostCuCancel(HostCuCancelRequest)
     case usageUpdate(UsageUpdate)
     case serviceGroupUpdateStarting(ServiceGroupUpdateStartingMessage)
     case serviceGroupUpdateProgress(ServiceGroupUpdateProgressMessage)
@@ -2577,12 +2601,21 @@ public enum ServerMessage: Decodable, Sendable {
         case "host_bash_request":
             let message = try HostBashRequest(from: decoder)
             self = .hostBashRequest(message)
+        case "host_bash_cancel":
+            let message = try HostBashCancelRequest(from: decoder)
+            self = .hostBashCancel(message)
         case "host_file_request":
             let message = try HostFileRequest(from: decoder)
             self = .hostFileRequest(message)
+        case "host_file_cancel":
+            let message = try HostFileCancelRequest(from: decoder)
+            self = .hostFileCancel(message)
         case "host_cu_request":
             let message = try HostCuRequest(from: decoder)
             self = .hostCuRequest(message)
+        case "host_cu_cancel":
+            let message = try HostCuCancelRequest(from: decoder)
+            self = .hostCuCancel(message)
         case "usage_update":
             let message = try UsageUpdate(from: decoder)
             self = .usageUpdate(message)
