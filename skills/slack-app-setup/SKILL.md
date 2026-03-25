@@ -65,11 +65,17 @@ Generate the manifest JSON:
         "app_mentions:read",
         "assistant:write",
         "channels:history",
+        "channels:read",
         "chat:write",
         "files:write",
+        "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
+        "mpim:history",
+        "mpim:read",
+        "reactions:read",
         "reactions:write",
         "users:read"
       ]
@@ -77,7 +83,14 @@ Generate the manifest JSON:
   },
   "settings": {
     "event_subscriptions": {
-      "bot_events": ["app_mention", "message.channels", "message.im"]
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "reaction_added"
+      ]
     },
     "interactivity": { "is_enabled": true },
     "org_deploy_enabled": false,
