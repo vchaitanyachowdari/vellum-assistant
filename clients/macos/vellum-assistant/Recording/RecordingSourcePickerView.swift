@@ -23,13 +23,13 @@ struct RecordingSourcePickerView: View {
             // Header
             Text("Screen Recording")
                 .font(VFont.titleMedium)
-                .foregroundColor(VColor.contentDefault)
+                .foregroundStyle(VColor.contentDefault)
                 .padding(.top, VSpacing.sm)
                 .padding(.bottom, VSpacing.sm)
 
             Text("Choose what to record")
                 .font(VFont.bodyMediumLighter)
-                .foregroundColor(VColor.contentSecondary)
+                .foregroundStyle(VColor.contentSecondary)
                 .padding(.bottom, VSpacing.sm)
 
             // Scope picker (Display / Window)
@@ -51,7 +51,7 @@ struct RecordingSourcePickerView: View {
                 Spacer()
                 ProgressView("Loading sources...")
                     .font(VFont.bodyMediumLighter)
-                    .foregroundColor(VColor.contentSecondary)
+                    .foregroundStyle(VColor.contentSecondary)
                 Spacer()
             } else {
                 sourceList
@@ -150,7 +150,6 @@ struct RecordingSourcePickerView: View {
             sourceListContent
             ScrollView {
                 sourceListContent
-                    .background(ScrollViewScrollerHider())
             }
             .scrollIndicators(.hidden)
         }
@@ -172,18 +171,18 @@ struct RecordingSourcePickerView: View {
                 )
 
                 VIconView(.appWindow, size: 16)
-                    .foregroundColor(isSelected ? VColor.primaryBase : VColor.contentSecondary)
+                    .foregroundStyle(isSelected ? VColor.primaryBase : VColor.contentSecondary)
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(window.title)
                         .font(VFont.bodyMediumDefault)
-                        .foregroundColor(VColor.contentDefault)
+                        .foregroundStyle(VColor.contentDefault)
                         .lineLimit(1)
                     if !window.appName.isEmpty {
                         Text(window.appName)
                             .font(VFont.labelDefault)
-                            .foregroundColor(VColor.contentSecondary)
+                            .foregroundStyle(VColor.contentSecondary)
                             .lineLimit(1)
                     }
                 }
@@ -192,7 +191,7 @@ struct RecordingSourcePickerView: View {
 
                 if isSelected {
                     VIconView(.circleCheck, size: 18)
-                        .foregroundColor(VColor.primaryBase)
+                        .foregroundStyle(VColor.primaryBase)
                 }
             }
             .padding(.horizontal, VSpacing.md)
@@ -237,7 +236,7 @@ struct RecordingSourcePickerView: View {
                     HStack(spacing: VSpacing.sm) {
                         Text(display.name)
                             .font(VFont.bodyMediumDefault)
-                            .foregroundColor(VColor.contentDefault)
+                            .foregroundStyle(VColor.contentDefault)
                             .lineLimit(1)
                         if display.isCurrentDisplay {
                             VTag("This display", color: VColor.primaryBase)
@@ -245,7 +244,7 @@ struct RecordingSourcePickerView: View {
                     }
                     Text(display.subtitle)
                         .font(VFont.labelDefault)
-                        .foregroundColor(VColor.contentSecondary)
+                        .foregroundStyle(VColor.contentSecondary)
                         .lineLimit(1)
                 }
 
@@ -253,7 +252,7 @@ struct RecordingSourcePickerView: View {
 
                 if isSelected {
                     VIconView(.circleCheck, size: 18)
-                        .foregroundColor(VColor.primaryBase)
+                        .foregroundStyle(VColor.primaryBase)
                 }
             }
             .padding(.horizontal, VSpacing.md)
@@ -281,10 +280,10 @@ struct RecordingSourcePickerView: View {
     private func emptyState(_ message: String) -> some View {
         VStack(spacing: VSpacing.sm) {
             VIconView(.squareDashed, size: 32)
-                .foregroundColor(VColor.contentTertiary)
+                .foregroundStyle(VColor.contentTertiary)
             Text(message)
                 .font(VFont.bodyMediumLighter)
-                .foregroundColor(VColor.contentTertiary)
+                .foregroundStyle(VColor.contentTertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, VSpacing.xxl)
@@ -299,11 +298,11 @@ struct RecordingSourcePickerView: View {
                 VToggle(isOn: $viewModel.includeAudio)
                     .accessibilityLabel("System audio")
                 VIconView(.volume2, size: 14)
-                    .foregroundColor(VColor.contentSecondary)
+                    .foregroundStyle(VColor.contentSecondary)
                     .frame(width: 20)
                 Text("System audio")
                     .font(VFont.bodyMediumLighter)
-                    .foregroundColor(VColor.contentDefault)
+                    .foregroundStyle(VColor.contentDefault)
             }
             .padding(.horizontal, VSpacing.xl)
 
@@ -311,11 +310,11 @@ struct RecordingSourcePickerView: View {
                 VToggle(isOn: $viewModel.includeMicrophone)
                     .accessibilityLabel("Microphone")
                 VIconView(.mic, size: 14)
-                    .foregroundColor(VColor.contentSecondary)
+                    .foregroundStyle(VColor.contentSecondary)
                     .frame(width: 20)
                 Text("Microphone")
                     .font(VFont.bodyMediumLighter)
-                    .foregroundColor(VColor.contentDefault)
+                    .foregroundStyle(VColor.contentDefault)
             }
             .padding(.horizontal, VSpacing.xl)
 
@@ -352,41 +351,3 @@ struct RecordingSourcePickerView: View {
         .padding(.vertical, VSpacing.md)
     }
 }
-
-// MARK: - Scroll View Helpers
-
-/// Finds the nearest NSScrollView ancestor and hides its scrollers,
-/// overriding the macOS "Show scroll bars: Always" system preference.
-/// Walks the full superview chain as a fallback if `enclosingScrollView`
-/// returns nil (which can happen with SwiftUI's internal hosting layers).
-private struct ScrollViewScrollerHider: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { hideScrollers(from: view) }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { hideScrollers(from: nsView) }
-    }
-
-    private func hideScrollers(from view: NSView) {
-        // Try the fast path first
-        if let scrollView = view.enclosingScrollView {
-            scrollView.hasVerticalScroller = false
-            scrollView.hasHorizontalScroller = false
-            return
-        }
-        // Walk the full superview chain looking for any NSScrollView
-        var current: NSView? = view.superview
-        while let ancestor = current {
-            if let scrollView = ancestor as? NSScrollView {
-                scrollView.hasVerticalScroller = false
-                scrollView.hasHorizontalScroller = false
-                return
-            }
-            current = ancestor.superview
-        }
-    }
-}
-

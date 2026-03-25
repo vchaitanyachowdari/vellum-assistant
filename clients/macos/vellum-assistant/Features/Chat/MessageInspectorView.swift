@@ -42,7 +42,7 @@ struct MessageInspectorView: View {
                     Text("Back")
                         .font(VFont.bodyMediumDefault)
                 }
-                .foregroundColor(VColor.contentDefault)
+                .foregroundStyle(VColor.contentDefault)
                 .padding(.horizontal, VSpacing.sm)
                 .padding(.vertical, VSpacing.xs)
                 .background(VColor.surfaceOverlay)
@@ -54,11 +54,11 @@ struct MessageInspectorView: View {
             VStack(alignment: .leading, spacing: VSpacing.xxs) {
                 Text("LLM Context Inspector")
                     .font(VFont.bodySmallEmphasised)
-                    .foregroundColor(VColor.contentDefault)
+                    .foregroundStyle(VColor.contentDefault)
 
                 Text("Select a call to inspect overview details, prompt sections, response sections, or raw payloads.")
                     .font(VFont.labelDefault)
-                    .foregroundColor(VColor.contentSecondary)
+                    .foregroundStyle(VColor.contentSecondary)
             }
 
             Spacer()
@@ -69,14 +69,14 @@ struct MessageInspectorView: View {
                     let count = viewState.logs.count
                     Text(count == 1 ? "1 LLM call" : "\(count) LLM calls")
                         .font(VFont.labelDefault)
-                        .foregroundColor(VColor.contentSecondary)
+                        .foregroundStyle(VColor.contentSecondary)
                 case .loading, .failed:
                     EmptyView()
                 }
 
                 Text(messageId)
                     .font(VFont.bodySmallDefault)
-                    .foregroundColor(VColor.contentTertiary)
+                    .foregroundStyle(VColor.contentTertiary)
                     .multilineTextAlignment(.trailing)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -193,7 +193,7 @@ struct MessageInspectorView: View {
                 HStack(alignment: .firstTextBaseline, spacing: VSpacing.sm) {
                     Text(callTitle(for: entry, index: index))
                         .font(VFont.bodyMediumDefault)
-                        .foregroundColor(VColor.contentDefault)
+                        .foregroundStyle(VColor.contentDefault)
                         .lineLimit(1)
 
                     Spacer(minLength: VSpacing.sm)
@@ -201,13 +201,13 @@ struct MessageInspectorView: View {
                     if index == 0 {
                         Text("Latest")
                             .font(VFont.labelSmall)
-                            .foregroundColor(VColor.primaryBase)
+                            .foregroundStyle(VColor.primaryBase)
                     }
                 }
 
                 Text(callSubtitle(for: entry))
                     .font(VFont.labelDefault)
-                    .foregroundColor(VColor.contentSecondary)
+                    .foregroundStyle(VColor.contentSecondary)
                     .lineLimit(2)
 
                 HStack(spacing: VSpacing.xs) {
@@ -223,7 +223,7 @@ struct MessageInspectorView: View {
 
                     Text(formattedTimestamp(entry.createdAt))
                         .font(VFont.labelSmall)
-                        .foregroundColor(VColor.contentTertiary)
+                        .foregroundStyle(VColor.contentTertiary)
                 }
             }
             .padding(VSpacing.sm)
@@ -265,11 +265,11 @@ struct MessageInspectorView: View {
         VStack(alignment: .leading, spacing: VSpacing.sm) {
             Text(callTitle(for: entry, index: selectedCallIndex(for: entry)))
                 .font(VFont.bodySmallEmphasised)
-                .foregroundColor(VColor.contentDefault)
+                .foregroundStyle(VColor.contentDefault)
 
             Text(detailSubtitle(for: entry))
                 .font(VFont.labelDefault)
-                .foregroundColor(VColor.contentSecondary)
+                .foregroundStyle(VColor.contentSecondary)
 
             if let summary = entry.summary {
                 HStack(spacing: VSpacing.xs) {
@@ -444,7 +444,7 @@ struct MessageInspectorView: View {
     private func callMetadataChip(_ label: String) -> some View {
         Text(label)
             .font(VFont.labelSmall)
-            .foregroundColor(VColor.contentSecondary)
+            .foregroundStyle(VColor.contentSecondary)
             .padding(.horizontal, VSpacing.xs)
             .padding(.vertical, 3)
             .background(VColor.surfaceBase)
@@ -454,7 +454,7 @@ struct MessageInspectorView: View {
     private func detailMetadataChip(_ label: String) -> some View {
         Text(label)
             .font(VFont.labelDefault)
-            .foregroundColor(VColor.contentSecondary)
+            .foregroundStyle(VColor.contentSecondary)
             .padding(.horizontal, VSpacing.sm)
             .padding(.vertical, VSpacing.xs)
             .background(VColor.surfaceOverlay)
