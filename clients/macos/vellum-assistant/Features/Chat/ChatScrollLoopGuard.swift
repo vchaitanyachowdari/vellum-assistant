@@ -12,7 +12,6 @@ import Foundation
 /// `os.Logger` and `ChatDiagnosticsStore`.
 ///
 /// **Thresholds:**
-/// - More than 40 `anchorPreferenceChange` events in 2 seconds
 /// - More than 15 `scrollToRequested` events in 2 seconds
 /// - More than 40 `bodyEvaluation` events in 2 seconds
 ///
@@ -24,7 +23,6 @@ final class ChatScrollLoopGuard {
     // MARK: - Event Kinds
 
     enum EventKind: String, CaseIterable {
-        case anchorPreferenceChange
         case scrollToRequested
         case repinAttempt
         case suppressionFlip
@@ -45,9 +43,6 @@ final class ChatScrollLoopGuard {
     }
 
     // MARK: - Thresholds (explicit constants)
-
-    /// Maximum anchor preference change events allowed in the detection window.
-    static let anchorThreshold: Int = 40
 
     /// Maximum scrollTo requests allowed in the detection window.
     static let scrollToThreshold: Int = 15
@@ -141,14 +136,11 @@ final class ChatScrollLoopGuard {
         state.lastEventTime = timestamp
 
         // Check thresholds.
-        let anchorCount = state.events[.anchorPreferenceChange]?.count ?? 0
         let scrollToCount = state.events[.scrollToRequested]?.count ?? 0
         let bodyEvalCount = state.events[.bodyEvaluation]?.count ?? 0
 
         var trippedBy: EventKind?
-        if anchorCount > Self.anchorThreshold {
-            trippedBy = .anchorPreferenceChange
-        } else if scrollToCount > Self.scrollToThreshold {
+        if scrollToCount > Self.scrollToThreshold {
             trippedBy = .scrollToRequested
         } else if bodyEvalCount > Self.bodyEvaluationThreshold {
             trippedBy = .bodyEvaluation
