@@ -15,7 +15,6 @@ import {
 import {
   getProviderBehavior,
   PROVIDER_BEHAVIORS,
-  resolveService,
 } from "../../oauth/provider-behaviors.js";
 import { RiskLevel } from "../../permissions/types.js";
 import type { ToolDefinition } from "../../providers/types.js";
@@ -103,11 +102,11 @@ class CredentialStoreTool implements Tool {
               "describe",
             ],
             description:
-              'The operation to perform. Use "prompt" to ask the user for a secret via secure UI - the value never enters the conversation. Use "oauth2_connect" to connect an OAuth2 service via browser authorization. Use "describe" to get setup metadata for a well-known OAuth service (dashboard URL, scopes, redirect URI, etc.). For well-known services (gmail, slack), only the service name is required - endpoints, scopes, and stored client credentials are resolved automatically.',
+              'The operation to perform. Use "prompt" to ask the user for a secret via secure UI - the value never enters the conversation. Use "oauth2_connect" to connect an OAuth2 service via browser authorization. Use "describe" to get setup metadata for a well-known OAuth service (dashboard URL, scopes, redirect URI, etc.). For well-known services (google, slack), only the service name is required - endpoints, scopes, and stored client credentials are resolved automatically.',
           },
           service: {
             type: "string",
-            description: "Service name, e.g. gmail, github",
+            description: "Service name, e.g. google, github",
           },
           account: {
             type: "string",
@@ -158,7 +157,7 @@ class CredentialStoreTool implements Tool {
             type: "array",
             items: { type: "string" },
             description:
-              "OAuth2 scopes to request (only for oauth2_connect action). Auto-filled for well-known services (gmail, slack).",
+              "OAuth2 scopes to request (only for oauth2_connect action). Auto-filled for well-known services (google, slack).",
           },
           client_id: {
             type: "string",
@@ -822,15 +821,12 @@ class CredentialStoreTool implements Tool {
       }
 
       case "oauth2_connect": {
-        const rawService = input.service as string | undefined;
-        if (!rawService)
+        const service = input.service as string | undefined;
+        if (!service)
           return {
             content: "Error: service is required for oauth2_connect action",
             isError: true,
           };
-
-        // Resolve aliases (e.g. "gmail" → "google")
-        const service = resolveService(rawService);
 
         // Code-side behavioral fields (identityVerifier, setup, etc.)
         const behavior = getProviderBehavior(service);
@@ -889,7 +885,7 @@ class CredentialStoreTool implements Tool {
             ? `\n\nLoad the "${skillId}" skill for provider-specific instructions on obtaining the client secret.`
             : '\n\nUse credential_store with action "prompt" to securely collect the client_secret from the user before calling oauth2_connect again.';
           return {
-            content: `Error: client_secret is required for ${rawService} but not found in the vault.${skillHint}`,
+            content: `Error: client_secret is required for ${service} but not found in the vault.${skillHint}`,
             isError: true,
           };
         }
@@ -897,7 +893,7 @@ class CredentialStoreTool implements Tool {
         // Delegate to the shared orchestrator - it resolves authUrl, tokenUrl,
         // extraParams, userinfoUrl, and tokenEndpointAuthMethod from the DB.
         const result = await orchestrateOAuthConnect({
-          service: rawService,
+          service,
           clientId,
           clientSecret,
           isInteractive: !!context.isInteractive,
@@ -949,7 +945,7 @@ class CredentialStoreTool implements Tool {
 
         if (result.deferred) {
           return {
-            content: `To connect ${rawService}, open this link and authorize access:\n\n${result.authUrl}\n\nOnce you authorize, the connection will be set up automatically. You can verify by asking me to check your inbox.`,
+            content: `To connect ${service}, open this link and authorize access:\n\n${result.authUrl}\n\nOnce you authorize, the connection will be set up automatically. You can verify by asking me to check your inbox.`,
             isError: false,
           };
         }
@@ -963,25 +959,24 @@ class CredentialStoreTool implements Tool {
       }
 
       case "describe": {
-        const rawService = (input.service as string | undefined) ?? "";
-        if (!rawService) {
+        const descService = (input.service as string | undefined) ?? "";
+        if (!descService) {
           return {
             content: "Error: service is required for describe action",
             isError: true,
           };
         }
-        const resolvedService = resolveService(rawService);
-        const descProviderRow = getProvider(resolvedService);
+        const descProviderRow = getProvider(descService);
         if (!descProviderRow) {
           return {
-            content: `No well-known OAuth config found for "${rawService}". Available services: ${Object.keys(
+            content: `No well-known OAuth config found for "${descService}". Available services: ${Object.keys(
               PROVIDER_BEHAVIORS,
             ).join(", ")}`,
             isError: false,
           };
         }
 
-        const descBehavior = getProviderBehavior(resolvedService);
+        const descBehavior = getProviderBehavior(descService);
 
         // Compute the redirect URI based on callback transport
         let redirectUri: string;
@@ -1023,7 +1018,7 @@ class CredentialStoreTool implements Tool {
           : [];
 
         const info: Record<string, unknown> = {
-          service: resolvedService,
+          service: descService,
           authUrl: descProviderRow.authUrl,
           tokenUrl: descProviderRow.tokenUrl,
           scopes: descDefaultScopes,

@@ -221,7 +221,7 @@ The OAuth extensibility layer makes adding a new OAuth provider a declarative op
 
 Protocol fields (`authUrl`, `tokenUrl`, `defaultScopes`, `scopePolicy`, `callbackTransport`) are stored in the `oauth_providers` database table rather than in code.
 
-Registered providers: `google`, `slack`, `notion`. The `gmail` alias resolves to the `google` provider.
+Registered providers: `google`, `slack`, `notion`.
 
 ### Scope Policy Engine
 
@@ -240,7 +240,7 @@ Returns `{ ok: true, scopes }` or `{ ok: false, error, allowedScopes }`.
 
 `assistant/src/oauth/connect-orchestrator.ts` exports `orchestrateOAuthConnect(options)`, which runs the full OAuth2 flow:
 
-1. **Resolve service** — alias expansion via `resolveService()`.
+1. **Receive canonical provider name** — the orchestrator receives the canonical provider name directly (e.g. `google`, `slack`).
 2. **Load behavior** — `getProviderBehavior()` from the registry; load protocol fields from the `oauth_providers` DB table.
 3. **Compute scopes** — `resolveScopes()` with scope policy enforcement.
 4. **Build OAuth config** — assemble protocol-level config from the DB provider row.
@@ -275,7 +275,7 @@ This replaces provider-specific handlers — any provider in the registry can be
 
 | File                                             | Role                                                                             |
 | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `assistant/src/oauth/provider-behaviors.ts`      | Provider behavior registry and alias resolution                                  |
+| `assistant/src/oauth/provider-behaviors.ts`      | Provider behavior registry                                                       |
 | `assistant/src/oauth/scope-policy.ts`            | Scope resolution and policy enforcement (pure, no I/O)                           |
 | `assistant/src/oauth/connect-orchestrator.ts`    | Shared connect orchestrator (profile → scopes → flow → tokens)                   |
 | `assistant/src/oauth/connect-types.ts`           | Shared types (`OAuthProviderBehavior`, `OAuthScopePolicy`, `OAuthConnectResult`) |

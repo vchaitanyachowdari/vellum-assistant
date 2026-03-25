@@ -18,7 +18,6 @@ import {
   fetchActiveConnections,
   isManagedMode,
   requirePlatformClient,
-  resolveService,
 } from "./shared.js";
 
 const log = getCliLogger("cli");
@@ -88,7 +87,7 @@ export function registerConnectCommand(oauth: Command): void {
       "after",
       `
 Arguments:
-  provider   Provider name (e.g. google, slack, gmail).
+  provider   Provider name (e.g. google, slack, notion).
              Run 'assistant oauth providers list' to see available providers.
 
 Options:
@@ -106,7 +105,7 @@ Options:
 
 Examples:
   $ assistant oauth connect google
-  $ assistant oauth connect gmail --open-browser
+  $ assistant oauth connect google --open-browser
   $ assistant oauth connect google --scopes https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events
   $ assistant oauth connect google --client-id abc123 --open-browser`,
     )
@@ -130,17 +129,12 @@ Examples:
 
         try {
           // ---------------------------------------------------------------
-          // 1. Resolve provider key
+          // 1. Validate provider exists
           // ---------------------------------------------------------------
-          const providerKey = resolveService(provider);
-
-          // ---------------------------------------------------------------
-          // 2. Validate provider exists
-          // ---------------------------------------------------------------
-          const providerRow = getProvider(providerKey);
+          const providerRow = getProvider(provider);
           if (!providerRow) {
             writeError(
-              `Unknown provider "${providerKey}". ` +
+              `Unknown provider "${provider}". ` +
                 `Run 'assistant oauth providers list' to see available providers.`,
             );
             return;
@@ -149,7 +143,7 @@ Examples:
           // ---------------------------------------------------------------
           // 3. Detect mode
           // ---------------------------------------------------------------
-          const managed = isManagedMode(providerKey);
+          const managed = isManagedMode(provider);
 
           if (managed) {
             // =============================================================
@@ -159,7 +153,7 @@ Examples:
             // Warn about --client-id being ignored in managed mode
             if (opts.clientId) {
               log.info(
-                `Warning: --client-id is ignored for platform-managed providers. The platform manages OAuth apps for "${providerKey}".`,
+                `Warning: --client-id is ignored for platform-managed providers. The platform manages OAuth apps for "${provider}".`,
               );
             }
 
@@ -167,7 +161,7 @@ Examples:
             if (!client) return;
 
             // Call the platform's OAuth start endpoint
-            const startPath = `/v1/assistants/${encodeURIComponent(client.platformAssistantId)}/oauth/${encodeURIComponent(providerKey)}/start/`;
+            const startPath = `/v1/assistants/${encodeURIComponent(client.platformAssistantId)}/oauth/${encodeURIComponent(provider)}/start/`;
 
             const body: Record<string, unknown> = {};
             if (opts.scopes && opts.scopes.length > 0) {
@@ -218,7 +212,7 @@ Examples:
                 // Snapshot existing connection IDs before opening browser
                 const snapshotEntries = await fetchActiveConnections(
                   client,
-                  providerKey,
+                  provider,
                   cmd,
                 );
                 if (!snapshotEntries) {
@@ -231,7 +225,7 @@ Examples:
 
                 if (!jsonMode) {
                   log.info(
-                    `Opening browser to connect ${providerKey}. Waiting for authorization...`,
+                    `Opening browser to connect ${provider}. Waiting for authorization...`,
                   );
                 }
 
@@ -250,7 +244,7 @@ Examples:
 
                   const currentEntries = await fetchActiveConnections(
                     client,
-                    providerKey,
+                    provider,
                     cmd,
                     { silent: true },
                   );
@@ -270,7 +264,7 @@ Examples:
                   if (jsonMode) {
                     writeOutput(cmd, {
                       ok: true,
-                      provider: providerKey,
+                      provider: provider,
                       connectionId: newConnection.id,
                       accountLabel: newConnection.account_label ?? null,
                       scopesGranted: newConnection.scopes_granted ?? [],
@@ -279,9 +273,7 @@ Examples:
                     const label = newConnection.account_label
                       ? ` as ${newConnection.account_label}`
                       : "";
-                    process.stdout.write(
-                      `Connected to ${providerKey}${label}\n`,
-                    );
+                    process.stdout.write(`Connected to ${provider}${label}\n`);
                   }
                 } else {
                   // Timeout — authorization may still be in progress
@@ -289,7 +281,7 @@ Examples:
                     writeOutput(cmd, {
                       ok: true,
                       deferred: true,
-                      provider: providerKey,
+                      provider: provider,
                       connectUrl: result.connect_url,
                       message:
                         "Authorization may still be in progress. Check with 'assistant oauth status <provider>'.",
@@ -297,7 +289,7 @@ Examples:
                   } else {
                     process.stdout.write(
                       `Timed out waiting for authorization. It may still be in progress.\n` +
-                        `Check with: assistant oauth status ${providerKey}\n`,
+                        `Check with: assistant oauth status ${provider}\n`,
                     );
                   }
                 }
@@ -308,7 +300,7 @@ Examples:
                     ok: true,
                     deferred: true,
                     connectUrl: result.connect_url,
-                    provider: providerKey,
+                    provider: provider,
                   });
                 } else {
                   process.stdout.write(result.connect_url + "\n");
@@ -322,13 +314,10 @@ Examples:
             // BYO PATH
             // =============================================================
 
-            // a. Resolve service alias (already done above via resolveService)
-            const resolvedServiceKey = providerKey;
-
-            // b. Resolve client credentials from the DB
+            // a. Resolve client credentials from the DB
             const dbApp = opts.clientId
-              ? getAppByProviderAndClientId(resolvedServiceKey, opts.clientId)
-              : getMostRecentAppByProvider(resolvedServiceKey);
+              ? getAppByProviderAndClientId(provider, opts.clientId)
+              : getMostRecentAppByProvider(provider);
 
             let clientId = opts.clientId;
             let clientSecret: string | undefined;
@@ -342,7 +331,7 @@ Examples:
             } else if (opts.clientId) {
               // --client-id was explicitly provided but no matching app exists
               writeError(
-                `No registered app found for "${resolvedServiceKey}" with client ID "${opts.clientId}". ` +
+                `No registered app found for "${provider}" with client ID "${opts.clientId}". ` +
                   `Register one with 'assistant oauth apps upsert'.`,
               );
               return;
@@ -351,7 +340,7 @@ Examples:
             // c. Validate client_id exists
             if (!clientId) {
               writeError(
-                `No client_id found for "${resolvedServiceKey}". ` +
+                `No client_id found for "${provider}". ` +
                   `Register one with 'assistant oauth apps upsert'.`,
               );
               return;
@@ -359,7 +348,7 @@ Examples:
 
             // d. Check if client_secret is required but missing
             if (clientSecret === undefined) {
-              const behavior = getProviderBehavior(resolvedServiceKey);
+              const behavior = getProviderBehavior(provider);
 
               const requiresSecret =
                 behavior?.setup?.requiresClientSecret ??
@@ -370,7 +359,7 @@ Examples:
 
               if (requiresSecret) {
                 writeError(
-                  `client_secret is required for ${resolvedServiceKey} but not found. ` +
+                  `client_secret is required for ${provider} but not found. ` +
                     `Store it with 'assistant oauth apps upsert --client-secret'.`,
                 );
                 return;
@@ -403,7 +392,7 @@ Examples:
                 });
               } else {
                 process.stdout.write(
-                  `\nAuthorize with ${resolvedServiceKey}:\n\n${result.authUrl}\n\nThe connection will complete automatically once you authorize.\n`,
+                  `\nAuthorize with ${provider}:\n\n${result.authUrl}\n\nThe connection will complete automatically once you authorize.\n`,
                 );
               }
               return;
@@ -417,7 +406,7 @@ Examples:
                 accountInfo: result.accountInfo,
               });
             } else {
-              const msg = `Connected to ${resolvedServiceKey}${result.accountInfo ? ` as ${result.accountInfo}` : ""}`;
+              const msg = `Connected to ${provider}${result.accountInfo ? ` as ${result.accountInfo}` : ""}`;
               process.stdout.write(msg + "\n");
             }
           }
