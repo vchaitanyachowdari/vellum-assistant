@@ -53,20 +53,13 @@ struct IntelligencePanel: View {
                     .foregroundStyle(VColor.contentEmphasized)
                 Spacer()
             }
-            .padding(.bottom, VSpacing.md)
+            .padding(.bottom, VSpacing.lg)
 
             // Tab bar
-            VStack(spacing: 0) {
-                HStack(spacing: VSpacing.xl) {
-                    ForEach(visibleTabs, id: \.self) { tab in
-                        tabButton(tab.rawValue, tab: tab)
-                    }
-                    Spacer()
-                }
-
-                Divider().background(VColor.borderDisabled)
-            }
-            .padding(.top, VSpacing.md)
+            VTabs(
+                items: visibleTabs.map { (label: $0.rawValue, tag: $0) },
+                selection: $selectedTab
+            )
             .padding(.bottom, VSpacing.md)
 
             // Tab content
@@ -127,30 +120,6 @@ struct IntelligencePanel: View {
         }
     }
 
-    // MARK: - Tab Button
-
-    @ViewBuilder
-    private func tabButton(_ label: String, tab: IntelligenceTab) -> some View {
-        let isActive = selectedTab == tab
-        Button {
-            withAnimation(VAnimation.fast) { selectedTab = tab }
-        } label: {
-            VStack(spacing: VSpacing.sm) {
-                Text(label)
-                    .font(VFont.bodyMediumDefault)
-                    .foregroundStyle(isActive ? VColor.primaryActive : VColor.contentSecondary)
-                    .padding(.bottom, VSpacing.xs)
-
-                Rectangle()
-                    .fill(isActive ? VColor.borderActive : Color.clear)
-                    .frame(height: 2)
-            }
-            .fixedSize()
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-    }
 
     // MARK: - Tab Content
 
