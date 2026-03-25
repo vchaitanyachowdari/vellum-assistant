@@ -868,12 +868,11 @@ struct DynamicWorkspaceWrapper: View {
                                 VButton(label: "Share", iconOnly: VIcon.share.rawValue, style: .outlined, iconSize: 32, tooltip: "Share") {
                                     showShareDrawer.toggle()
                                 }
-                                .background(GeometryReader { proxy in
-                                    Color.clear.onChange(of: showShareDrawer) { _, _ in
-                                        shareButtonFrame = proxy.frame(in: .named("appPageContainer"))
-                                    }
-                                    .onAppear { shareButtonFrame = proxy.frame(in: .named("appPageContainer")) }
-                                })
+                                .onGeometryChange(for: CGRect.self) { proxy in
+                                    proxy.frame(in: .named("appPageContainer"))
+                                } action: { newFrame in
+                                    shareButtonFrame = newFrame
+                                }
                                 .overlay {
                                     AppSharePanel(
                                         items: sharing.shareFileURL != nil ? [sharing.shareFileURL!] : [],
@@ -1052,7 +1051,7 @@ private struct PublishedButton: View {
     @Binding var copied: Bool
 
     @State private var isCopyHovered = false
-    @State private var resetTimer: DispatchWorkItem?
+    @State private var resetTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: VSpacing.xs) {
@@ -1067,13 +1066,15 @@ private struct PublishedButton: View {
                 .animation(VAnimation.fast, value: copied)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    resetTimer?.cancel()
+                    resetTask?.cancel()
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(url, forType: .string)
                     copied = true
-                    let timer = DispatchWorkItem { copied = false }
-                    resetTimer = timer
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timer)
+                    resetTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        guard !Task.isCancelled else { return }
+                        copied = false
+                    }
                 }
                 .onHover { hovering in
                     isCopyHovered = hovering
