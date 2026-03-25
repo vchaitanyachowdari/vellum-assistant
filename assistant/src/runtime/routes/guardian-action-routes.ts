@@ -121,7 +121,11 @@ export async function handleGuardianActionDecision(
     return httpError("BAD_REQUEST", result.message, 400);
   }
   if (result.applied) {
-    return Response.json({ applied: true, requestId: result.requestId });
+    return Response.json({
+      applied: true,
+      requestId: result.requestId,
+      ...(result.replyText ? { replyText: result.replyText } : {}),
+    });
   }
   return result.reason === "not_found"
     ? httpError(
@@ -297,7 +301,16 @@ export function guardianActionRouteDefinitions(): RouteDefinition[] {
       responseBody: z.object({
         applied: z.boolean(),
         requestId: z.string(),
-        reason: z.string(),
+        reason: z
+          .string()
+          .optional()
+          .describe("Decline reason (present only when applied is false)"),
+        replyText: z
+          .string()
+          .optional()
+          .describe(
+            "Resolver reply text for the guardian (e.g. verification code)",
+          ),
       }),
       handler: async ({ req, authContext }) =>
         handleGuardianActionDecision(req, authContext),
