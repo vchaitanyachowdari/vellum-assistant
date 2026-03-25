@@ -72,6 +72,9 @@ public final class GatewayConnectionManager: ObservableObject {
     private var shouldReconnect = true
     private var refreshTask: Task<Void, Never>?
     private var conversationKey: String?
+    /// Number of consecutive successful health checks. Used to suppress
+    /// repetitive "Health check passed" logs after the first three passes.
+    private var consecutiveHealthCheckSuccesses = 0
 
     func setUpdateInProgress(_ value: Bool) {
         let wasInProgress = isUpdateInProgress
@@ -218,6 +221,7 @@ public final class GatewayConnectionManager: ObservableObject {
         shouldReconnect = false
         healthCheckTask?.cancel()
         healthCheckTask = nil
+        consecutiveHealthCheckSuccesses = 0
         setConnected(false)
 
         eventStreamClient.stopSSE()
@@ -270,7 +274,8 @@ public final class GatewayConnectionManager: ObservableObject {
             let healthPath = isManaged ? "assistants/{assistantId}/health" : "health"
             let response = try await GatewayHTTPClient.get(
                 path: healthPath,
-                timeout: 10
+                timeout: 10,
+                quiet: true
             )
 
             guard response.isSuccess else {
@@ -296,16 +301,22 @@ public final class GatewayConnectionManager: ObservableObject {
                 }
             }
 
-            log.info("Health check passed")
+            consecutiveHealthCheckSuccesses += 1
+            if consecutiveHealthCheckSuccesses <= 3 {
+                log.info("Health check passed")
+            }
             setConnected(true)
         } catch let error as GatewayHTTPClient.ClientError {
+            consecutiveHealthCheckSuccesses = 0
             log.error("Health check client error: \(error.localizedDescription, privacy: .public)")
             setConnected(false)
             throw ConnectionError.healthCheckFailed
         } catch let error as ConnectionError {
+            consecutiveHealthCheckSuccesses = 0
             setConnected(false)
             throw error
         } catch {
+            consecutiveHealthCheckSuccesses = 0
             log.error("Health check failed: \(error.localizedDescription, privacy: .public)")
             setConnected(false)
             throw ConnectionError.healthCheckFailed
