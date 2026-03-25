@@ -4,6 +4,8 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { z } from "zod";
+
 import { enrichMessageWithSourcePaths } from "../../agent/attachments.js";
 import {
   createAssistantMessage,
@@ -1494,11 +1496,35 @@ export function conversationRouteDefinitions(deps: {
     {
       endpoint: "messages",
       method: "GET",
+      summary: "List messages",
+      description:
+        "Return messages for a conversation, including attachments and interface file metadata.",
+      tags: ["messages"],
+      responseBody: z.object({
+        messages: z.array(z.unknown()).describe("Array of message objects"),
+        interfaceFiles: z
+          .array(z.unknown())
+          .describe("Interface file paths with modification timestamps"),
+      }),
       handler: ({ url }) => handleListMessages(url, deps.interfacesDir),
     },
     {
       endpoint: "messages",
       method: "POST",
+      summary: "Send a message",
+      description:
+        "Send a user message to a conversation and trigger the assistant response.",
+      tags: ["messages"],
+      requestBody: z.object({
+        conversationKey: z.string(),
+        content: z.string().describe("Message text content"),
+        attachments: z
+          .array(z.unknown())
+          .describe("Optional file attachments")
+          .optional(),
+        conversationType: z.string().optional(),
+        slashCommand: z.string().optional(),
+      }),
       handler: async ({ req, authContext }) =>
         handleSendMessage(
           req,
@@ -1513,11 +1539,27 @@ export function conversationRouteDefinitions(deps: {
     {
       endpoint: "search",
       method: "GET",
+      summary: "Search conversations",
+      description: "Full-text search across all conversations.",
+      tags: ["conversations"],
+      responseBody: z.object({
+        query: z.string(),
+        results: z.array(z.unknown()),
+      }),
       handler: ({ url }) => handleSearchConversations(url),
     },
     {
       endpoint: "suggestion",
       method: "GET",
+      summary: "Get reply suggestion",
+      description:
+        "Return an LLM-generated follow-up suggestion for the most recent assistant message.",
+      tags: ["messages"],
+      responseBody: z.object({
+        suggestion: z.string(),
+        messageId: z.string(),
+        source: z.string(),
+      }),
       handler: async ({ url }) =>
         handleGetSuggestion(url, {
           suggestionCache: deps.suggestionCache,
