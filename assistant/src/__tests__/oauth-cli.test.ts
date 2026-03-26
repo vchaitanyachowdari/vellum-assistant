@@ -225,6 +225,18 @@ mock.module("../oauth/provider-behaviors.js", () => ({
     mockGetProviderBehavior(providerKey),
 }));
 
+mock.module("../oauth/seed-providers.js", () => ({
+  SEEDED_PROVIDER_KEYS: new Set([
+    "google",
+    "slack",
+    "github",
+    "notion",
+    "twitter",
+    "linear",
+  ]),
+  seedOAuthProviders: () => {},
+}));
+
 // ---------------------------------------------------------------------------
 // Mock connection-resolver (needed by request.ts)
 // ---------------------------------------------------------------------------
