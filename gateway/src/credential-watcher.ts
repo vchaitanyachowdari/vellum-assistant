@@ -9,7 +9,13 @@
  * causing later credential changes to be missed until restart.
  */
 
-import { mkdirSync, watch, type FSWatcher } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  watch,
+  type FSWatcher,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { getLogger } from "./logger.js";
 import {
@@ -22,6 +28,8 @@ import {
 const log = getLogger("credential-watcher");
 
 const DEBOUNCE_MS = 500;
+const MANAGED_BOOTSTRAP_POLL_MS = 1_000;
+const MANAGED_BOOTSTRAP_TIMEOUT_MS = 1_000;
 
 export type CredentialChangeEvent = {
   /** Map from service name to resolved credentials (null if unavailable) */
@@ -35,6 +43,10 @@ export type CredentialChangeCallback = (event: CredentialChangeEvent) => void;
 export class CredentialWatcher {
   private watchers: FSWatcher[] = [];
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private managedBootstrapTimer: ReturnType<typeof setInterval> | null = null;
+  private managedBootstrapPollInFlight = false;
+  private lastConfiguredServices = new Set<string>();
+  private lastReadyServices = new Set<string>();
   private lastSerialized: Map<string, string> = new Map();
   private polling = false;
   private pendingPoll = false;
@@ -70,6 +82,8 @@ export class CredentialWatcher {
     // but the encrypted ciphertext will (new IV). Force a full reload so
     // channel listeners restart even when the plaintext values match.
     this.startWatcher(protectedDir, "keys.enc", { forceChanged: true });
+
+    this.startManagedBootstrapRetry();
   }
 
   private startWatcher(
@@ -101,11 +115,73 @@ export class CredentialWatcher {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.managedBootstrapTimer) {
+      clearInterval(this.managedBootstrapTimer);
+      this.managedBootstrapTimer = null;
+    }
+    this.managedBootstrapPollInFlight = false;
     this.pendingPoll = false;
     for (const watcher of this.watchers) {
       watcher.close();
     }
     this.watchers = [];
+  }
+
+  private startManagedBootstrapRetry(): void {
+    const baseUrl = process.env.CES_CREDENTIAL_URL?.trim();
+    const serviceToken = process.env.CES_SERVICE_TOKEN?.trim();
+    if (!baseUrl || !serviceToken) return;
+
+    const poll = (): void => {
+      void this.pollManagedBootstrap(baseUrl, serviceToken);
+    };
+
+    this.managedBootstrapTimer = setInterval(poll, MANAGED_BOOTSTRAP_POLL_MS);
+    this.managedBootstrapTimer.unref?.();
+    poll();
+  }
+
+  private async pollManagedBootstrap(
+    baseUrl: string,
+    serviceToken: string,
+  ): Promise<void> {
+    if (this.managedBootstrapPollInFlight) return;
+    this.managedBootstrapPollInFlight = true;
+    try {
+      const resp = await fetch(`${baseUrl}/v1/credentials`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${serviceToken}`,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(MANAGED_BOOTSTRAP_TIMEOUT_MS),
+      });
+      if (resp.status === 401 || resp.status === 403 || resp.status === 404) {
+        if (this.managedBootstrapTimer) {
+          clearInterval(this.managedBootstrapTimer);
+          this.managedBootstrapTimer = null;
+        }
+        log.warn(
+          { status: resp.status },
+          "Stopping managed credential bootstrap retry due to non-retryable CES response",
+        );
+        return;
+      }
+      if (!resp.ok) {
+        return;
+      }
+
+      await this.pollOnce();
+
+      if (this.allConfiguredServicesReady() && this.managedBootstrapTimer) {
+        clearInterval(this.managedBootstrapTimer);
+        this.managedBootstrapTimer = null;
+      }
+    } catch {
+      // CES isn't reachable yet. Keep retrying until the sidecar is ready.
+    } finally {
+      this.managedBootstrapPollInFlight = false;
+    }
   }
 
   /** Whether the next scheduled poll should treat all services as changed. */
@@ -135,9 +211,16 @@ export class CredentialWatcher {
     this.polling = true;
     try {
       const credentials = new Map<string, Record<string, string> | null>();
+      const configuredServices = this.loadConfiguredServices();
       for (const spec of ALL_CREDENTIAL_SPECS) {
         credentials.set(spec.service, await readServiceCredentials(spec));
       }
+      this.lastConfiguredServices = configuredServices;
+      this.lastReadyServices = new Set(
+        [...credentials.entries()]
+          .filter(([, creds]) => creds !== null)
+          .map(([service]) => service),
+      );
 
       const changedServices = new Set<string>();
       for (const [service, creds] of credentials) {
@@ -165,5 +248,43 @@ export class CredentialWatcher {
         void this.pollOnce(force);
       }
     }
+  }
+
+  private loadConfiguredServices(): Set<string> {
+    if (!existsSync(this.metadataPath)) return new Set();
+
+    try {
+      const raw = readFileSync(this.metadataPath, "utf-8");
+      const data = JSON.parse(raw) as {
+        credentials?: Array<{ service?: string; field?: string }>;
+      };
+      if (!Array.isArray(data.credentials)) return new Set();
+
+      const configured = new Set<string>();
+      for (const spec of ALL_CREDENTIAL_SPECS) {
+        const hasAllRequiredFields = spec.requiredFields.every((field) =>
+          data.credentials?.some(
+            (credential) =>
+              credential.service === spec.service && credential.field === field,
+          ),
+        );
+        if (hasAllRequiredFields) {
+          configured.add(spec.service);
+        }
+      }
+
+      return configured;
+    } catch {
+      return new Set();
+    }
+  }
+
+  private allConfiguredServicesReady(): boolean {
+    for (const service of this.lastConfiguredServices) {
+      if (!this.lastReadyServices.has(service)) {
+        return false;
+      }
+    }
+    return true;
   }
 }
