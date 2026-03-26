@@ -21,47 +21,6 @@ enum BottomPinRequestReason: String, Sendable {
     case resize
 }
 
-/// Named reasons for suppressing bottom auto-scroll. Each reason has a defined
-/// timeout so callers don't need to manage independent timers.
-///
-/// The OptionSet design allows multiple reasons to be active simultaneously
-/// (e.g., a resize and expansion can overlap). `isSuppressed` is true when
-/// any reason is active.
-struct ScrollSuppression: OptionSet, Sendable {
-    let rawValue: Int
-
-    /// Pagination loaded new content above the viewport — suppress for 100ms
-    /// while the scroll position is restored to the pre-pagination anchor.
-    static let pagination = ScrollSuppression(rawValue: 1 << 0)
-
-    /// Content expanded off-bottom (e.g., tool call disclosure) — suppress
-    /// for 200ms to prevent the view from jumping back to the bottom.
-    static let expansion  = ScrollSuppression(rawValue: 1 << 1)
-
-    /// Container width changed (window resize) — suppress for 100ms while
-    /// the layout stabilizes and the scroll position is corrected.
-    static let resize     = ScrollSuppression(rawValue: 1 << 2)
-
-    /// Timeout (in nanoseconds) for each suppression reason.
-    static func timeout(for reason: ScrollSuppression) -> UInt64 {
-        switch reason {
-        case .pagination: return 100_000_000  // 100ms
-        case .expansion:  return 200_000_000  // 200ms
-        case .resize:     return 100_000_000  // 100ms
-        default:          return 100_000_000  // fallback
-        }
-    }
-
-    /// Human-readable description of the active reasons, for diagnostics.
-    var reasonDescriptions: [String] {
-        var reasons: [String] = []
-        if contains(.pagination) { reasons.append("pagination") }
-        if contains(.expansion)  { reasons.append("expansion") }
-        if contains(.resize)     { reasons.append("resize") }
-        return reasons
-    }
-}
-
 /// Consolidates all scroll-related state from `MessageListView` into a single
 /// `ObservableObject` that preserves the reactive / non-reactive split.
 ///
@@ -69,17 +28,23 @@ struct ScrollSuppression: OptionSet, Sendable {
 /// - All fields on `ScrollTrackingState` (dead-zone guards, smoothing state,
 ///   precomputed cache) — updated every scroll tick, must never trigger
 ///   `objectWillChange`.
-/// - `isAtBottom` — whether the bottom sentinel is the current scroll target.
-/// - `hasReceivedScrollEvent`, `wasPaginationTriggerInRange`,
-///   `hasLoggedNonFiniteGeometry` — bookkeeping flags that don't drive UI.
+/// - `hasReceivedScrollEvent`, `wasPaginationTriggerInRange` — bookkeeping
+///   flags that don't drive UI.
 /// - `isFollowingBottom` — follow/detach state for bottom-pin logic.
-/// - `ChatScrollLoopGuard` — stateful helper that never needs to trigger
-///   view re-evaluation itself.
+/// - `ScrollDiagnosticsRecorder` — owns loop guard, snapshot capture,
+///   and non-finite geometry logging. Never triggers view re-evaluation.
 /// - All in-flight `Task` references.
+/// - `isResizeSuppressed`, `isPaginationSuppressed`, `isExpansionSuppressed` —
+///   plain boolean flags for scroll suppression. NOT `@Published` because the
+///   view never reads suppression state directly for rendering; making them
+///   `@Published` would trigger unnecessary `objectWillChange` on every
+///   suppression flip. Managed via per-reason `begin`/`end` helpers.
 ///
 /// **Reactive (`@Published`):**
-/// - `suppression` / `isSuppressed`, `isPaginationInFlight` — change
-///   infrequently and legitimately require view updates.
+/// - `isAtBottom` — drives "Scroll to latest" CTA button visibility and
+///   reattach-on-idle logic.
+/// - `isPaginationInFlight` — changes infrequently and legitimately requires
+///   view updates.
 @MainActor
 final class MessageListScrollCoordinator: ObservableObject {
 
@@ -120,30 +85,42 @@ final class MessageListScrollCoordinator: ObservableObject {
 
     // MARK: - Reactive State (@Published)
 
-    /// Active scroll suppression reasons. When non-empty, bottom auto-scroll
-    /// is suppressed. Each reason has a defined timeout managed by
-    /// `suppressionTimeoutTasks`. Replaces the former `isSuppressingBottomScroll`
-    /// boolean with a structured OptionSet for diagnostics and correctness.
-    @Published var suppression: ScrollSuppression = [] {
-        didSet {
-            guard suppression != oldValue else { return }
-            let added = suppression.subtracting(oldValue)
-            let removed = oldValue.subtracting(suppression)
-            if !added.isEmpty {
-                scrollCoordinatorLog.debug("Scroll suppression started: \(added.reasonDescriptions.joined(separator: ", ")) — active: \(self.suppression.reasonDescriptions.joined(separator: ", "))")
-            }
-            if !removed.isEmpty {
-                scrollCoordinatorLog.debug("Scroll suppression ended: \(removed.reasonDescriptions.joined(separator: ", ")) — active: \(self.suppression.reasonDescriptions.joined(separator: ", "))")
-            }
-        }
-    }
-
-    /// Whether any scroll suppression reason is currently active.
-    var isSuppressed: Bool { !suppression.isEmpty }
-
     /// Guards the pagination sentinel against re-entry during the brief window
     /// between Task launch and the first `await`.
     @Published var isPaginationInFlight: Bool = false
+
+    // MARK: - Suppression Flags (non-reactive)
+
+    /// Whether resize suppression is currently active. Plain stored `var`
+    /// (not `@Published`) — the view never reads suppression state for
+    /// rendering; only `hideScrollIndicators` is `@Published`.
+    var isResizeSuppressed: Bool = false
+
+    /// Whether pagination suppression is currently active. Plain stored `var`
+    /// (not `@Published`) for the same reason as `isResizeSuppressed`.
+    var isPaginationSuppressed: Bool = false
+
+    /// Whether expansion suppression is currently active. Plain stored `var`
+    /// (not `@Published`) for the same reason as `isResizeSuppressed`.
+    var isExpansionSuppressed: Bool = false
+
+    /// Timeout task for expansion suppression — the only suppression reason
+    /// that uses an auto-timeout (200ms). Resize and pagination manage their
+    /// lifecycle manually within their respective task bodies.
+    var expansionTimeoutTask: Task<Void, Never>?
+
+    /// Whether any scroll suppression reason is currently active.
+    var isSuppressed: Bool { isResizeSuppressed || isPaginationSuppressed || isExpansionSuppressed }
+
+    /// Human-readable names of currently active suppression reasons, for
+    /// diagnostics and transcript snapshots.
+    var activeSuppressionReasons: [String] {
+        var reasons: [String] = []
+        if isResizeSuppressed     { reasons.append("resize") }
+        if isPaginationSuppressed { reasons.append("pagination") }
+        if isExpansionSuppressed  { reasons.append("expansion") }
+        return reasons
+    }
 
 
     // MARK: - Non-Reactive State (plain stored properties)
@@ -163,9 +140,9 @@ final class MessageListScrollCoordinator: ObservableObject {
     /// update the view directly without callback indirection.
     var isNearBottomBinding: Binding<Bool>?
 
-    /// Detects runaway scroll-loop patterns and emits one aggregate warning
-    /// per cooldown window instead of per-frame log spam.
-    var scrollLoopGuard = ChatScrollLoopGuard()
+    /// Owns diagnostic recording — loop detection and non-finite geometry
+    /// logging. Extracted to keep the coordinator focused on scroll mechanics.
+    var diagnostics = ScrollDiagnosticsRecorder()
 
     /// Whether a physical scroll event (wheel/trackpad) has been received since
     /// the current conversation loaded.
@@ -182,10 +159,6 @@ final class MessageListScrollCoordinator: ObservableObject {
 
     /// Tracks whether the pagination sentinel was previously inside the trigger band.
     var wasPaginationTriggerInRange: Bool = false
-
-    /// One-shot flag: logs a warning the first time anchor, tail, or viewport
-    /// geometry is non-finite during a render pass.
-    var hasLoggedNonFiniteGeometry: Bool = false
 
     /// The conversation ID currently being displayed. Updated in
     /// `conversationSwitched` so closures that capture `[weak self]`
@@ -236,11 +209,6 @@ final class MessageListScrollCoordinator: ObservableObject {
 
     // MARK: - Tasks
 
-    /// Per-reason timeout tasks that clear individual suppression bits after
-    /// their defined timeout. Keyed by the raw value of the `ScrollSuppression`
-    /// reason so each reason's timeout is independent.
-    var suppressionTimeoutTasks: [Int: Task<Void, Never>] = [:]
-
     /// In-flight pagination load task.
     var paginationTask: Task<Void, Never>?
 
@@ -253,46 +221,88 @@ final class MessageListScrollCoordinator: ObservableObject {
 
     // MARK: - Suppression Management
 
-    /// Adds a suppression reason and schedules its automatic timeout.
-    /// If the reason is already active, the existing timeout is replaced.
-    func addSuppression(_ reason: ScrollSuppression) {
-        suppression.insert(reason)
-        os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged",
-                    "on reason=%{public}s", reason.reasonDescriptions.joined(separator: ","))
+    /// Begins resize suppression. Managed manually by the resize task body.
+    func beginResizeSuppression() {
+        isResizeSuppressed = true
+        logSuppressionChange(started: "resize")
+    }
 
-        // Cancel any existing timeout for this reason before scheduling a new one.
-        let key = reason.rawValue
-        suppressionTimeoutTasks[key]?.cancel()
-        suppressionTimeoutTasks[key] = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: ScrollSuppression.timeout(for: reason))
+    /// Ends resize suppression. No-op if already inactive.
+    func endResizeSuppression() {
+        guard isResizeSuppressed else { return }
+        isResizeSuppressed = false
+        logSuppressionChange(ended: "resize")
+    }
+
+    /// Begins pagination suppression. Managed manually by the pagination task body.
+    func beginPaginationSuppression() {
+        isPaginationSuppressed = true
+        logSuppressionChange(started: "pagination")
+    }
+
+    /// Ends pagination suppression. No-op if already inactive.
+    func endPaginationSuppression() {
+        guard isPaginationSuppressed else { return }
+        isPaginationSuppressed = false
+        logSuppressionChange(ended: "pagination")
+    }
+
+    /// Begins expansion suppression with a 200ms auto-timeout. If expansion
+    /// suppression is already active, the timeout is reset. This is the only
+    /// suppression reason that uses an auto-timeout — resize and pagination
+    /// manage their lifecycle manually within their task bodies.
+    func beginExpansionSuppression() {
+        isExpansionSuppressed = true
+        logSuppressionChange(started: "expansion")
+        expansionTimeoutTask?.cancel()
+        expansionTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled, let self else { return }
-            self.removeSuppression(reason)
+            self.endExpansionSuppression()
         }
     }
 
-    /// Removes a suppression reason and cancels its timeout task.
-    func removeSuppression(_ reason: ScrollSuppression) {
-        let key = reason.rawValue
-        suppressionTimeoutTasks[key]?.cancel()
-        suppressionTimeoutTasks[key] = nil
-        guard suppression.contains(reason) else { return }
-        suppression.remove(reason)
-        os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged",
-                    "off reason=%{public}s", reason.reasonDescriptions.joined(separator: ","))
+    /// Ends expansion suppression and cancels any pending auto-timeout.
+    /// No-op if already inactive.
+    func endExpansionSuppression() {
+        expansionTimeoutTask?.cancel()
+        expansionTimeoutTask = nil
+        guard isExpansionSuppressed else { return }
+        isExpansionSuppressed = false
+        logSuppressionChange(ended: "expansion")
     }
 
-    /// Clears all suppression reasons and cancels all timeout tasks.
+    /// Clears all suppression flags and cancels the expansion timeout task.
+    /// Directly resets flags instead of calling the per-reason `end*` helpers
+    /// to avoid emitting N+1 log entries (one per helper + one here).
     func clearAllSuppression() {
-        for (_, task) in suppressionTimeoutTasks {
-            task.cancel()
-        }
-        suppressionTimeoutTasks.removeAll()
-        if !suppression.isEmpty {
-            let reasons = suppression.reasonDescriptions.joined(separator: ",")
-            suppression = []
+        let wasActive = isSuppressed
+        let reasons = activeSuppressionReasons.joined(separator: ",")
+        // Clear flags directly — bypass end helpers to avoid per-reason logging.
+        isResizeSuppressed = false
+        isPaginationSuppressed = false
+        isExpansionSuppressed = false
+        expansionTimeoutTask?.cancel()
+        expansionTimeoutTask = nil
+        if wasActive {
+            scrollCoordinatorLog.debug("Scroll suppression cleared: clearAll (was: \(reasons))")
             os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged",
                         "off reason=clearAll(was:%{public}s)", reasons)
         }
+    }
+
+    /// Shared logging for suppression state transitions.
+    private func logSuppressionChange(started reason: String) {
+        scrollCoordinatorLog.debug("Scroll suppression started: \(reason) — active: \(self.activeSuppressionReasons.joined(separator: ", "))")
+        os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged",
+                    "on reason=%{public}s", reason)
+    }
+
+    /// Shared logging for suppression state transitions.
+    private func logSuppressionChange(ended reason: String) {
+        scrollCoordinatorLog.debug("Scroll suppression ended: \(reason) — active: \(self.activeSuppressionReasons.joined(separator: ", "))")
+        os_signpost(.event, log: PerfSignposts.log, name: "scrollSuppressionChanged",
+                    "off reason=%{public}s", reason)
     }
 
     // MARK: - Follow/Detach State
@@ -317,7 +327,7 @@ final class MessageListScrollCoordinator: ObservableObject {
         }
     }
 
-    // MARK: - Diagnostics
+    // MARK: - Diagnostics (forwarded to ScrollDiagnosticsRecorder)
 
     /// Records a scroll-related event into the loop guard and emits a
     /// diagnostic warning if the guard trips.
@@ -328,112 +338,15 @@ final class MessageListScrollCoordinator: ObservableObject {
         scrollViewportHeight: CGFloat = .infinity,
         anchorMessageId: UUID? = nil
     ) {
-        let convId = conversationId?.uuidString ?? "unknown"
-        let timestamp = ProcessInfo.processInfo.systemUptime
-
-        if let snapshot = scrollLoopGuard.record(kind, conversationId: convId, timestamp: timestamp) {
-            // Log the full event histogram (all event kinds, including zeros)
-            // for post-mortem analysis — not just the kinds with non-zero counts.
-            let fullHistogram = ChatScrollLoopGuard.EventKind.allCases
-                .map { "\($0.rawValue)=\(snapshot.counts[$0] ?? 0)" }
-                .joined(separator: " ")
-            scrollCoordinatorLog.warning(
-                "Scroll loop detected — trippedBy=\(snapshot.trippedBy.rawValue) window=\(snapshot.windowDuration)s \(fullHistogram) isNearBottom=\(isNearBottom) hasReceivedScrollEvent=\(self.hasReceivedScrollEvent) anchorMessageId=\(String(describing: anchorMessageId)) isAtBottom=\(self.isAtBottom) viewportHeight=\(scrollViewportHeight)"
-            )
-            var sanitizer = NumericSanitizer()
-            let safeViewportHeight = sanitizer.sanitize(scrollViewportHeight, field: "viewportHeight")
-            logNonFiniteGeometryOnce(sanitizer: sanitizer)
-            ChatDiagnosticsStore.shared.record(ChatDiagnosticEvent(
-                kind: .scrollLoopDetected,
-                conversationId: convId,
-                reason: "trippedBy=\(snapshot.trippedBy.rawValue) \(fullHistogram)",
-                isPinnedToBottom: isNearBottom,
-                isUserScrolling: hasReceivedScrollEvent,
-                scrollOffsetY: 0,
-                viewportHeight: safeViewportHeight,
-                nonFiniteFields: sanitizer.nonFiniteFields
-            ))
-        }
-    }
-
-    /// Schedules a debounced transcript snapshot capture.
-    func scheduleTranscriptSnapshot(
-        conversationId: UUID?,
-        messages: [ChatMessage],
-        isNearBottom: Bool,
-        scrollViewportHeight: CGFloat,
-        containerWidth: CGFloat,
-        anchorMessageId: UUID?,
-        highlightedMessageId: UUID?
-    ) {
-        scrollTracking.snapshotDebounceTask?.cancel()
-        scrollTracking.snapshotDebounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled, let self else { return }
-            self.updateTranscriptSnapshot(
-                conversationId: conversationId,
-                messages: messages,
-                isNearBottom: isNearBottom,
-                scrollViewportHeight: scrollViewportHeight,
-                containerWidth: containerWidth,
-                anchorMessageId: anchorMessageId,
-                highlightedMessageId: highlightedMessageId
-            )
-        }
-    }
-
-    /// Captures a point-in-time transcript snapshot into `ChatDiagnosticsStore`.
-    private func updateTranscriptSnapshot(
-        conversationId: UUID?,
-        messages: [ChatMessage],
-        isNearBottom: Bool,
-        scrollViewportHeight: CGFloat,
-        containerWidth: CGFloat,
-        anchorMessageId: UUID?,
-        highlightedMessageId: UUID?
-    ) {
-        guard let convId = conversationId else { return }
-        let totalToolCalls = messages.reduce(0) { $0 + $1.toolCalls.count }
-
-        var sanitizer = NumericSanitizer()
-        let safeViewportHeight = sanitizer.sanitize(scrollViewportHeight, field: "scrollViewportHeight")
-        let safeContainerWidth = sanitizer.sanitize(containerWidth, field: "containerWidth")
-        logNonFiniteGeometryOnce(sanitizer: sanitizer)
-
-        let guardCounts = scrollLoopGuard.currentCounts(conversationId: convId.uuidString)
-        let guardCountsStringKeyed: [String: Int]? = guardCounts.isEmpty ? nil : Dictionary(
-            uniqueKeysWithValues: guardCounts.map { ($0.key.rawValue, $0.value) }
-        )
-
-        ChatDiagnosticsStore.shared.updateSnapshot(ChatTranscriptSnapshot(
-            conversationId: convId.uuidString,
-            capturedAt: Date(),
-            messageCount: messages.count,
-            toolCallCount: totalToolCalls,
-            isPinnedToBottom: isNearBottom,
-            isUserScrolling: hasReceivedScrollEvent,
-            scrollOffsetY: 0,
-            contentHeight: nil,
-            viewportHeight: safeViewportHeight,
+        diagnostics.recordScrollLoopEvent(
+            kind,
+            conversationId: conversationId,
             isNearBottom: isNearBottom,
+            scrollViewportHeight: scrollViewportHeight,
+            anchorMessageId: anchorMessageId,
             hasReceivedScrollEvent: hasReceivedScrollEvent,
-            isPaginationInFlight: isPaginationInFlight,
-            suppressionReason: isSuppressed ? suppression.reasonDescriptions.joined(separator: ",") : nil,
-            anchorMessageId: anchorMessageId?.uuidString,
-            highlightedMessageId: highlightedMessageId?.uuidString,
-            anchorMinY: 0,
-            scrollViewportHeight: safeViewportHeight,
-            containerWidth: safeContainerWidth,
-            scrollLoopGuardCounts: guardCountsStringKeyed,
-            nonFiniteFields: sanitizer.nonFiniteFields
-        ))
-    }
-
-    /// Logs a one-time warning when scroll geometry first becomes non-finite.
-    func logNonFiniteGeometryOnce(sanitizer: NumericSanitizer) {
-        guard !hasLoggedNonFiniteGeometry, let fields = sanitizer.nonFiniteFields else { return }
-        hasLoggedNonFiniteGeometry = true
-        scrollCoordinatorLog.warning("Non-finite scroll geometry detected — sanitized fields: \(fields.joined(separator: ", "))")
+            isAtBottom: isAtBottom
+        )
     }
 
     // MARK: - Cleanup
@@ -453,8 +366,7 @@ final class MessageListScrollCoordinator: ObservableObject {
         scrollIndicatorRestoreTask = nil
         hideScrollIndicators = false
         isPaginationInFlight = false
-        scrollTracking.snapshotDebounceTask?.cancel()
-        scrollTracking.snapshotDebounceTask = nil
+        diagnostics.cancel()
         isNearBottomBinding = nil
     }
 
@@ -464,8 +376,7 @@ final class MessageListScrollCoordinator: ObservableObject {
         newConversationId: UUID?
     ) {
         clearAllSuppression()
-        scrollTracking.snapshotDebounceTask?.cancel()
-        scrollTracking.snapshotDebounceTask = nil
+        diagnostics.reset(oldConversationId: oldConversationId)
         paginationTask?.cancel()
         paginationTask = nil
         isPaginationInFlight = false
@@ -487,10 +398,6 @@ final class MessageListScrollCoordinator: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             self.hideScrollIndicators = false
             self.scrollIndicatorRestoreTask = nil
-        }
-        // Reset the OLD conversation's scroll-loop guard state.
-        if let oldConvId = oldConversationId {
-            scrollLoopGuard.reset(conversationId: oldConvId.uuidString)
         }
     }
 }
