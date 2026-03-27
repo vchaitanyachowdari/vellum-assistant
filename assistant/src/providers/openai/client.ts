@@ -189,9 +189,12 @@ export class OpenAIProvider implements Provider {
           if (chunk.usage) {
             promptTokens = chunk.usage.prompt_tokens;
             completionTokens = chunk.usage.completion_tokens;
-            reasoningTokens =
-              (chunk.usage as any).completion_tokens_details
-                ?.reasoning_tokens ?? 0;
+            const details = (
+              chunk.usage as {
+                completion_tokens_details?: { reasoning_tokens?: number };
+              }
+            ).completion_tokens_details;
+            reasoningTokens = details?.reasoning_tokens ?? 0;
           }
 
           responseModel = chunk.model;
