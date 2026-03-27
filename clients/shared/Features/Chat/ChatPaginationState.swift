@@ -61,9 +61,13 @@ public final class ChatPaginationState {
     /// responses (see loadPreviousMessagePage); the 60s hard clear accepts
     /// the risk of a narrow misclassification window to prevent a permanently
     /// stuck loading spinner.
-    /// Accessed from ChatViewModel's nonisolated deinit for cancellation.
-    /// The property is only mutated on MainActor.
-    @ObservationIgnored nonisolated var loadMoreTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored var loadMoreTimeoutTask: Task<Void, Never>?
+
+    // MARK: - Lifecycle
+
+    deinit {
+        loadMoreTimeoutTask?.cancel()
+    }
 
     // MARK: - Dependencies
 
