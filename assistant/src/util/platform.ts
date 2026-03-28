@@ -2,10 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-  getIsContainerized,
-  getWorkspaceDirOverride,
-} from "../config/env-registry.js";
+import { getWorkspaceDirOverride } from "../config/env-registry.js";
 
 export function isMacOS(): boolean {
   return process.platform === "darwin";
@@ -356,13 +353,9 @@ export function ensureDataDir(): void {
   const root = vellumRoot();
   const workspace = getWorkspaceDir();
   const wsData = join(workspace, "data");
-  const containerized = getIsContainerized();
   const dirs = [
     // Root-level dirs (runtime)
     root,
-    // protected is local-only — skip in containerized mode
-    // (credentials via CES HTTP API, trust via gateway API)
-    ...(containerized ? [] : [getProtectedDir()]),
     // Workspace dirs
     workspace,
     join(workspace, "signals"),

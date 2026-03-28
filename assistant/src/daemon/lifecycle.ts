@@ -264,8 +264,7 @@ export async function runDaemon(): Promise<void> {
     ensureDataDir();
 
     // Load (or generate + persist) the auth signing key so tokens survive
-    // daemon restarts. Must happen after ensureDataDir() creates the
-    // protected directory.
+    // daemon restarts.
     const signingKey = resolveSigningKey();
     initAuthSigningKey(signingKey);
 

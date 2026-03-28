@@ -455,7 +455,9 @@ export function handleListMessages(
         textSegments: filteredSegments,
         contentOrder: filteredContentOrder,
         surfaces: rendered.surfaces,
-        ...(rendered.thinkingSegments.length > 0 ? { thinkingSegments: rendered.thinkingSegments } : {}),
+        ...(rendered.thinkingSegments.length > 0
+          ? { thinkingSegments: rendered.thinkingSegments }
+          : {}),
         id: msg.id,
       };
     }
@@ -469,7 +471,9 @@ export function handleListMessages(
       textSegments: rendered.textSegments,
       contentOrder: rendered.contentOrder,
       surfaces: rendered.surfaces,
-      ...(rendered.thinkingSegments.length > 0 ? { thinkingSegments: rendered.thinkingSegments } : {}),
+      ...(rendered.thinkingSegments.length > 0
+        ? { thinkingSegments: rendered.thinkingSegments }
+        : {}),
       id: msg.id,
     };
   });
@@ -548,7 +552,9 @@ export function handleListMessages(
       ...(interfaces ? { interfaces } : {}),
       ...(m.surfaces.length > 0 ? { surfaces: m.surfaces } : {}),
       ...(m.textSegments.length > 0 ? { textSegments: m.textSegments } : {}),
-      ...(m.thinkingSegments?.length ? { thinkingSegments: m.thinkingSegments } : {}),
+      ...(m.thinkingSegments?.length
+        ? { thinkingSegments: m.thinkingSegments }
+        : {}),
       ...(m.contentOrder.length > 0 ? { contentOrder: m.contentOrder } : {}),
     };
   });
