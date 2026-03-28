@@ -21,7 +21,7 @@ mock.module("../../../lib/daemon-credential-client.js", () => ({
   getSecureKeyViaDaemon: (account: string) =>
     mockGetSecureKeyViaDaemon(account),
   deleteSecureKeyViaDaemon: async () => "not-found" as const,
-  setSecureKeyViaDaemon: async () => false,
+  setSecureKeyViaDaemon: async () => true,
   getProviderKeyViaDaemon: async () => undefined,
   getSecureKeyResultViaDaemon: async () => ({
     value: undefined,
@@ -197,16 +197,16 @@ describe("assistant platform connect", () => {
     // THEN the command succeeds
     expect(exitCode).toBe(0);
 
-    // AND the output confirms navigation
+    // AND the output confirms the login UI was triggered
     const parsed = JSON.parse(stdout);
     expect(parsed.ok).toBe(true);
-    expect(parsed.navigatedToSettings).toBe(true);
+    expect(parsed.showPlatformLogin).toBe(true);
 
-    // AND a generic emit-event signal file was written for the daemon
+    // AND a show_platform_login emit-event signal file was written
     const signalPath = join(testDir, "signals", "emit-event");
     expect(existsSync(signalPath)).toBe(true);
     const payload = JSON.parse(readFileSync(signalPath, "utf-8"));
-    expect(payload).toEqual({ type: "navigate_settings", tab: "General" });
+    expect(payload).toEqual({ type: "show_platform_login" });
   });
 
   test("already connected returns success with existing base URL", async () => {
