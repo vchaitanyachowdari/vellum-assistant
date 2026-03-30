@@ -38,11 +38,10 @@ let tempDir: string;
 // if the test process crashes.
 let tempTemplateDir: string;
 
-// Mock platform to avoid env-registry transitive imports.
-// All needed exports are stubbed; getWorkspacePromptPath is the only one
-// exercised by update-bulletin.ts.
+// Mock platform so getWorkspacePromptPath resolves to the per-test tempDir
+// rather than the preload's per-file workspace directory.
 mock.module("../util/platform.js", () => ({
-  getWorkspacePromptPath: mock((file: string) => join(tempDir, file)),
+  getWorkspacePromptPath: (file: string) => join(tempDir, file),
   getWorkspaceDir: () => tempDir,
   getProtectedDir: () => join(tempDir, "protected"),
   getDataDir: () => join(tempDir, "data"),
@@ -61,7 +60,6 @@ mock.module("../util/platform.js", () => ({
   getWorkspaceConfigPath: () => "",
   getWorkspaceSkillsDir: () => "",
   getWorkspaceHooksDir: () => "",
-
   getSandboxRootDir: () => "",
   getSandboxWorkingDir: () => "",
   getInterfacesDir: () => "",
