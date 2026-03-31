@@ -376,6 +376,14 @@
       "label": "Conversation Groups",
       "description": "Enable custom conversation group creation, move-to-group, and group management in the sidebar",
       "defaultEnabled": false
+    },
+    {
+      "id": "teleport",
+      "scope": "macos",
+      "key": "teleport",
+      "label": "Teleport",
+      "description": "Enable teleport UI in General settings for moving assistants between hosting environments",
+      "defaultEnabled": false
     }
   ]
 }
