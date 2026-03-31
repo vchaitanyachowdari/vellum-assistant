@@ -157,14 +157,30 @@ describe("CLI command risk guard: elevated assistant subcommands", () => {
     expect(risk).toBe(RiskLevel.Medium);
   });
 
-  test("--help on elevated subcommands is Low risk (read-only)", async () => {
-    const helpCommands = [
+  test("--help on non-elevated subcommands remains Low risk", async () => {
+    // GIVEN non-elevated subcommands with --help / -h flags
+    const lowRiskWithHelp = [
+      "assistant oauth --help",
+      "assistant credentials --help",
+      "assistant trust -h",
+      "assistant keys --help",
+      "assistant config --help",
+    ];
+
+    // WHEN classifying risk
+    // THEN they remain Low since the subcommand itself is Low
+    for (const command of lowRiskWithHelp) {
+      const risk = await classifyRisk("bash", { command });
+      expectLowRisk(command, risk);
+    }
+  });
+
+  test("--help does not downgrade risk on elevated subcommands", async () => {
+    // GIVEN elevated subcommands with --help / -h flags appended
+    const highRiskWithHelp = [
       "assistant oauth token --help",
       "assistant oauth mode --set --help",
       "assistant credentials reveal --help",
-      "assistant oauth request --help",
-      "assistant oauth connect --help",
-      "assistant oauth disconnect -h",
       "assistant trust clear --help",
       "assistant trust remove -h",
       "assistant credentials set --help",
@@ -173,17 +189,23 @@ describe("CLI command risk guard: elevated assistant subcommands", () => {
       "assistant keys delete -h",
     ];
 
-    for (const command of helpCommands) {
-      const risk = await classifyRisk("bash", { command });
-      expectLowRisk(command, risk);
-    }
-  });
+    const mediumRiskWithHelp = [
+      "assistant oauth request --help",
+      "assistant oauth connect --help",
+      "assistant oauth disconnect -h",
+    ];
 
-  test("--help after -- option terminator does not downgrade risk", async () => {
-    const risk = await classifyRisk("bash", {
-      command: "assistant oauth token -- --help",
-    });
-    expect(risk).toBe(RiskLevel.High);
+    // WHEN classifying risk
+    // THEN --help does not bypass the elevated risk level
+    for (const command of highRiskWithHelp) {
+      const risk = await classifyRisk("bash", { command });
+      expect(risk).toBe(RiskLevel.High);
+    }
+
+    for (const command of mediumRiskWithHelp) {
+      const risk = await classifyRisk("bash", { command });
+      expect(risk).toBe(RiskLevel.Medium);
+    }
   });
 
   test("non-sensitive oauth subcommands remain Low risk", async () => {
