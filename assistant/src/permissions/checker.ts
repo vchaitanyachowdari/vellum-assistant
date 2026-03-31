@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { isAssistantFeatureFlagEnabled } from "../config/assistant-feature-flags.js";
 import { getConfig } from "../config/loader.js";
@@ -19,7 +19,7 @@ import {
   looksLikePathOnlyInput,
 } from "../tools/network/url-safety.js";
 import { getTool } from "../tools/registry.js";
-import { getWorkspaceHooksDir } from "../util/platform.js";
+import { getDeprecatedDir, getWorkspaceHooksDir } from "../util/platform.js";
 import {
   buildShellAllowlistOptions,
   buildShellCommandCandidates,
@@ -703,7 +703,13 @@ async function classifyRiskUncached(
   preParsed?: ParsedCommand,
   manifestOverride?: ManifestOverride,
 ): Promise<RiskLevel> {
-  if (toolName === "file_read") return RiskLevel.Low;
+  if (toolName === "file_read") {
+    const filePath = getStringField(input, "path", "file_path");
+    if (isActorTokenSigningKeyPath(filePath, workingDir)) {
+      return RiskLevel.High;
+    }
+    return RiskLevel.Low;
+  }
   if (toolName === "file_write" || toolName === "file_edit") {
     const filePath = getStringField(input, "path", "file_path");
     if (
@@ -935,6 +941,21 @@ async function classifyRiskUncached(
 
   // Unknown tool → Medium
   return RiskLevel.Medium;
+}
+
+function isActorTokenSigningKeyPath(
+  filePath: string | undefined,
+  workingDir?: string,
+): boolean {
+  if (!filePath) return false;
+  const cwd = workingDir ?? process.cwd();
+  const resolvedPath = resolve(cwd, filePath);
+  const signingKeyPaths = [
+    join(homedir(), ".vellum", "protected", "actor-token-signing-key"),
+    join(getDeprecatedDir(), "actor-token-signing-key"),
+    resolve(cwd, "deprecated", "actor-token-signing-key"),
+  ];
+  return signingKeyPaths.includes(resolvedPath);
 }
 
 export async function check(
