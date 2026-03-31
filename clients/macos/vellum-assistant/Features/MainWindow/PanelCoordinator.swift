@@ -632,6 +632,15 @@ struct ActiveChatViewWrapper: View {
                 onBootstrapSendLogs: {
                     AppDelegate.shared?.showLogReportWindow(reason: .connectionIssue)
                 },
+                recoveryMode: settingsStore.managedAssistantRecoveryMode,
+                isRecoveryModeExiting: settingsStore.recoveryModeExiting,
+                onResumeAssistant: {
+                    settingsStore.exitManagedAssistantRecoveryMode()
+                },
+                onOpenSSHSettings: {
+                    settingsStore.pendingSettingsTab = .developer
+                    windowState.selection = .panel(.settings)
+                },
                 anchorMessageId: $anchorMessageId,
                 highlightedMessageId: $highlightedMessageId,
                 conversationId: conversationId,

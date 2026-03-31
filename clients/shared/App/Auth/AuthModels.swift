@@ -125,19 +125,52 @@ public struct PaginatedOrganizationsResponse: Codable, Sendable {
 
 // MARK: - Platform Assistant API Models
 
+public struct PlatformAssistantRecoveryMode: Codable, Sendable {
+    /// Whether recovery mode is currently active for this assistant.
+    public let enabled: Bool
+    /// ISO 8601 timestamp of when recovery mode was entered, or `nil` if not currently active.
+    public let entered_at: String?
+    /// Name of the debug pod that has the assistant's workspace PVC mounted, or `nil` when not active.
+    public let debug_pod_name: String?
+
+    public init(enabled: Bool, entered_at: String? = nil, debug_pod_name: String? = nil) {
+        self.enabled = enabled
+        self.entered_at = entered_at
+        self.debug_pod_name = debug_pod_name
+    }
+}
+
 public struct PlatformAssistant: Codable, Sendable {
     public let id: String
     public let name: String?
     public let description: String?
     public let created_at: String?
     public let status: String?
+    /// Present when the platform includes recovery-mode state in the assistant payload.
+    /// `nil` when the field is absent (e.g. older platform versions or endpoints that omit it).
+    public let recovery_mode: PlatformAssistantRecoveryMode?
 
-    public init(id: String, name: String? = nil, description: String? = nil, created_at: String? = nil, status: String? = nil) {
+    /// Maps Swift property names to JSON keys. `recovery_mode` is stored as
+    /// `maintenance_mode` in the platform API response.
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, created_at, status
+        case recovery_mode = "maintenance_mode"
+    }
+
+    public init(
+        id: String,
+        name: String? = nil,
+        description: String? = nil,
+        created_at: String? = nil,
+        status: String? = nil,
+        recovery_mode: PlatformAssistantRecoveryMode? = nil
+    ) {
         self.id = id
         self.name = name
         self.description = description
         self.created_at = created_at
         self.status = status
+        self.recovery_mode = recovery_mode
     }
 }
 

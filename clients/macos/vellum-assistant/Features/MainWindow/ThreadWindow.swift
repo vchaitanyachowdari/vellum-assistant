@@ -206,9 +206,20 @@ private struct ThreadWindowContentView: View {
                     onForkFromMessage: (conversation?.isChannelConversation ?? false) ? nil : { daemonMessageId in onFork(daemonMessageId) },
                     onAddFunds: {
                         settingsStore.pendingSettingsTab = .billing
+                        AppDelegate.shared?.showSettingsWindow(nil)
                     },
                     onOpenModelsAndServices: {
                         settingsStore.pendingSettingsTab = .modelsAndServices
+                        AppDelegate.shared?.showSettingsWindow(nil)
+                    },
+                    recoveryMode: settingsStore.managedAssistantRecoveryMode,
+                    isRecoveryModeExiting: settingsStore.recoveryModeExiting,
+                    onResumeAssistant: {
+                        settingsStore.exitManagedAssistantRecoveryMode()
+                    },
+                    onOpenSSHSettings: {
+                        settingsStore.pendingSettingsTab = .developer
+                        AppDelegate.shared?.showSettingsWindow(nil)
                     },
                     anchorMessageId: $anchorMessageId,
                     highlightedMessageId: $highlightedMessageId,

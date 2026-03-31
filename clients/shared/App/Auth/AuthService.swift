@@ -346,6 +346,119 @@ public final class AuthService {
         }
     }
 
+    // MARK: - Recovery Mode
+
+    /// Enter recovery mode for a managed assistant.
+    ///
+    /// On success the platform pauses the normal assistant pod and mounts the workspace PVC
+    /// into a debug pod. Returns the updated `PlatformAssistant` (fetched via `refreshAssistant`)
+    /// which includes the populated `recovery_mode` field.
+    ///
+    /// The enter endpoint returns `{"detail": "...", "debug_pod_name": "..."}`, not a full
+    /// assistant payload. We POST to trigger the transition and then re-fetch the assistant to
+    /// get the authoritative updated state.
+    public func enterRecoveryMode(
+        assistantId: String,
+        organizationId: String
+    ) async throws -> PlatformAssistant {
+        try await postRecoveryModeTransition(
+            path: "maintenance-mode/enter",
+            assistantId: assistantId,
+            organizationId: organizationId
+        )
+        return try await refreshAssistant(id: assistantId, organizationId: organizationId)
+    }
+
+    /// Exit recovery mode for a managed assistant.
+    ///
+    /// On success the platform tears down the debug pod and resumes the normal assistant pod.
+    /// Returns the updated `PlatformAssistant` (fetched via `refreshAssistant`) with
+    /// `recovery_mode.enabled == false`.
+    ///
+    /// The exit endpoint returns `{"detail": "..."}`, not a full assistant payload. We POST to
+    /// trigger the transition and then re-fetch the assistant to get the authoritative updated state.
+    public func exitRecoveryMode(
+        assistantId: String,
+        organizationId: String
+    ) async throws -> PlatformAssistant {
+        try await postRecoveryModeTransition(
+            path: "maintenance-mode/exit",
+            assistantId: assistantId,
+            organizationId: organizationId
+        )
+        return try await refreshAssistant(id: assistantId, organizationId: organizationId)
+    }
+
+    /// Shared POST helper for enter/exit recovery-mode transitions.
+    /// The platform endpoints return a simple `{"detail": "..."}` body — not a full assistant
+    /// payload — so we only check the status code here.
+    private func postRecoveryModeTransition(
+        path: String,
+        assistantId: String,
+        organizationId: String
+    ) async throws {
+        let urlString = "\(baseURL)/v1/assistants/\(assistantId)/\(path)/"
+        guard let url = URL(string: urlString) else {
+            throw PlatformAPIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = Data("{}".utf8)
+        urlRequest.setValue(organizationId, forHTTPHeaderField: "Vellum-Organization-Id")
+
+        if let token = await SessionTokenManager.getTokenAsync() {
+            urlRequest.setValue(token, forHTTPHeaderField: "X-Session-Token")
+        } else {
+            throw PlatformAPIError.authenticationRequired
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw PlatformAPIError.networkError(error.localizedDescription)
+        }
+
+        let httpResponse = response as? HTTPURLResponse
+        let statusCode = httpResponse?.statusCode ?? 0
+
+        log.debug("Platform request POST assistants/\(assistantId)/\(path)/ -> \(statusCode)")
+
+        if statusCode == 401 || statusCode == 403 {
+            throw PlatformAPIError.authenticationRequired
+        }
+
+        guard (200..<300).contains(statusCode) else {
+            let detail = String(data: data, encoding: .utf8)
+            throw PlatformAPIError.serverError(statusCode: statusCode, detail: detail)
+        }
+    }
+
+    /// Re-fetch a managed assistant's current detail from the platform.
+    ///
+    /// Convenience used after a recovery-mode mutation to get the freshest state without
+    /// callers having to inline the `getAssistant` + result-unwrap pattern.
+    /// Throws `PlatformAPIError.serverError(statusCode: 404, ...)` when the assistant is not
+    /// found, and `PlatformAPIError.authenticationRequired` on 403/401.
+    public func refreshAssistant(
+        id: String,
+        organizationId: String
+    ) async throws -> PlatformAssistant {
+        let result = try await getAssistant(id: id, organizationId: organizationId)
+        switch result {
+        case .found(let assistant):
+            return assistant
+        case .notFound:
+            throw PlatformAPIError.serverError(statusCode: 404, detail: "Assistant not found")
+        case .accessDenied:
+            throw PlatformAPIError.authenticationRequired
+        }
+    }
+
     // MARK: - Self-Hosted Local Registration
 
     /// Ensure a self-hosted local assistant registration exists on the platform.

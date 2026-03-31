@@ -43,6 +43,22 @@ struct ChatView: View {
     var onOpenModelsAndServices: (() -> Void)? = nil
     var onBootstrapSendLogs: (() -> Void)?
 
+    // MARK: - Recovery Mode (managed assistants only)
+
+    /// Non-nil when the connected managed assistant is in recovery mode.
+    /// When set and `enabled == true`, a `RecoveryModeBanner` is rendered
+    /// between the message list and the composer.
+    var recoveryMode: PlatformAssistantRecoveryMode? = nil
+
+    /// `true` while an exit-recovery-mode request is in flight.
+    var isRecoveryModeExiting: Bool = false
+
+    /// Invoked when the user taps "Resume Assistant" in the maintenance banner.
+    var onResumeAssistant: (() -> Void)? = nil
+
+    /// Invoked when the user taps "Open SSH Settings" in the maintenance banner.
+    var onOpenSSHSettings: (() -> Void)? = nil
+
     // MARK: - Parent Bindings
 
     /// When set, scroll to this message ID and clear the binding.
@@ -336,6 +352,18 @@ struct ChatView: View {
                 MissingApiKeyBanner(
                     onOpenSettings: { onOpenModelsAndServices?() },
                     onDismiss: { viewModel.dismissConversationError() }
+                )
+                .frame(maxWidth: VSpacing.chatColumnMaxWidth - 2 * VSpacing.xl)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, -VSpacing.sm)
+            }
+
+            if let mode = recoveryMode, mode.enabled {
+                RecoveryModeBanner(
+                    recoveryMode: mode,
+                    onResumeAssistant: { onResumeAssistant?() },
+                    onOpenSSHSettings: { onOpenSSHSettings?() },
+                    isExiting: isRecoveryModeExiting
                 )
                 .frame(maxWidth: VSpacing.chatColumnMaxWidth - 2 * VSpacing.xl)
                 .frame(maxWidth: .infinity)

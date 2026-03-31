@@ -684,13 +684,116 @@ struct SettingsDeveloperTab: View {
 
     // MARK: - SSH Terminal
 
+    /// `true` while either a maintenance-enter or maintenance-exit request is in flight.
+    private var maintenanceTransitionInFlight: Bool {
+        store.recoveryModeEntering || store.recoveryModeExiting
+    }
+
     private var sshTerminalSection: some View {
         SettingsCard(
             title: "SSH Terminal",
-            subtitle: "Open a terminal session to the assistant's host machine."
+            subtitle: "Recovery mode pauses the normal assistant pod and routes terminal sessions into the mounted debug pod, giving you direct access to the assistant's workspace PVC."
         ) {
-            VButton(label: "Open Terminal", style: .outlined) {
-                openTerminalWindow()
+            // Recovery mode status row
+            recoveryModeStatusRow
+
+            SettingsDivider()
+
+            // Recovery mode action buttons
+            HStack(spacing: VSpacing.sm) {
+                if store.managedAssistantRecoveryMode?.enabled == true {
+                    VButton(
+                        label: "Resume Assistant",
+                        style: .outlined,
+                        isDisabled: maintenanceTransitionInFlight
+                    ) {
+                        store.exitManagedAssistantRecoveryMode()
+                    }
+                    .accessibilityLabel("Resume Assistant")
+                } else {
+                    VButton(
+                        label: "Enter Recovery Mode",
+                        style: .outlined,
+                        isDisabled: maintenanceTransitionInFlight
+                    ) {
+                        store.enterManagedAssistantRecoveryMode()
+                    }
+                    .accessibilityLabel("Enter Recovery Mode")
+                }
+
+                VButton(label: "Open Terminal", style: .primary) {
+                    openTerminalWindow()
+                }
+                .accessibilityLabel("Open Terminal")
+            }
+
+            // Show inline error messages if a maintenance operation fails.
+            if let enterError = store.recoveryModeEnterError {
+                Text(enterError)
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.systemNegativeStrong)
+            }
+            if let exitError = store.recoveryModeExitError {
+                Text(exitError)
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.systemNegativeStrong)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recoveryModeStatusRow: some View {
+        if store.recoveryModeRefreshing {
+            HStack(spacing: VSpacing.sm) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .progressViewStyle(.circular)
+                Text("Loading recovery status…")
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentTertiary)
+            }
+        } else if let maintenance = store.managedAssistantRecoveryMode {
+            if maintenance.enabled {
+                VStack(alignment: .leading, spacing: VSpacing.xs) {
+                    HStack(spacing: VSpacing.xs) {
+                        Circle()
+                            .fill(VColor.systemMidStrong)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text("Recovery mode active")
+                            .font(VFont.bodyMediumDefault)
+                            .foregroundStyle(VColor.contentDefault)
+                            .accessibilityValue("Recovery mode active")
+                    }
+                    if let podName = maintenance.debug_pod_name, !podName.isEmpty {
+                        Text("Debug pod: \(podName)")
+                            .font(VFont.labelDefault)
+                            .foregroundStyle(VColor.contentTertiary)
+                            .textSelection(.enabled)
+                    }
+                }
+            } else {
+                HStack(spacing: VSpacing.xs) {
+                    Circle()
+                        .fill(VColor.systemPositiveStrong)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                    Text("Assistant running normally")
+                        .font(VFont.bodyMediumDefault)
+                        .foregroundStyle(VColor.contentDefault)
+                        .accessibilityValue("Assistant running normally")
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: VSpacing.xs) {
+                Text("Recovery status unavailable")
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentTertiary)
+                if let refreshError = store.recoveryModeRefreshError {
+                    Text(refreshError)
+                        .font(VFont.labelDefault)
+                        .foregroundStyle(VColor.systemNegativeStrong)
+                }
             }
         }
     }
