@@ -253,10 +253,9 @@ public final class SettingsStore: ObservableObject {
     @Published var ingressEnabled: Bool = false
     @Published var ingressPublicBaseUrl: String = ""
     /// Read-only gateway target derived from daemon config.
-    /// Initial value reads env var > lockfile runtimeUrl > default 7830; updated by HTTP.
-    @Published var localGatewayTarget: String = LockfilePaths.resolveGatewayUrl(
-        connectedAssistantId: UserDefaults.standard.string(forKey: "connectedAssistantId")
-    )
+    /// Seeded with the default port; resolved asynchronously from the lockfile
+    /// so that file I/O does not block the main thread during init.
+    @Published var localGatewayTarget: String = "http://127.0.0.1:7830"
 
     /// Set to `true` once the first ingress config response arrives, so the
     /// view layer can defer diagnostics until the real config values are available.
@@ -305,10 +304,9 @@ public final class SettingsStore: ObservableObject {
     /// Whether the connected assistant is remote (not running locally).
     /// When true, local workspace config writes are skipped to avoid creating
     /// a `.vellum/` directory that doesn't belong to any local assistant.
-    private var isCurrentAssistantRemote: Bool {
-        UserDefaults.standard.string(forKey: "connectedAssistantId")
-            .flatMap { LockfileAssistant.loadByName($0) }?.isRemote ?? false
-    }
+    /// Cached to avoid synchronous lockfile I/O on every access; refreshed
+    /// asynchronously during init and when the connected assistant changes.
+    private var isCurrentAssistantRemote: Bool = false
 
     /// Guards against stale `get` responses overwriting an optimistic
     /// toggle. Set when `setIngressEnabled` fires; cleared once a matching
@@ -446,6 +444,14 @@ public final class SettingsStore: ObservableObject {
             self?.refreshAPIKeyState()
         }
 
+        // Resolve lockfile-derived state (gateway URL, assistant topology)
+        // on a background thread so that synchronous Data(contentsOf:)
+        // file I/O does not block the main thread during init.
+        // Uses the shared refreshLockfileState() path so the startup read
+        // is tracked in lockfileRefreshTask and can be cancelled if an
+        // assistant switch arrives before it completes.
+        refreshLockfileState()
+
         // Debounce UserDefaults writes so rapid toggle changes don't thrash disk I/O.
         // dropFirst must come before debounce: it consumes the synchronous initial emission so that
         // only genuine user-driven changes flow into debounce and are eventually persisted.
@@ -512,6 +518,14 @@ public final class SettingsStore: ObservableObject {
             .sink { value in UserDefaults.standard.set(value, forKey: "popOutShortcut") }
             .store(in: &cancellables)
 
+        // Re-resolve lockfile-derived state whenever the connected assistant changes
+        // so that isCurrentAssistantRemote and localGatewayTarget stay in sync.
+        UserDefaults.standard.publisher(for: \.connectedAssistantId)
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshLockfileState() }
+            .store(in: &cancellables)
+
         // Mirror GatewayConnectionManager's trust-rules-open flag so views can disable their buttons
         connectionManager?.$isTrustRulesSheetOpen
             .receive(on: RunLoop.main)
@@ -545,6 +559,47 @@ public final class SettingsStore: ObservableObject {
 
         // Twilio config is now handled via HTTP — no callback wiring needed.
 
+    }
+
+    // MARK: - Lockfile State
+
+    private struct LockfileState {
+        let gatewayUrl: String
+        let isRemote: Bool
+    }
+
+    /// Reads lockfile-derived state off the main thread. The result is applied
+    /// to @Published properties on the main actor via `applyLockfileState`.
+    private nonisolated static func loadLockfileState() -> LockfileState {
+        let assistantId = UserDefaults.standard.string(forKey: "connectedAssistantId")
+        let gatewayUrl = LockfilePaths.resolveGatewayUrl(connectedAssistantId: assistantId)
+        let assistant = assistantId.flatMap { LockfileAssistant.loadByName($0) }
+        return LockfileState(
+            gatewayUrl: gatewayUrl,
+            isRemote: assistant?.isRemote ?? false
+        )
+    }
+
+    private func applyLockfileState(_ state: LockfileState) {
+        localGatewayTarget = state.gatewayUrl
+        isCurrentAssistantRemote = state.isRemote
+    }
+
+    /// In-flight lockfile refresh task. Cancelled when a new refresh is
+    /// requested so that stale reads from a prior assistant switch cannot
+    /// overwrite the latest state.
+    private var lockfileRefreshTask: Task<Void, Never>?
+
+    /// Refreshes cached lockfile-derived state on a background thread.
+    /// Cancels any in-flight refresh to prevent stale overwrites when
+    /// assistant switches happen in quick succession.
+    private func refreshLockfileState() {
+        lockfileRefreshTask?.cancel()
+        lockfileRefreshTask = Task { [weak self] in
+            let result = await Task.detached { Self.loadLockfileState() }.value
+            guard !Task.isCancelled else { return }
+            self?.applyLockfileState(result)
+        }
     }
 
     // MARK: - API Key Actions
@@ -2688,18 +2743,12 @@ public final class SettingsStore: ObservableObject {
     }
 
     private func handleIngressConfigResponse(_ response: IngressConfigResponseMessage) {
-        // For remote assistants, prefer the lockfile's runtimeUrl because the
-        // daemon reports its own loopback address which is not reachable from
-        // the client. For local assistants, use the daemon's authoritative value
-        // since it reflects the daemon's actual runtime environment.
-        let connectedId = UserDefaults.standard.string(forKey: "connectedAssistantId")
-        let assistant = connectedId.flatMap { LockfileAssistant.loadByName($0) }
-            ?? LockfileAssistant.loadLatest()
-        if let assistant, assistant.isRemote {
-            self.localGatewayTarget = LockfilePaths.resolveGatewayUrl(
-                connectedAssistantId: assistant.assistantId
-            )
-        } else {
+        // For remote assistants, keep the cached localGatewayTarget (set by
+        // applyLockfileState) because the daemon reports its own loopback
+        // address which is not reachable from the client. For local assistants,
+        // use the daemon's authoritative value since it reflects the daemon's
+        // actual runtime environment.
+        if !isCurrentAssistantRemote {
             self.localGatewayTarget = response.localGatewayTarget
         }
         if response.success {
