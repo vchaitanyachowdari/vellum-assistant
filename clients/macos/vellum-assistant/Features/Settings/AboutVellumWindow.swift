@@ -121,8 +121,8 @@ struct AboutVellumView: View {
             Task {
                 let assistants = await Task.detached { LockfileAssistant.loadAll() }.value
                 lockfileAssistants = assistants
+                await fetchHealthz()
             }
-            Task { await fetchHealthz() }
         }
     }
 
@@ -304,7 +304,7 @@ struct AboutVellumView: View {
         guard !selectedAssistantId.isEmpty else { return }
         do {
             let (decoded, _): (DaemonHealthz?, _) = try await GatewayHTTPClient.get(
-                path: "health",
+                path: "assistants/{assistantId}/healthz",
                 timeout: 10
             ) { $0.keyDecodingStrategy = .convertFromSnakeCase }
             healthz = decoded ?? DaemonHealthz()

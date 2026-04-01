@@ -140,9 +140,9 @@ struct SettingsDeveloperTab: View {
                 refreshDisplayNames()
                 resolvePlatformUuid()
                 await refreshAwakeStates()
+                await fetchHealthz()
             }
             Task { identity = await IdentityInfo.loadAsync() }
-            Task { await fetchHealthz() }
 
             // Advanced dev setup
             macOSFlagStates = MacOSClientFeatureFlagManager.shared.allFlagStates()
@@ -423,7 +423,7 @@ struct SettingsDeveloperTab: View {
     private func fetchHealthz() async {
         do {
             let (decoded, _): (DaemonHealthz?, _) = try await GatewayHTTPClient.get(
-                path: "health",
+                path: "assistants/{assistantId}/healthz",
                 timeout: 10
             ) { $0.keyDecodingStrategy = .convertFromSnakeCase }
             healthz = decoded ?? DaemonHealthz()
