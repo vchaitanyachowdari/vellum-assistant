@@ -201,16 +201,23 @@ export function skillRouteDefinitions(deps: SkillRouteDeps): RouteDefinition[] {
         url: z.string().describe("Skill URL"),
         spec: z.string().describe("Skill spec"),
         version: z.string(),
+        origin: z
+          .enum(["clawhub", "skillssh"])
+          .optional()
+          .describe(
+            "Which registry to install from. When omitted, the install flow auto-detects based on slug format.",
+          ),
       }),
       responseBody: z.object({
         ok: z.boolean(),
       }),
-      handler: async ({ req }) => {
+      handler: async ({ req, authContext }) => {
         const body = (await req.json()) as {
           slug?: string;
           url?: string;
           spec?: string;
           version?: string;
+          origin?: "clawhub" | "skillssh";
         };
         const slug = body.slug ?? body.url ?? body.spec;
         if (!slug || typeof slug !== "string") {
@@ -220,8 +227,9 @@ export function skillRouteDefinitions(deps: SkillRouteDeps): RouteDefinition[] {
             400,
           );
         }
+        const contactId = authContext.actorPrincipalId ?? undefined;
         const result = await installSkill(
-          { slug, version: body.version },
+          { slug, version: body.version, origin: body.origin, contactId },
           ctx(),
         );
         if (!result.success) {
@@ -323,7 +331,7 @@ export function skillRouteDefinitions(deps: SkillRouteDeps): RouteDefinition[] {
       responseBody: z.object({
         ok: z.boolean(),
       }),
-      handler: async ({ req }) => {
+      handler: async ({ req, authContext }) => {
         const body = (await req.json()) as CreateSkillParams;
         if (
           !body.skillId ||
@@ -337,7 +345,8 @@ export function skillRouteDefinitions(deps: SkillRouteDeps): RouteDefinition[] {
             400,
           );
         }
-        const result = await createSkill(body, ctx());
+        const contactId = authContext.actorPrincipalId ?? undefined;
+        const result = await createSkill({ ...body, contactId }, ctx());
         if (!result.success) {
           return httpError("INTERNAL_ERROR", result.error, 500);
         }
