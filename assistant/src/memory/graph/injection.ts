@@ -180,11 +180,7 @@ export function formatEventDate(epochMs: number): string {
   }
 
   // Calculate relative countdown using calendar days
-  const todayStart = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  );
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const eventStart = new Date(
     date.getFullYear(),
     date.getMonth(),

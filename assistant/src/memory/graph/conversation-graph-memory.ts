@@ -11,7 +11,11 @@ import { and, desc, eq, ne } from "drizzle-orm";
 import type { AssistantConfig } from "../../config/types.js";
 import { estimateTextTokens } from "../../context/token-estimator.js";
 import type { ServerMessage } from "../../daemon/message-protocol.js";
-import type { ContentBlock, ImageContent, Message } from "../../providers/types.js";
+import type {
+  ContentBlock,
+  ImageContent,
+  Message,
+} from "../../providers/types.js";
 import { getLogger } from "../../util/logger.js";
 import { getDb } from "../db.js";
 import { memorySummaries } from "../schema.js";
@@ -23,8 +27,8 @@ import {
   MAX_CONTEXT_LOAD_IMAGES,
   MAX_PER_TURN_IMAGES,
   MAX_REFRESH_IMAGES,
-  resolveInjectionImages,
   type ResolvedImage,
+  resolveInjectionImages,
 } from "./injection.js";
 import {
   loadContextMemory,
@@ -107,9 +111,7 @@ export class ConversationGraphMemory {
           conversations,
           eq(memorySummaries.scopeKey, conversations.id),
         )
-        .where(
-          and(baseWhere, eq(conversations.conversationType, "background")),
-        )
+        .where(and(baseWhere, eq(conversations.conversationType, "background")))
         .orderBy(desc(memorySummaries.updatedAt))
         .limit(remaining)
         .all();
@@ -311,8 +313,7 @@ export class ConversationGraphMemory {
     );
 
     const injectedTokens =
-      estimateTextTokens(contextBlock) +
-      images.size * ESTIMATED_IMAGE_TOKENS;
+      estimateTextTokens(contextBlock) + images.size * ESTIMATED_IMAGE_TOKENS;
 
     onEvent({
       type: "memory_status",
@@ -414,6 +415,7 @@ export class ConversationGraphMemory {
     // Extract last assistant and user messages as text
     let assistantLast = "";
     let userLast = "";
+    let userLastBlocks: ContentBlock[] = [];
 
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
@@ -426,6 +428,7 @@ export class ConversationGraphMemory {
 
       if (msg.role === "user" && !userLast) {
         userLast = text;
+        userLastBlocks = msg.content;
       } else if (msg.role === "assistant" && !assistantLast) {
         assistantLast = text;
       }
@@ -435,6 +438,7 @@ export class ConversationGraphMemory {
     const result = await retrieveForTurn({
       assistantLastMessage: assistantLast,
       userLastMessage: userLast,
+      userLastMessageBlocks: userLastBlocks,
       scopeId: this.scopeId,
       config,
       tracker: this.tracker,
@@ -504,18 +508,14 @@ function stripExistingMemoryInjections(messages: Message[]): Message[] {
   const filtered = last.content.filter(
     (block) =>
       !(
-        block.type === "text" &&
-        block.text.startsWith("<memory __injected>\n")
+        block.type === "text" && block.text.startsWith("<memory __injected>\n")
       ),
   );
 
   // Nothing to strip
   if (filtered.length === last.content.length) return messages;
 
-  return [
-    ...messages.slice(0, -1),
-    { ...last, content: filtered },
-  ];
+  return [...messages.slice(0, -1), { ...last, content: filtered }];
 }
 
 function injectTextBlock(messages: Message[], text: string): Message[] {

@@ -19,7 +19,12 @@ import {
 } from "../../providers/provider-send-message.js";
 import { BackendUnavailableError } from "../../util/errors.js";
 import { getLogger } from "../../util/logger.js";
-import { deleteNode, getEdgesForNode, queryNodes, updateNode } from "./store.js";
+import {
+  deleteNode,
+  getEdgesForNode,
+  queryNodes,
+  updateNode,
+} from "./store.js";
 import type { MemoryNode } from "./types.js";
 
 const log = getLogger("graph-consolidation");
@@ -45,7 +50,10 @@ function buildConsolidationPrompt(
   const nodeList = nodes
     .map((n) => {
       const age = Math.floor((Date.now() - n.created) / (1000 * 60 * 60 * 24));
-      const eventStr = n.eventDate != null ? ` eventDate=${new Date(n.eventDate).toISOString().split("T")[0]}` : "";
+      const eventStr =
+        n.eventDate != null
+          ? ` eventDate=${new Date(n.eventDate).toISOString().split("T")[0]}`
+          : "";
       return `  [${n.id}] type=${n.type} sig=${n.significance.toFixed(2)} fidelity=${n.fidelity} reinforced=${n.reinforcementCount}x age=${age}d${eventStr}\n    ${n.content}`;
     })
     .join("\n\n");
@@ -511,7 +519,11 @@ async function consolidateChunk(
       // Preserve eventDate from deleted node if survivor doesn't have one
       const survivor = nodeMap.get(merge.survivor_id);
       const deleted = nodeMap.get(merge.deleted_id);
-      if (survivor && deleted?.eventDate != null && survivor.eventDate == null) {
+      if (
+        survivor &&
+        deleted?.eventDate != null &&
+        survivor.eventDate == null
+      ) {
         updateNode(merge.survivor_id, { eventDate: deleted.eventDate });
       }
     } catch (err) {

@@ -620,9 +620,13 @@ export function parseExtractionResponse(
       const validRefs: ImageRef[] = [];
       for (const ref of raw.image_refs) {
         if (!ref.message_id || typeof ref.message_id !== "string") continue;
-        if (typeof ref.block_index !== "number" || ref.block_index < 0) continue;
+        if (typeof ref.block_index !== "number" || ref.block_index < 0)
+          continue;
         if (!ref.description || typeof ref.description !== "string") continue;
-        const mimeType = resolveImageRefMimeType(ref.message_id, ref.block_index);
+        const mimeType = resolveImageRefMimeType(
+          ref.message_id,
+          ref.block_index,
+        );
         if (!mimeType) continue;
         validRefs.push({
           messageId: ref.message_id,
@@ -1040,7 +1044,11 @@ function loadTranscriptFromDisk(
 export function loadTranscriptWithImages(
   conversationId: string,
   afterTimestamp?: number,
-): { message: Message; hasImages: boolean; lastTimestamp: number | null } | null {
+): {
+  message: Message;
+  hasImages: boolean;
+  lastTimestamp: number | null;
+} | null {
   const db = getDb();
 
   // Build query conditions
