@@ -1,15 +1,3 @@
----
-name: airtable-oauth-app-setup
-description: Walk the user through creating an Airtable OAuth integration in the Airtable developer console
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Airtable OAuth Setup"
-    feature-flag: "integration-airtable"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Airtable OAuth credentials so the Airtable integration can connect to their bases.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Airtable-specific steps.
@@ -109,7 +97,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [airtable-path-b.md](airtable-path-b.md).
 
 Key Airtable-specific differences for Path B:
 

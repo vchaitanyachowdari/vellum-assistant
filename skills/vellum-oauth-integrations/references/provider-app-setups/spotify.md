@@ -1,15 +1,3 @@
----
-name: spotify-oauth-app-setup
-description: Walk the user through creating a Spotify OAuth app in the Spotify Developer Dashboard
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Spotify OAuth Setup"
-    feature-flag: "integration-spotify"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Spotify OAuth credentials so the Spotify integration can control playback, manage playlists, and access their library.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Spotify-specific steps.
@@ -93,7 +81,7 @@ Open: the app's **Settings** page.
 
 ---
 
-### Steps 4–6: Store Credentials, Authorize, and Verify
+### Steps 4-6: Store Credentials, Authorize, and Verify
 
 Follow the `vellum-oauth-integrations` workflow to collect credentials, register the OAuth app, connect, and verify.
 
@@ -119,7 +107,7 @@ The scopes requested will include:
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [spotify-path-b.md](spotify-path-b.md).
 
 Key Spotify-specific differences for Path B:
 

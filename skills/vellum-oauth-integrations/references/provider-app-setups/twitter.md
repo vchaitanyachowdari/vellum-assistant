@@ -1,15 +1,3 @@
----
-name: twitter-oauth-app-setup
-description: Walk the user through creating a Twitter/X OAuth 2.0 app in the Twitter Developer Portal
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Twitter / X OAuth Setup"
-    feature-flag: "integration-twitter"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Twitter/X OAuth credentials so the Twitter integration can post tweets, read timelines, and access user data.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Twitter-specific steps.
@@ -156,7 +144,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [twitter-path-b.md](twitter-path-b.md).
 
 Key Twitter-specific differences for Path B:
 

@@ -1,15 +1,3 @@
----
-name: github-oauth-app-setup
-description: Walk the user through creating a GitHub OAuth app in GitHub Developer Settings
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "GitHub OAuth Setup"
-    feature-flag: "integration-github"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up GitHub OAuth credentials so the GitHub integration can connect to their account.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the GitHub-specific steps.
@@ -92,7 +80,7 @@ Then:
 
 ---
 
-### Steps 5–6: Store Credentials, Authorize, and Verify
+### Steps 5-6: Store Credentials, Authorize, and Verify
 
 Follow the `vellum-oauth-integrations` workflow to collect credentials, register the OAuth app, connect, and verify.
 
@@ -112,7 +100,7 @@ The scopes requested will include:
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [github-path-b.md](github-path-b.md).
 
 Key GitHub-specific differences for Path B:
 

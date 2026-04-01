@@ -1,6 +1,6 @@
 # Public Integration (OAuth) Setup
 
-Use this path only when the user explicitly needs multi-workspace OAuth distribution. For single-workspace use, the Internal integration flow in the main SKILL.md is simpler and preferred.
+Use this path only when the user explicitly needs multi-workspace OAuth distribution. For single-workspace use, the Internal integration flow in [notion.md](notion.md) is simpler and preferred.
 
 ## Overview
 

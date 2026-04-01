@@ -60,14 +60,14 @@ Tell the user:
 >
 > Open: `https://console.cloud.google.com/auth/branding?project=PROJECT_ID`
 >
-> **If you see a setup wizard** (numbered steps: App Information → Audience → Contact Information → Finish):
+> **If you see a setup wizard** (numbered steps: App Information -> Audience -> Contact Information -> Finish):
 >
 > 1. **App Information:** Set app name to **Vellum Assistant**
 > 2. **Audience:** Select **External**
 > 3. **Contact Information:** Enter your email
 > 4. Click **Create**
 >
-> After the wizard completes, open `https://console.cloud.google.com/auth/audience?project=PROJECT_ID` and scroll to **Test users** → click **+ Add users** → add your email → **Save**.
+> After the wizard completes, open `https://console.cloud.google.com/auth/audience?project=PROJECT_ID` and scroll to **Test users** -> click **+ Add users** -> add your email -> **Save**.
 >
 > **If you see a Branding page** (with fields for App name, support email, etc.):
 >

@@ -1,15 +1,3 @@
----
-name: notion-oauth-app-setup
-description: Walk the user through setting up a Notion integration (defaults to Internal integration, not OAuth)
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Notion Setup"
-    feature-flag: "integration-notion"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Notion credentials so the Notion integration can connect to their workspace.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Notion-specific steps.
@@ -27,7 +15,7 @@ No OAuth, redirect URIs, or public ingress needed for Internal integrations. The
 ## Choosing the Flow
 
 - **Internal integration (default):** Single-workspace, simple setup. Follow the steps below.
-- **Public integration (OAuth):** Multi-workspace distribution. Only guide to this path if the user explicitly needs OAuth for multi-workspace access. See [references/path-b-public-oauth.md](references/path-b-public-oauth.md) for that flow.
+- **Public integration (OAuth):** Multi-workspace distribution. Only guide to this path if the user explicitly needs OAuth for multi-workspace access. See [notion-path-b-public.md](notion-path-b-public.md) for that flow.
 
 ## Internal Integration Flow
 
@@ -64,7 +52,7 @@ There is no Type selector on the creation form - integrations are created as **I
 **Known issues:**
 
 - If they already have an integration named "Vellum Assistant", ask if they'd like to reuse it - skip ahead to Step 3
-- **Missing admin permissions:** Only workspace **admins** can create integrations. If the user can't find the "New integration" button, sees a disabled/grayed-out option, gets a permissions error, or tells you they aren't an admin — see [references/non-admin-alternatives.md](references/non-admin-alternatives.md).
+- **Missing admin permissions:** Only workspace **admins** can create integrations. If the user can't find the "New integration" button, sees a disabled/grayed-out option, gets a permissions error, or tells you they aren't an admin — see [notion-non-admin.md](notion-non-admin.md).
 
 **Milestone (2 of 4):** "Integration created - now let's grab the secret and grant page access."
 
@@ -127,7 +115,7 @@ bash:
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [notion-path-b.md](notion-path-b.md).
 
 Key Notion-specific differences for Path B:
 

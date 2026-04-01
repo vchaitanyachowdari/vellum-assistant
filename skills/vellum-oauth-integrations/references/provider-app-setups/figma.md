@@ -1,15 +1,3 @@
----
-name: figma-oauth-app-setup
-description: Walk the user through creating a Figma OAuth app on the Figma developers page
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Figma OAuth Setup"
-    feature-flag: "integration-figma"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Figma OAuth credentials so the Figma integration can access their design files and comments.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Figma-specific steps.
@@ -114,7 +102,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [figma-path-b.md](figma-path-b.md).
 
 Key Figma-specific differences for Path B:
 

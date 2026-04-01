@@ -1,14 +1,3 @@
----
-name: google-oauth-app-setup
-description: Walk the user through creating Google Cloud OAuth credentials for Gmail and Calendar
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Google OAuth Setup"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Google Cloud OAuth credentials so Gmail and Google Calendar integrations can connect.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Google-specific steps.
@@ -58,7 +47,7 @@ The flow has 9 steps total, takes about 3-5 minutes.
 >
 > Do you have a Google account you'd like to use for this?
 
-If no Google account → guide them to create one or defer.
+If no Google account -> guide them to create one or defer.
 
 ---
 
@@ -76,12 +65,12 @@ Open: `https://console.cloud.google.com/cloud-resource-manager`
 
 > I've opened your project list. If you see an existing project you'd like to use, let me know its name. Otherwise I'll walk you through creating a new one.
 
-**New project:** Open `https://console.cloud.google.com/projectcreate` → name it `vellum-assistant` → click Create → get the project ID.
+**New project:** Open `https://console.cloud.google.com/projectcreate` -> name it `vellum-assistant` -> click Create -> get the project ID.
 
 **Known issues:**
 
 - Workspace accounts may show an Organization/Location dropdown - leave as-is
-- Project quota limit → suggest requesting increase, deleting unused, or reusing existing
+- Project quota limit -> suggest requesting increase, deleting unused, or reusing existing
 
 Record the **project ID** for all subsequent URLs.
 
@@ -135,18 +124,18 @@ Open: `https://console.cloud.google.com/auth/branding?project=PROJECT_ID`
 >
 > Then click **Create**.
 
-After the wizard, skip Step 5b. Open `https://console.cloud.google.com/auth/audience?project=PROJECT_ID` to add test users (scroll to **Test users** → **+ Add users** → enter email → Save), then go to Step 5c.
+After the wizard, skip Step 5b. Open `https://console.cloud.google.com/auth/audience?project=PROJECT_ID` to add test users (scroll to **Test users** -> **+ Add users** -> enter email -> Save), then go to Step 5c.
 
 **Case 2 - Branding page** (already configured projects):
 
-If needs setup: fill in App name (`Vellum Assistant`), User support email, Developer contact email → Save. If already filled, skip to Step 5b.
+If needs setup: fill in App name (`Vellum Assistant`), User support email, Developer contact email -> Save. If already filled, skip to Step 5b.
 
 #### Step 5b: Audience and test users (skip if wizard was used)
 
 Open: `https://console.cloud.google.com/auth/audience?project=PROJECT_ID`
 
 1. Set user type to **External** if not already
-2. Scroll to **Test users** → **+ Add users** → enter email → Save
+2. Scroll to **Test users** -> **+ Add users** -> enter email -> Save
 
 #### Step 5c: Add scopes
 
@@ -156,7 +145,7 @@ On macOS desktop, before proceeding, copy the comma-separated scope string below
 
 > I've opened **Data Access**.
 >
-> 1. Click **Add or Remove Scopes** → scroll to **"Manually add scopes"** → paste the comma-separated scopes below → click **Update**
+> 1. Click **Add or Remove Scopes** -> scroll to **"Manually add scopes"** -> paste the comma-separated scopes below -> click **Update**
 > 2. Back on the main page, scroll down and click **Save**
 
 The scopes to paste:
@@ -195,7 +184,7 @@ A modal should appear with the **Client ID** and **Client Secret**. Tell the use
 
 ---
 
-### Steps 7–9: Store Credentials, Authorize, and Verify
+### Steps 7-9: Store Credentials, Authorize, and Verify
 
 Follow the `vellum-oauth-integrations` workflow to collect credentials, register the OAuth app, and verify the connection.
 
@@ -220,7 +209,7 @@ Google-specific override for macOS desktop app:
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [google-path-b.md](google-path-b.md).
 
 Key Google-specific differences for Path B:
 

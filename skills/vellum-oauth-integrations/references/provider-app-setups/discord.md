@@ -1,15 +1,3 @@
----
-name: discord-oauth-app-setup
-description: Walk the user through creating a Discord OAuth app in the Discord Developer Portal
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Discord OAuth Setup"
-    feature-flag: "integration-discord"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Discord OAuth credentials so the Discord integration can connect to their account and servers.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Discord-specific steps.
@@ -120,7 +108,7 @@ Scopes to request: `identify guilds guilds.members.read messages.read`
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [discord-path-b.md](discord-path-b.md).
 
 Key Discord-specific differences for Path B:
 

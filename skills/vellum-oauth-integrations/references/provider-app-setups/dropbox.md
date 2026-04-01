@@ -1,15 +1,3 @@
----
-name: dropbox-oauth-app-setup
-description: Walk the user through creating a Dropbox OAuth app in the Dropbox App Console
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Dropbox OAuth Setup"
-    feature-flag: "integration-dropbox"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Dropbox OAuth credentials so the Dropbox integration can connect to their account.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Dropbox-specific steps.
@@ -129,7 +117,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [dropbox-path-b.md](dropbox-path-b.md).
 
 Key Dropbox-specific differences for Path B:
 

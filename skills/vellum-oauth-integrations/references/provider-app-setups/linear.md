@@ -1,15 +1,3 @@
----
-name: linear-oauth-app-setup
-description: Walk the user through creating a Linear OAuth application in Linear API settings
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Linear OAuth Setup"
-    feature-flag: "integration-linear"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Linear OAuth credentials so the Linear integration can connect to their workspace.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Linear-specific steps.
@@ -114,7 +102,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [linear-path-b.md](linear-path-b.md).
 
 Key Linear-specific differences for Path B:
 

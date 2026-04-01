@@ -1,15 +1,3 @@
----
-name: todoist-oauth-app-setup
-description: Walk the user through creating a Todoist OAuth app in the Todoist App Console
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Todoist OAuth Setup"
-    feature-flag: "integration-todoist"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Todoist OAuth credentials so the Todoist integration can connect to their account.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Todoist-specific steps.
@@ -89,7 +77,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [todoist-path-b.md](todoist-path-b.md).
 
 Key Todoist-specific differences for Path B:
 

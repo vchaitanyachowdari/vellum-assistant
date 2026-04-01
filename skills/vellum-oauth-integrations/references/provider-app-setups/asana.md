@@ -1,15 +1,3 @@
----
-name: asana-oauth-app-setup
-description: Walk the user through creating an Asana OAuth app in the Asana Developer Console
-compatibility: "Designed for Vellum personal assistants"
-metadata:
-  emoji: "🔑"
-  vellum:
-    display-name: "Asana OAuth Setup"
-    feature-flag: "integration-asana"
-    includes: ["vellum-oauth-integrations"]
----
-
 You are helping your user set up Asana OAuth credentials so the Asana integration can connect to their workspace.
 
 The included `vellum-oauth-integrations` skill handles the generic parts of the flow (credential collection, app registration, connection, and verification). This file defines only the Asana-specific steps.
@@ -93,7 +81,7 @@ Follow the `vellum-oauth-integrations` workflow to collect credentials, register
 
 ## Path B: Manual Channel Setup
 
-For non-interactive channels, see [references/path-b-manual-setup.md](references/path-b-manual-setup.md).
+For non-interactive channels, see [asana-path-b.md](asana-path-b.md).
 
 Key Asana-specific differences for Path B:
 
