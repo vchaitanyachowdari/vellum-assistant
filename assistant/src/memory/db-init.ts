@@ -122,6 +122,7 @@ import {
   migrateRenameThreadStartersTable,
   migrateRenameVerificationSessionIdColumn,
   migrateRenameVerificationTable,
+  migrateRenameMemoryGraphTypeValues,
   migrateRenameVoiceToPhone,
   migrateScheduleOneShotRouting,
   migrateScheduleQuietFlag,
@@ -567,6 +568,9 @@ export function initializeDb(): void {
 
   // 102. Drop legacy memory_items and memory_item_sources tables (migrated to memory_graph_nodes)
   migrateDropMemoryItemsTables(database);
+
+  // 103. Rename legacy memory graph node type values: style → behavioral, relationship → semantic
+  migrateRenameMemoryGraphTypeValues(database);
 
   validateMigrationState(database);
 
