@@ -33,6 +33,14 @@ export type MemoryJobType =
   | "embed_attachment"
   | "generate_conversation_starters"
   | "journal_carry_forward"
+  | "embed_graph_node"
+  | "graph_extract"
+  | "graph_decay"
+  | "graph_consolidate"
+  | "graph_pattern_scan"
+  | "graph_narrative_refine"
+  | "graph_trigger_embed"
+  | "graph_bootstrap"
   | "generate_capability_cards" // legacy compat — silently dropped by worker (capability cards removed)
   | "generate_thread_starters"; // legacy compat — silently dropped by worker (renamed to generate_conversation_starters)
 
@@ -42,6 +50,8 @@ const EMBED_JOB_TYPES: MemoryJobType[] = [
   "embed_summary",
   "embed_media",
   "embed_attachment",
+  "embed_graph_node",
+  "graph_trigger_embed",
 ];
 
 export interface MemoryJob<T = Record<string, unknown>> {
@@ -148,6 +158,26 @@ export function hasActiveCarryForwardJob(
           inArray(memoryJobs.status, ["pending", "running"]),
           sql`json_extract(${memoryJobs.payload}, '$.filename') = ${filename}`,
           sql`json_extract(${memoryJobs.payload}, '$.userSlug') = ${userSlug}`,
+        ),
+      )
+      .get() != null
+  );
+}
+
+/**
+ * Check whether a pending or running job of the given type already exists.
+ * Used to prevent duplicate enqueues for long-running maintenance jobs.
+ */
+export function hasActiveJobOfType(type: MemoryJobType): boolean {
+  const db = getDb();
+  return (
+    db
+      .select({ id: memoryJobs.id })
+      .from(memoryJobs)
+      .where(
+        and(
+          eq(memoryJobs.type, type),
+          inArray(memoryJobs.status, ["pending", "running"]),
         ),
       )
       .get() != null
