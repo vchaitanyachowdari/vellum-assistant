@@ -12,10 +12,20 @@ private let log = Logger(subsystem: Bundle.appBundleIdentifier, category: "AppDe
 
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// The canonical product name shown in menus and the About panel.
-    /// Use this instead of hardcoding "Vellum" so the name is defined
-    /// in one place.
-    public static let appName = "Vellum"
+    /// The canonical product / brand name shown in menus, the About panel,
+    /// and tooltips.  For CI builds this is either "Vellum" (production) or
+    /// "Vellum Staging" (staging).  Local dev builds where
+    /// `BUNDLE_DISPLAY_NAME` is a custom assistant name (e.g. "Jarvis") fall
+    /// back to "Vellum" so menus and the About panel always show the brand.
+    public static let appName: String = {
+        let display = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "Vellum"
+        // CI sets BUNDLE_DISPLAY_NAME to "Vellum" or "Vellum Staging".
+        // Local dev builds may set it to a custom assistant name.  Only
+        // recognise values that start with "Vellum" as valid brand names.
+        return display.hasPrefix("Vellum") ? display : "Vellum"
+    }()
 
     /// Shared reference — `NSApp.delegate as? AppDelegate` fails under
     /// SwiftUI's `@NSApplicationDelegateAdaptor` because SwiftUI wraps
