@@ -47,26 +47,19 @@ struct SidebarSectionView: View {
     var sidebar: SidebarInteractionState?
     var conversationManager: ConversationManager?
 
+    /// Tracks which sub-groups have been toggled to show all conversations
+    /// (mirrors showAll at the section level but per sub-group key).
+    @State private var showAllInSubGroup: Set<String> = []
+
     enum CountMode {
         case items
         case subGroups(grouper: (ConversationModel) -> String?)
     }
 
-    /// Auto-show-all when hidden items beyond the truncation cutoff have unread messages.
-    private var effectiveShowAll: Bool {
-        if showAll { return true }
-        switch countMode {
-        case .items:
-            let hidden = conversations.dropFirst(maxCollapsed)
-            return hidden.contains(where: \.hasUnseenLatestAssistantMessage)
-        case .subGroups(let grouper):
-            let subGroups = buildSubGroups(grouper: grouper)
-            let hidden = subGroups.dropFirst(maxCollapsed)
-            return hidden.contains(where: { sg in
-                sg.conversations.contains(where: \.hasUnseenLatestAssistantMessage)
-            })
-        }
-    }
+    /// Whether the section is manually expanded to show all items.
+    /// The collapsed section header already shows an unread indicator dot,
+    /// so we no longer auto-expand for unread messages.
+    private var effectiveShowAll: Bool { showAll }
 
     private var unreadCount: Int {
         conversations.filter(\.hasUnseenLatestAssistantMessage).count
@@ -228,8 +221,7 @@ struct SidebarSectionView: View {
     @ViewBuilder
     private func scheduleSubGroupDisclosure(_ subGroup: ScheduleSubGroup) -> some View {
         let isSubGroupExpanded = expandedScheduleGroups?.wrappedValue.contains(subGroup.key) ?? false
-        let hasUnread = !isSubGroupExpanded &&
-            subGroup.conversations.contains(where: \.hasUnseenLatestAssistantMessage)
+        let hasUnread = subGroup.conversations.contains(where: \.hasUnseenLatestAssistantMessage)
 
         // Disclosure header — layout matches SidebarConversationItem's skeleton
         // so the chevron aligns with the pin icon and the badge aligns with the ellipsis.
@@ -285,12 +277,38 @@ struct SidebarSectionView: View {
         .pointerCursor()
 
         if isSubGroupExpanded {
+            let subGroupShowAll = showAllInSubGroup.contains(subGroup.key)
+            let displayedInSubGroup = subGroupShowAll
+                ? subGroup.conversations
+                : Array(subGroup.conversations.prefix(maxCollapsed))
+
             VStack(spacing: 0) {
-                ForEach(subGroup.conversations) { conversation in
+                ForEach(displayedInSubGroup) { conversation in
                     makeRow(conversation)
                         .equatable()
                         .id(ConversationRowIdentity(conversationId: conversation.id, groupId: conversation.groupId))
                         .padding(.bottom, SidebarLayoutMetrics.listRowGap)
+                }
+
+                if subGroup.conversations.count > maxCollapsed {
+                    HStack {
+                        VButton(
+                            label: subGroupShowAll ? "Show less" : "Show more",
+                            style: .ghost,
+                            size: .compact
+                        ) {
+                            withAnimation(VAnimation.fast) {
+                                if subGroupShowAll {
+                                    showAllInSubGroup.remove(subGroup.key)
+                                } else {
+                                    showAllInSubGroup.insert(subGroup.key)
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.leading, VSpacing.xs + SidebarLayoutMetrics.iconSlotSize + VSpacing.xs - VSpacing.sm)
+                    .padding(.bottom, VSpacing.xs)
                 }
             }
             .padding(.vertical, VSpacing.xxs)
@@ -313,7 +331,7 @@ struct SidebarSectionView: View {
 
     @ViewBuilder
     private var showMoreLessButton: some View {
-        if conversations.count > maxCollapsed, showAll || !effectiveShowAll {
+        if conversations.count > maxCollapsed {
             HStack {
                 VButton(
                     label: showAll ? "Show less" : "Show more",
