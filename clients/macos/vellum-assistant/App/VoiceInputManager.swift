@@ -86,6 +86,16 @@ final class VoiceInputManager {
     /// Used to guard against duplicate registration from deferred startup.
     private(set) var hasStarted = false
 
+    /// Guards access to `audioEngine.inputNode`. Accessing `inputNode` before
+    /// microphone permission is granted triggers the system permission dialog,
+    /// so teardown paths skip audio engine calls until a tap has been installed.
+    private var hasInstalledTap = false
+
+    /// When true, `tearDownAudioState()` skips the blocking `audioEngine.stop()`
+    /// call. The OS reclaims all audio hardware resources on process exit, so
+    /// explicit teardown is unnecessary during termination.
+    private var isTerminating = false
+
     /// All active event monitors, consolidated for clean teardown.
     private var monitors: [Any] = []
 
@@ -178,6 +188,11 @@ final class VoiceInputManager {
         start()
     }
 
+    /// Marks the manager for termination, skipping blocking audio engine cleanup.
+    func prepareForTermination() {
+        isTerminating = true
+    }
+
     func stop() {
         hasStarted = false
         for monitor in monitors {
@@ -207,12 +222,15 @@ final class VoiceInputManager {
         }
     }
 
-    /// Unconditionally tear down audio engine state (tap, engine, recognition task/request).
-    /// Safe to call regardless of `isRecording` — used as the shared cleanup path for all
-    /// stop methods and as a recovery mechanism when state becomes inconsistent.
+    /// Tear down audio engine state (tap, engine, recognition task/request).
+    /// Safe to call regardless of `isRecording` — used as the shared cleanup path
+    /// for all stop methods and as a recovery mechanism when state becomes inconsistent.
+    /// Skips blocking `audioEngine.stop()` when `isTerminating` or no tap was installed.
     private func tearDownAudioState() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInstalledTap && !isTerminating {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest?.endAudio()
@@ -240,8 +258,10 @@ final class VoiceInputManager {
         Self.amplitudeSubject.send(0)
         onAmplitudeChanged?(0)
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInstalledTap {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
 
         // Signal end of audio — the recognizer will process remaining audio
         // and fire the callback with isFinal = true.
@@ -252,8 +272,10 @@ final class VoiceInputManager {
     /// Clears any stale internal buffers or format caches that accumulate
     /// after failed start/stop cycles.
     private func resetAudioEngine() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInstalledTap {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
         audioEngine.reset()
     }
 
@@ -623,6 +645,7 @@ final class VoiceInputManager {
         // See: https://stackoverflow.com/questions/41805381
         let inputNode = audioEngine.inputNode
         inputNode.removeTap(onBus: 0)
+        hasInstalledTap = true
 
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
@@ -819,8 +842,10 @@ final class VoiceInputManager {
 
         onRecordingStateChanged?(false)
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInstalledTap {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
 
         // Signal end of audio — the recognizer will process remaining audio
         // and fire the callback with isFinal = true.
