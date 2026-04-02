@@ -65,7 +65,7 @@ For new view models and state objects targeting macOS 15+ / iOS 17+, prefer the 
 |---|---|
 | New view models and state objects | Deep Combine integration (`@Published` pipelines with `sink`, `combineLatest`, `debounce`, `removeDuplicates`) |
 | Classes with simple stored properties that drive UI | Classes that rely on `objectWillChange` forwarding from nested ObservableObjects |
-| Leaf-node view models observed by a single view | Hub objects that subscribe to many child `objectWillChange` publishers (e.g., ConversationManager) |
+| Leaf-node view models observed by a single view | Hub objects that subscribe to many child `objectWillChange` publishers |
 | Per-entity state objects in dictionary stores | Classes conforming to protocols requiring `ObservableObject` (e.g., `SessionOverlayProviding`) |
 
 <details>
@@ -73,7 +73,7 @@ For new view models and state objects targeting macOS 15+ / iOS 17+, prefer the 
 
 The following classes have been migrated from `ObservableObject` to `@Observable`:
 
-**macOS-only:** QuickInputTextModel, DevModeManager, RecordingHUDViewModel, NavigationHistory, AmbientAgent, DocumentManager, E2EStatusOverlayViewModel, WatchSession, SurfaceViewModel, SurfaceManager, AppListManager, TerminalSessionManager, MessageAudioPlayer, ContactsViewModel, OpenAIVoiceService, SkillsManager, MessageListScrollState
+**macOS-only:** QuickInputTextModel, DevModeManager, RecordingHUDViewModel, NavigationHistory, AmbientAgent, DocumentManager, E2EStatusOverlayViewModel, WatchSession, SurfaceViewModel, SurfaceManager, AppListManager, TerminalSessionManager, MessageAudioPlayer, ContactsViewModel, OpenAIVoiceService, SkillsManager, MessageListScrollState, ConversationManager
 
 **Shared (macOS + iOS):** InlineVideoEmbedStateManager, ContactsStore, MemoryItemsStore, ChannelTrustStore, ChatErrorManager, ChatGreetingState, TaskProgressOverlayManager, ChatAttachmentManager, ChatMessageManager, ChatViewModel
 
@@ -89,7 +89,6 @@ These classes stay `ObservableObject` because they have deep Combine integration
 | `SettingsStore` | Heavy `UserDefaults.publisher` + Combine pipelines |
 | `MainWindowState` | Bridges `@Observable` NavigationHistory via `withObservationTracking`; uses `objectWillChange` forwarding |
 | `VoiceModeManager` | Complex Combine pipelines (audio streams, state machine transitions) |
-| `ConversationManager` | Hub object subscribing to many child `objectWillChange` publishers; complex lifecycle |
 | `GatewayConnectionManager` | Combine-based SSE event stream processing |
 | `RecordingManager` | Audio capture Combine pipelines |
 | `RecordingSourcePickerViewModel` | ScreenCaptureKit async sequences + Combine |
@@ -254,9 +253,9 @@ Three fixes outside the scroll subsystem prevent observation feedback loops that
 
 - **Pagination cooldown.** The pagination sentinel enforces a 500ms cooldown between completions via `lastPaginationCompletedAt` on `MessageListScrollState`. This prevents a feedback loop where scroll triggers pagination, `displayedMessageCount` changes cause body re-evaluation, content/geometry changes fire the sentinel again, and pagination re-enters. The cooldown ensures rapid pagination completions cannot cascade.
 
-- **Body-level circuit breaker.** When `isThrottled` is true (more than 100 body evaluations in 2 seconds), `derivedState` returns a cached `MessageListDerivedState` instead of recomputing O(n) derived properties. This makes body re-evaluation cheap during any loop regardless of its source — scroll state changes, pagination, or parent cascade (e.g., `ConversationManager` `objectWillChange`). The circuit breaker is a safety net that caps the cost of body evaluations even when the root-cause loop is not scroll-related.
+- **Body-level circuit breaker.** When `isThrottled` is true (more than 100 body evaluations in 2 seconds), `derivedState` returns a cached `MessageListDerivedState` instead of recomputing O(n) derived properties. This makes body re-evaluation cheap during any loop regardless of its source — scroll state changes, pagination, or parent cascade. The circuit breaker is a safety net that caps the cost of body evaluations even when the root-cause loop is not scroll-related.
 
-- **AssistantActivitySnapshot equality.** `textLength` is excluded from the `Equatable` conformance of `AssistantActivitySnapshot` so that `.removeDuplicates()` in the assistant activity Combine pipeline filters out per-token streaming deltas. As a result, `handleAssistantMessageArrival` only fires on structural message changes (new message, role change, completion) rather than on every token append. This prevents per-token `objectWillChange` emissions from `ConversationManager`, which would otherwise cascade into `MessageListBody` re-evaluation and scroll-state recomputation on every streamed token.
+- **AssistantActivitySnapshot equality.** `textLength` is excluded from the `Equatable` conformance of `AssistantActivitySnapshot` so that `.removeDuplicates()` in the assistant activity Combine pipeline filters out per-token streaming deltas. As a result, `handleAssistantMessageArrival` only fires on structural message changes (new message, role change, completion) rather than on every token append. This prevents per-token mutations of `conversations` from cascading into `MessageListBody` re-evaluation and scroll-state recomputation on every streamed token.
 
 ### Rules
 

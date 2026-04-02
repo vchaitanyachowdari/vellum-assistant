@@ -35,20 +35,30 @@ struct ConversationClient: ConversationClientProtocol {
     }
 }
 
+@Observable
 @MainActor
-final class ConversationManager: ObservableObject, ConversationRestorerDelegate {
-    @AppStorage("restoreRecentConversations") private(set) var restoreRecentConversations = true
-    @AppStorage("lastActiveConversationId") private var lastActiveConversationIdString: String?
-    @AppStorage("completedConversationCount") private var completedConversationCount: Int = 0
-    @Published var conversations: [ConversationModel] = []
-    @Published var groups: [ConversationGroup] = []
+final class ConversationManager: ConversationRestorerDelegate {
+    private(set) var restoreRecentConversations: Bool {
+        get { UserDefaults.standard.object(forKey: "restoreRecentConversations") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "restoreRecentConversations") }
+    }
+    private var lastActiveConversationIdString: String? {
+        get { UserDefaults.standard.string(forKey: "lastActiveConversationId") }
+        set { UserDefaults.standard.set(newValue, forKey: "lastActiveConversationId") }
+    }
+    private var completedConversationCount: Int {
+        get { UserDefaults.standard.integer(forKey: "completedConversationCount") }
+        set { UserDefaults.standard.set(newValue, forKey: "completedConversationCount") }
+    }
+    var conversations: [ConversationModel] = []
+    var groups: [ConversationGroup] = []
     /// Whether the daemon returned a non-empty groups array, indicating it supports
     /// the group system. When true, `groupId: null` from the server means "explicitly
     /// ungrouped" and the client should NOT override it with source-based heuristics.
     /// When false (old daemon), the heuristic fallback in `deriveGroupId` is needed.
-    var daemonSupportsGroups: Bool = false
-    @Published var hasMoreConversations: Bool = false
-    @Published var isLoadingMoreConversations: Bool = false
+    @ObservationIgnored var daemonSupportsGroups: Bool = false
+    var hasMoreConversations: Bool = false
+    var isLoadingMoreConversations: Bool = false
     private struct AssistantActivitySnapshot: Equatable {
         let messageId: UUID
         let toolCallCount: Int
@@ -62,9 +72,9 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
     /// Concrete client for group CRUD operations (not on the protocol).
     private let groupClient = ConversationListClient()
     /// Debounce task for coalescing rapid reorder persistence calls (e.g. during drag).
-    private var reorderDebounceTask: Task<Void, Never>?
-    var serverOffset: Int = 0
-    @Published var activeConversationId: UUID? {
+    @ObservationIgnored private var reorderDebounceTask: Task<Void, Never>?
+    @ObservationIgnored var serverOffset: Int = 0
+    var activeConversationId: UUID? {
         didSet {
             if let activeConversationId {
                 // Switching to a real conversation discards any draft
@@ -117,18 +127,18 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
         }
     }
 
-    @Published private(set) var draftViewModel: ChatViewModel?
-    private var chatViewModels: [UUID: ChatViewModel] = [:]
+    private(set) var draftViewModel: ChatViewModel?
+    @ObservationIgnored private var chatViewModels: [UUID: ChatViewModel] = [:]
     /// Maximum number of ChatViewModels to keep in memory. When this limit is
     /// exceeded, the least-recently-accessed VM (that isn't the active conversation) is
     /// evicted. This prevents unbounded memory growth from accumulated conversations.
     private let maxCachedViewModels = 10
     /// Tracks access order for LRU eviction. Most-recently-accessed ID is at the end.
-    private var vmAccessOrder: [UUID] = []
-    private var pendingEvictionTask: Task<Void, Never>?
+    @ObservationIgnored private var vmAccessOrder: [UUID] = []
+    @ObservationIgnored private var pendingEvictionTask: Task<Void, Never>?
     /// Conversation local IDs whose ViewModels are pinned by open pop-out windows.
     /// Pinned VMs are exempt from LRU eviction.
-    private var pinnedViewModelIds: Set<UUID> = []
+    @ObservationIgnored private var pinnedViewModelIds: Set<UUID> = []
     /// Background queue for Combine subscription teardown. AnyCancellable.cancel()
     /// is thread-safe per Apple docs, but tearing down deep operator chains
     /// (CombineLatest3/4, scan, removeDuplicates, etc.) synchronously on main
@@ -145,49 +155,44 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
     private let conversationRestorer: ConversationRestorer
     /// Queued renames for conversations that don't yet have a conversationId.
     /// Flushed in backfillConversationId when the daemon assigns a conversation ID.
-    private var pendingRenames: [UUID: String] = [:]
+    @ObservationIgnored private var pendingRenames: [UUID: String] = [:]
     /// Flag to suppress lastActiveConversationIdString writes during initialization and conversation restoration.
-    private var isRestoringConversations = false
-    /// Combines `$conversations` and `$groups` to recompute cached derived
-    /// state (`visibleConversations`, `unseenVisibleConversationCount`,
-    /// `groupSortPositionMap`) in a single pass whenever either source changes.
-    private var derivedStateCancellable: AnyCancellable?
+    @ObservationIgnored private var isRestoringConversations = false
     /// Owns per-conversation activity state (busy flags, interaction states,
-    /// active message count) on an `@Observable` class so SwiftUI views get
-    /// property-level tracking instead of broad `objectWillChange` invalidation.
+    /// active message count) as a separate `@Observable` class for
+    /// fine-grained view invalidation scoped to individual conversations.
     let activityStore = ConversationActivityStore()
     /// Subscription to assistant activity per conversation.
     /// Used to mark inactive conversations as unseen when assistant output changes.
-    private var assistantActivityCancellables: [UUID: AnyCancellable] = [:]
+    @ObservationIgnored private var assistantActivityCancellables: [UUID: AnyCancellable] = [:]
     /// Last observed assistant activity snapshot per conversation.
-    private var latestAssistantActivitySnapshots: [UUID: AssistantActivitySnapshot] = [:]
+    @ObservationIgnored private var latestAssistantActivitySnapshots: [UUID: AssistantActivitySnapshot] = [:]
     /// Pending anchor message ID for scroll-to behavior on notification deep links.
-    @Published var pendingAnchorMessageId: UUID?
+    var pendingAnchorMessageId: UUID?
     /// Message ID to visually highlight after an anchor scroll completes.
     /// Set by MessageListView when it scrolls to the anchor, cleared after the flash animation.
-    /// Not @Published — this is a transient visual effect only consumed by MessageListView via
-    /// a direct Binding, so it does not need to fire objectWillChange on the entire subscriber tree.
+    /// Transient visual effect only consumed by MessageListView via a direct Binding.
     var highlightedMessageId: UUID?
     /// Tracks which conversation the pending anchor belongs to so stale anchors are
     /// cleared automatically when the user switches to a different conversation.
-    private var pendingAnchorConversationId: UUID?
+    @ObservationIgnored private var pendingAnchorConversationId: UUID?
     /// Conversation IDs whose seen signals are deferred pending undo expiration.
-    private var pendingSeenConversationIds: [String] = []
+    @ObservationIgnored private var pendingSeenConversationIds: [String] = []
     /// Task that auto-commits deferred seen signals after the undo window.
-    private var pendingSeenSignalTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingSeenSignalTask: Task<Void, Never>?
     /// Daemon conversation IDs that need a notification catch-up (history fetch)
     /// once the associated ChatViewModel finishes its current send/think cycle.
     /// Populated when a notification_intent arrives while the VM is busy.
-    private var pendingNotificationCatchUpIds: Set<String> = []
+    @ObservationIgnored private var pendingNotificationCatchUpIds: Set<String> = []
     /// Stores the groupId a conversation had before being pinned, so it can be
     /// restored on unpin instead of falling back to heuristic-based routing.
-    private var prePinGroupIds: [UUID: String?] = [:]
+    @ObservationIgnored private var prePinGroupIds: [UUID: String?] = [:]
     /// Periodic task that refreshes the active channel conversation's history.
     /// Cancelled when switching away from a channel conversation.
-    private var channelRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var channelRefreshTask: Task<Void, Never>?
     /// Local seen/unread toggles should survive a stale daemon conversation-list
     /// replay until the daemon either acknowledges them or reports a newer reply.
-    private var pendingAttentionOverrides: [String: PendingAttentionOverride] = [:]
+    @ObservationIgnored private var pendingAttentionOverrides: [String: PendingAttentionOverride] = [:]
 
     private enum PendingAttentionOverride {
         case seen(latestAssistantMessageAt: Date?)
@@ -204,7 +209,7 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
 
     /// Snapshots captured by the most recent `markAllConversationsSeen()` call,
     /// keyed by conversation ID. Consumed by `restoreUnseen(conversationIds:)`.
-    private var markAllSeenPriorStates: [UUID: MarkAllSeenPriorState] = [:]
+    @ObservationIgnored private var markAllSeenPriorStates: [UUID: MarkAllSeenPriorState] = [:]
 
     var sortedGroups: [ConversationGroup] {
         groups.sorted { $0.sortPosition < $1.sortPosition }
@@ -252,19 +257,18 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
     /// Sorted: grouped conversations first (by group sortPosition), then ungrouped.
     /// Within each group, conversations sort by displayOrder ascending, then recency descending.
     /// Conversations move to the top when messages are sent or received, but NOT when clicked/selected.
-    ///
-    /// Cached as a stored property and recomputed via a Combine pipeline whenever
-    /// `conversations` or `groups` change. This avoids redundant O(N log N)
-    /// filter+sort work when multiple callers read the property in the same
-    /// render cycle (e.g. `groupedConversations`, `regularConversations`,
-    /// `scheduledUnreadCount`, sidebar view body).
-    private(set) var visibleConversations: [ConversationModel] = []
+    var visibleConversations: [ConversationModel] {
+        let positionMap = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.sortPosition) })
+        return conversations
+            .filter { !$0.isArchived && $0.kind != .private }
+            .sorted { visibleConversationSortOrder($0, $1, positionMap: positionMap) }
+    }
 
     /// Shared sort predicate for visible conversations: groups first (by sortPosition),
     /// then within each group by displayOrder/recency. Ungrouped last.
-    private func visibleConversationSortOrder(_ a: ConversationModel, _ b: ConversationModel) -> Bool {
-        let aGroupPos = groupSortPosition(for: a.groupId)
-        let bGroupPos = groupSortPosition(for: b.groupId)
+    private func visibleConversationSortOrder(_ a: ConversationModel, _ b: ConversationModel, positionMap: [String: Double]) -> Bool {
+        let aGroupPos = groupSortPosition(for: a.groupId, positionMap: positionMap)
+        let bGroupPos = groupSortPosition(for: b.groupId, positionMap: positionMap)
         if aGroupPos != bGroupPos { return aGroupPos < bGroupPos }
 
         if a.displayOrder == nil && b.displayOrder == nil {
@@ -275,20 +279,18 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
         return a.displayOrder! < b.displayOrder!
     }
 
-    /// Precomputed lookup from groupId -> sortPosition. Rebuilt when `groups` changes (infrequent).
-    /// Avoids O(N) linear scan per sort comparison in `visibleConversationSortOrder`.
-    private var groupSortPositionMap: [String: Double] = [:]
-
-    private func groupSortPosition(for groupId: String?) -> Double {
+    private func groupSortPosition(for groupId: String?, positionMap: [String: Double]) -> Double {
         guard let groupId else { return Double.infinity }  // ungrouped sorts last (intentional)
-        return groupSortPositionMap[groupId] ?? Double.infinity  // orphaned -> treat as ungrouped
+        return positionMap[groupId] ?? Double.infinity  // orphaned -> treat as ungrouped
     }
 
     /// Count of visible (non-archived, non-private) conversations with unseen assistant messages.
     /// Used by AppDelegate to drive the dock badge.
-    ///
-    /// Cached alongside `visibleConversations` in the same Combine pipeline.
-    private(set) var unseenVisibleConversationCount: Int = 0
+    /// Filters `conversations` directly instead of calling `visibleConversations` to avoid
+    /// an unnecessary O(N log N) sort — only the count is needed.
+    var unseenVisibleConversationCount: Int {
+        conversations.count { !$0.isArchived && $0.kind != .private && $0.hasUnseenLatestAssistantMessage }
+    }
 
     var archivedConversations: [ConversationModel] {
         conversations.filter { $0.isArchived }
@@ -335,22 +337,6 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
         self.conversationForkClient = conversationForkClient
         self.conversationDetailClient = conversationDetailClient
         self.conversationRestorer = ConversationRestorer(connectionManager: connectionManager, eventStreamClient: eventStreamClient)
-        // Recompute cached derived state whenever `conversations` or `groups` change.
-        // Uses CombineLatest so a single sink handles groupSortPositionMap,
-        // visibleConversations, and unseenVisibleConversationCount together.
-        self.derivedStateCancellable = Publishers.CombineLatest($conversations, $groups)
-            .sink { [weak self] newConversations, newGroups in
-                guard let self else { return }
-                self.groupSortPositionMap = Dictionary(
-                    uniqueKeysWithValues: newGroups.map { ($0.id, $0.sortPosition) }
-                )
-                self.visibleConversations = newConversations
-                    .filter { !$0.isArchived && $0.kind != .private }
-                    .sorted { self.visibleConversationSortOrder($0, $1) }
-                self.unseenVisibleConversationCount = self.visibleConversations
-                    .filter { $0.hasUnseenLatestAssistantMessage }
-                    .count
-            }
         // On first launch (post-onboarding), skip conversation restoration — there are
         // no meaningful prior conversations. Allow activeConversationId writes immediately so
         // the wake-up conversation's UUID is persisted.
@@ -1339,7 +1325,7 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
         let targetConversation = conversations[targetIdx]
 
         // Work on a local copy to batch all mutations into a single
-        // @Published write, preventing SwiftUI ForEach re-entrancy crashes.
+        // array write, preventing SwiftUI ForEach re-entrancy crashes.
         var draft = conversations
 
         let sourceGroupId = draft[sourceIdx].groupId
@@ -1355,9 +1341,10 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
         }
 
         // Reorder within TARGET GROUP only (not global — prevents corrupting other groups).
+        let positionMap = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.sortPosition) })
         let groupMembers = draft
             .filter { $0.groupId == targetGroupId && !$0.isArchived && $0.kind != .private }
-            .sorted { visibleConversationSortOrder($0, $1) }
+            .sorted { visibleConversationSortOrder($0, $1, positionMap: positionMap) }
 
         // Remove source from the group member list
         var reordered = groupMembers.filter { $0.id != sourceId }
@@ -1407,7 +1394,7 @@ final class ConversationManager: ObservableObject, ConversationRestorerDelegate 
             }
         }
 
-        // Single write — triggers objectWillChange exactly once.
+        // Single write — triggers one observation notification.
         conversations = draft
         sendReorderConversations()
         return true
