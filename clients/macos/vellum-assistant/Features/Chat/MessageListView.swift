@@ -125,10 +125,11 @@ struct MessageListView: View {
     /// With @Observable fine-grained tracking, reading only `activeSurfaceId`
     /// won't trigger re-renders on frequent `data` progress ticks.
     var taskProgressManager = TaskProgressOverlayManager.shared
-    /// Consolidates all scroll-related state with @Observable fine-grained tracking.
-    /// Only 1 property triggers view re-evaluations: `uiVersion`.
-    /// Snapshot values (showTailSpacer, scrollIndicatorsHidden, showScrollToLatest)
-    /// are @ObservationIgnored and synced via the uiVersion counter.
+    /// Consolidates all scroll-related state with `@Observable` fine-grained
+    /// per-property tracking. Each UI-facing property (`showTailSpacer`,
+    /// `showScrollToLatest`, `scrollIndicatorsHidden`) is individually tracked,
+    /// so SwiftUI only re-evaluates views that read the specific property that
+    /// changed. See `MessageListScrollState.swift` for details.
     @State private var scrollState = MessageListScrollState()
     /// In-flight resize scroll stabilization task; cancelled on each new resize.
     @State private var resizeScrollTask: Task<Void, Never>?
@@ -663,7 +664,6 @@ struct MessageListView: View {
             }
 
             let _ = os_signpost(.event, log: stallLog, name: "MessageList.bodyEval")
-            let _ = scrollState.uiVersion
             let state = derivedState
             let catalogHash = MessageCellView.hashCatalog(providerCatalog)
             ForEach(state.displayMessageIds, id: \.self) { messageId in
@@ -755,14 +755,7 @@ struct MessageListView: View {
                     }
                 }
 
-            // Viewport-height spacer that allows the last message
-            // to scroll to the top during push-to-top.
-            if scrollState.showTailSpacer {
-                Color.clear
-                    .frame(height: scrollState.tailSpacerHeight)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+            TailSpacerView(scrollState: scrollState)
         }
         .disabled(!isInteractionEnabled)
         .padding(.horizontal, VSpacing.xl)
@@ -773,33 +766,6 @@ struct MessageListView: View {
         .environment(\.bubbleMaxWidth, containerWidth > 0
             ? min(VSpacing.chatBubbleMaxWidth, max(containerWidth - 2 * VSpacing.xl, 0))
             : VSpacing.chatBubbleMaxWidth)
-    }
-
-    // MARK: - Scroll-to-latest overlay
-
-    @ViewBuilder
-    private var scrollToLatestOverlay: some View {
-        if scrollState.showScrollToLatest {
-            Button(action: {
-                os_signpost(.event, log: PerfSignposts.log, name: "scrollToLatestPressed")
-                scrollState.requestPinToBottom(animated: true, userInitiated: true)
-            }) {
-                HStack(spacing: VSpacing.xs) {
-                    VIconView(.arrowDown, size: 10)
-                    Text("Scroll to latest")
-                        .font(VFont.bodySmallDefault)
-                }
-                .padding(.horizontal, VSpacing.md)
-                .padding(.vertical, VSpacing.sm)
-                .background(VColor.surfaceOverlay)
-                .clipShape(Capsule())
-                .shadow(color: VColor.auxBlack.opacity(0.15), radius: 4, y: 2)
-            }
-            .buttonStyle(.plain)
-            .background { ScrollWheelPassthrough() }
-            .padding(.bottom, VSpacing.lg)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
     }
 
     // MARK: - Scroll geometry handler
@@ -979,17 +945,6 @@ struct MessageListView: View {
             if !hasEverSentMessage && messages.contains(where: { $0.role == .user }) {
                 hasEverSentMessage = true
             }
-        }
-    }
-
-    private func handleUIVersionChanged() {
-        // Consume any pending push-to-top target now that the
-        // body has re-evaluated with the tail spacer rendered.
-        guard let targetId = scrollState.pendingPushToTopTarget,
-              scrollState.mode.pushToTopMessageId != nil else { return }
-        scrollState.pendingPushToTopTarget = nil
-        withAnimation(VAnimation.fast) {
-            scrollState.performScrollTo(targetId, anchor: .top)
         }
     }
 
@@ -1174,7 +1129,9 @@ struct MessageListView: View {
                 handleScrollGeometryUpdate(newState)
             }
             .scrollIndicators(scrollState.scrollIndicatorsHidden ? .hidden : .automatic)
-            .overlay(alignment: .bottom) { scrollToLatestOverlay }
+            .overlay(alignment: .bottom) {
+                ScrollToLatestOverlayView(scrollState: scrollState)
+            }
             .onAppear { handleAppear() }
             .onDisappear {
                 scrollState.cancelAll()
@@ -1183,7 +1140,6 @@ struct MessageListView: View {
                 highlightedMessageId = nil
             }
             .onChange(of: isSending) { handleSendingChanged() }
-            .onChange(of: scrollState.uiVersion) { _, _ in handleUIVersionChanged() }
             .onChange(of: messages.count) { handleMessagesCountChanged() }
             .onChange(of: containerWidth) { handleContainerWidthChanged() }
             .onChange(of: conversationId) { _, _ in handleConversationSwitched() }
@@ -1203,6 +1159,62 @@ struct MessageListView: View {
                     scrollState.lastAutoFocusedRequestId = requestId
                 }
             }
+    }
+}
+
+// MARK: - TailSpacerView
+
+/// Isolated child view for the push-to-top tail spacer. Creates its own
+/// observation boundary so changes to `showTailSpacer` only invalidate this
+/// view — not the parent `LazyVStack` or `ForEach`.
+///
+/// Reference: [WWDC23 — Discover Observation in SwiftUI](https://developer.apple.com/videos/play/wwdc2023/10149/)
+private struct TailSpacerView: View {
+    let scrollState: MessageListScrollState
+
+    var body: some View {
+        if scrollState.showTailSpacer {
+            Color.clear
+                .frame(height: scrollState.tailSpacerHeight)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .onAppear {
+                    scrollState.consumePendingPushToTop()
+                }
+        }
+    }
+}
+
+// MARK: - ScrollToLatestOverlayView
+
+/// Isolated child view for the "Scroll to latest" CTA. Creates its own
+/// observation boundary so changes to `showScrollToLatest` only invalidate
+/// this view — not the parent `MessageListView.body` or `ForEach`.
+private struct ScrollToLatestOverlayView: View {
+    let scrollState: MessageListScrollState
+
+    var body: some View {
+        if scrollState.showScrollToLatest {
+            Button(action: {
+                os_signpost(.event, log: PerfSignposts.log, name: "scrollToLatestPressed")
+                scrollState.requestPinToBottom(animated: true, userInitiated: true)
+            }) {
+                HStack(spacing: VSpacing.xs) {
+                    VIconView(.arrowDown, size: 10)
+                    Text("Scroll to latest")
+                        .font(VFont.bodySmallDefault)
+                }
+                .padding(.horizontal, VSpacing.md)
+                .padding(.vertical, VSpacing.sm)
+                .background(VColor.surfaceOverlay)
+                .clipShape(Capsule())
+                .shadow(color: VColor.auxBlack.opacity(0.15), radius: 4, y: 2)
+            }
+            .buttonStyle(.plain)
+            .background { ScrollWheelPassthrough() }
+            .padding(.bottom, VSpacing.lg)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }
 
