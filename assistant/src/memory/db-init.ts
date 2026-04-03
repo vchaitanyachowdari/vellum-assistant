@@ -130,6 +130,7 @@ import {
   migrateRenameVoiceToPhone,
   migrateScheduleOneShotRouting,
   migrateScheduleQuietFlag,
+  migrateScheduleReuseConversation,
   migrateSchemaIndexesAndColumns,
   migrateScrubCorruptedImageAttachments,
   migrateStripIntegrationPrefixFromProviderKeys,
@@ -599,6 +600,9 @@ export function initializeDb(): void {
   // so the Anthropic provider no longer needs to mutate historical messages,
   // enabling append-only conversation history for prefix caching.
   migrateStripThinkingFromConsolidated(database);
+
+  // 109. Add reuse_conversation flag to schedule jobs
+  migrateScheduleReuseConversation(database);
 
   validateMigrationState(database);
 
