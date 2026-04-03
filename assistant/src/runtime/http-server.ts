@@ -172,6 +172,7 @@ import {
   handlePairingStatus,
   pairingRouteDefinitions,
 } from "./routes/pairing-routes.js";
+import { profilerRouteDefinitions } from "./routes/profiler-routes.js";
 import { recordingRouteDefinitions } from "./routes/recording-routes.js";
 import { scheduleRouteDefinitions } from "./routes/schedule-routes.js";
 import { secretRouteDefinitions } from "./routes/secret-routes.js";
@@ -964,6 +965,7 @@ export class RuntimeHttpServer {
       ...notificationRouteDefinitions(),
       ...diagnosticsRouteDefinitions(),
       ...logExportRouteDefinitions(),
+      ...profilerRouteDefinitions(),
       ...documentRouteDefinitions(),
       ...workItemRouteDefinitions(
         this.sendMessageDeps
