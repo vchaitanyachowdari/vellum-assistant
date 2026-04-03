@@ -658,13 +658,10 @@ function makeHubPublisher(
           guardianPrincipalId: trustContext?.guardianPrincipalId ?? undefined,
           toolName: msg.toolName,
           commandPreview:
-            redactSecrets(
-              summarizeToolInput(msg.toolName, inputRecord),
-            ) || undefined,
+            redactSecrets(summarizeToolInput(msg.toolName, inputRecord)) ||
+            undefined,
           riskLevel: msg.riskLevel,
-          activityText: activityRaw
-            ? redactSecrets(activityRaw)
-            : undefined,
+          activityText: activityRaw ? redactSecrets(activityRaw) : undefined,
           executionTarget: msg.executionTarget,
           status: "pending",
           requestCode: generateCanonicalRequestCode(),
@@ -791,9 +788,11 @@ export async function handleSendMessage(
     );
   }
 
-  if (!conversationKey) {
-    return httpError("BAD_REQUEST", "conversationKey is required", 400);
-  }
+  // When conversationKey is omitted, derive a stable default from
+  // sourceChannel + sourceInterface so that repeated calls from the same
+  // channel/interface pair share a single conversation thread.
+  const resolvedConversationKey =
+    conversationKey ?? `default:${sourceChannel}:${sourceInterface}`;
 
   // Reject non-string content values (numbers, objects, etc.)
   if (content != null && typeof content !== "string") {
@@ -856,7 +855,7 @@ export async function handleSendMessage(
 
   const conversationType =
     body.conversationType === "private" ? ("private" as const) : undefined;
-  const mapping = getOrCreateConversation(conversationKey, {
+  const mapping = getOrCreateConversation(resolvedConversationKey, {
     conversationType,
   });
   const smDeps = deps.sendMessageDeps;
@@ -1397,7 +1396,10 @@ export async function handleSendMessage(
           conversationId,
         });
         conversation.processing = false;
-        silentlyWithLog(conversation.drainQueue(), "compact-command queue drain");
+        silentlyWithLog(
+          conversation.drainQueue(),
+          "compact-command queue drain",
+        );
       }, 0);
 
       cleanupDeferred = true;
@@ -1713,7 +1715,7 @@ export function conversationRouteDefinitions(deps: {
         "Send a user message to a conversation and trigger the assistant response.",
       tags: ["messages"],
       requestBody: z.object({
-        conversationKey: z.string(),
+        conversationKey: z.string().optional(),
         content: z.string().describe("Message text content"),
         attachments: z
           .array(z.unknown())
