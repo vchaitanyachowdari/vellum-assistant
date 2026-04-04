@@ -301,20 +301,34 @@ final class AvatarAppearanceManager {
             "eyeStyle": eyeStyle.rawValue,
             "color": color.rawValue,
         ]
-        do {
-            let response = try await GatewayHTTPClient.post(
-                path: "assistants/{assistantId}/avatar/render-from-traits",
-                json: json,
-                timeout: 15
-            )
-            if response.isSuccess {
-                log.info("Synced avatar traits to daemon: \(bodyShape.rawValue)/\(eyeStyle.rawValue)/\(color.rawValue)")
-                reloadAvatar()
-            } else {
-                log.warning("Failed to sync avatar traits to daemon: HTTP \(response.statusCode)")
+        log.info("[avatarSync] syncTraitsToDaemon: posting \(bodyShape.rawValue)/\(eyeStyle.rawValue)/\(color.rawValue)")
+        // Retry up to 3 times with a short delay for transient failures
+        // (e.g. 500 from a freshly-hatched assistant that isn't fully ready).
+        for attempt in 1...3 {
+            do {
+                let response = try await GatewayHTTPClient.post(
+                    path: "assistants/{assistantId}/avatar/render-from-traits",
+                    json: json,
+                    timeout: 15
+                )
+                if response.isSuccess {
+                    log.info("[avatarSync] syncTraitsToDaemon: success on attempt \(attempt)")
+                    reloadAvatar()
+                    return
+                } else if response.statusCode >= 500 && attempt < 3 {
+                    log.warning("[avatarSync] syncTraitsToDaemon: HTTP \(response.statusCode) on attempt \(attempt), retrying...")
+                    try await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                    continue
+                } else {
+                    log.warning("[avatarSync] syncTraitsToDaemon: HTTP \(response.statusCode) on attempt \(attempt), giving up")
+                    return
+                }
+            } catch {
+                log.warning("[avatarSync] syncTraitsToDaemon: error on attempt \(attempt): \(error.localizedDescription)")
+                if attempt < 3 {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                }
             }
-        } catch {
-            log.warning("Failed to sync avatar traits to daemon: \(error.localizedDescription)")
         }
     }
 
