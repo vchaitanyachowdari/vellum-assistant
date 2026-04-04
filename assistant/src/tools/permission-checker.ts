@@ -194,6 +194,26 @@ export class PermissionChecker {
         };
       }
 
+      // Platform-hosted mode: auto-approve sandboxed bash for guardians.
+      // The sandbox provides the security boundary — prompting is unnecessary
+      // friction. host_bash is excluded because it runs unsandboxed on the
+      // user's machine and warrants explicit approval.
+      // Deny rules are still respected (checked above). requireFreshApproval
+      // is preserved as a belt-and-suspenders guard.
+      if (
+        result.decision === "prompt" &&
+        context.isPlatformHosted &&
+        name === "bash" &&
+        context.trustClass === "guardian" &&
+        !context.requireFreshApproval
+      ) {
+        log.info(
+          { toolName: name, riskLevel },
+          "Auto-approving bash tool for platform-hosted guardian session",
+        );
+        return { allowed: true, decision: "platform_auto_approve", riskLevel };
+      }
+
       if (result.decision === "prompt") {
         // Guardian-trust sessions (e.g. scheduled jobs, reminders) should be
         // able to use bundled tools without interactive approval. The guardian
