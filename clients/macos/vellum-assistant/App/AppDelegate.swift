@@ -801,7 +801,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         eventSubscriptionTask?.cancel()
         debugStateWriter.stop()
         RandomSoundTimer.shared.stop()
-        SoundManager.shared.stop()
     }
 
     // MARK: - Public Actions (for SwiftUI .commands menu items)
