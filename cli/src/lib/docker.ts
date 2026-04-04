@@ -471,6 +471,20 @@ function findRepoRoot(): string {
     return execRoot;
   }
 
+  // Check the app bundle's Resources directory. Debug DMG builds bundle
+  // Dockerfiles at Contents/Resources/dockerfiles/{assistant,gateway,...}/Dockerfile.
+  // The CLI binary lives at Contents/MacOS/vellum-cli, so Resources is at
+  // ../Resources relative to the binary.
+  const bundledRoot = join(
+    dirname(process.execPath),
+    "..",
+    "Resources",
+    "dockerfiles",
+  );
+  if (existsSync(join(bundledRoot, "assistant", "Dockerfile"))) {
+    return bundledRoot;
+  }
+
   // Walk up from cwd as a final fallback
   const cwdRoot = walkUpForRepoRoot(process.cwd());
   if (cwdRoot) {
@@ -1028,7 +1042,6 @@ export async function hatchDocker(
     let repoRoot: string | undefined;
 
     if (watch) {
-      emitProgress(2, 6, "Building images...");
       repoRoot = findRepoRoot();
 
       // When running from a packaged .app bundle, the Dockerfiles are
@@ -1045,6 +1058,7 @@ export async function hatchDocker(
     }
 
     if (watch && repoRoot) {
+      emitProgress(2, 6, "Building images...");
       const localTag = `local-${instanceName}`;
       imageTags.assistant = `vellum-assistant:${localTag}`;
       imageTags.gateway = `vellum-gateway:${localTag}`;
