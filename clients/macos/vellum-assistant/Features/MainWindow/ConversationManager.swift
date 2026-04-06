@@ -190,7 +190,7 @@ final class ConversationManager: ConversationRestorerDelegate {
         conversationRestorer.delegate = self
         conversationRestorer.startObserving(skipInitialFetch: isFirstLaunch)
         if listStore.groups.isEmpty {
-            listStore.groups = [.pinned, .scheduled, .background]
+            listStore.groups = [.pinned, .scheduled, .background, .all]
         }
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -486,7 +486,7 @@ final class ConversationManager: ConversationRestorerDelegate {
     private func promoteDraft(fromUserSend: Bool) {
         guard let viewModel = selectionStore.draftViewModel else { return }
 
-        let conversation = ConversationModel(title: "Untitled")
+        let conversation = ConversationModel(title: "Untitled", groupId: ConversationGroup.all.id)
         let localId = conversation.id
         listStore.conversations.insert(conversation, at: 0)
         selectionStore.chatViewModels[conversation.id] = viewModel
@@ -612,7 +612,7 @@ final class ConversationManager: ConversationRestorerDelegate {
             title: title,
             source: source ?? "notification",
             markHistoryLoaded: false,
-            groupId: groupId
+            groupId: groupId ?? ConversationGroup.all.id
         ) else { return }
         log.info("Created notification conversation \(localId) for conversation \(conversationId) (source: \(sourceEventName), groupId: \(groupId ?? "nil"))")
     }
@@ -940,7 +940,7 @@ final class ConversationManager: ConversationRestorerDelegate {
         for i in updated.indices where updated[i].groupId == groupId {
             updated[i].isArchived = true
             updated[i].displayOrder = nil
-            updated[i].groupId = nil
+            updated[i].groupId = ConversationGroup.all.id
             if let cid = updated[i].conversationId {
                 newlyArchivedServerIds.insert(cid)
             }

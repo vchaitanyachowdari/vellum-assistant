@@ -129,7 +129,7 @@ final class ConversationListStore {
     private(set) var sortedGroups: [ConversationGroup] = []
 
     /// Conversations organized by group. Groups appear in sortPosition order;
-    /// ungrouped conversations (including orphans with unknown groupId) appear last.
+    /// ungrouped and orphaned conversations are folded into the system:all bucket.
     private(set) var groupedConversations: [(group: ConversationGroup?, conversations: [ConversationModel])] = []
 
     /// Non-archived, non-private conversations sorted for the sidebar.
@@ -188,10 +188,22 @@ final class ConversationListStore {
         }
 
         var grouped: [(ConversationGroup?, [ConversationModel])] = []
+        var didFoldIntoAll = false
         for group in currentSortedGroups {
-            grouped.append((group, buckets[group.id] ?? []))
+            if group.id == ConversationGroup.all.id {
+                // Fold nil-groupId and orphaned conversations into the system:all bucket
+                // so they are never silently dropped by sidebar rendering.
+                grouped.append((group, (buckets[group.id] ?? []) + ungrouped + orphaned))
+                didFoldIntoAll = true
+            } else {
+                grouped.append((group, buckets[group.id] ?? []))
+            }
         }
-        grouped.append((nil, ungrouped + orphaned))
+        // If system:all wasn't in the groups list (e.g. old daemon), create a
+        // synthetic entry so ungrouped/orphaned conversations are still visible.
+        if !didFoldIntoAll && (!ungrouped.isEmpty || !orphaned.isEmpty) {
+            grouped.append((ConversationGroup.all, ungrouped + orphaned))
+        }
         groupedConversations = grouped
     }
 
@@ -233,11 +245,11 @@ final class ConversationListStore {
     ) -> ConversationModel {
         let effectiveCreatedAtMillis = item.createdAt ?? item.updatedAt
         let isPinned = item.isPinned ?? false
-        // When the daemon supports groups, groupId: null means "explicitly ungrouped" —
-        // use the server value as-is. Only fall back to source-based heuristics for
-        // old daemons that don't return groupId at all.
+        // When the daemon supports groups, groupId: null means "Recents" (system:all).
+        // Only fall back to source-based heuristics for old daemons that don't return
+        // groupId at all.
         let groupId: String? = daemonSupportsGroups
-            ? (item.groupId ?? (isPinned ? ConversationGroup.pinned.id : nil))
+            ? (item.groupId ?? (isPinned ? ConversationGroup.pinned.id : ConversationGroup.all.id))
             : ConversationModel.deriveGroupId(
                 serverGroupId: item.groupId,
                 isPinned: isPinned,
@@ -304,8 +316,8 @@ final class ConversationListStore {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
         var conversation = conversations[index]
         conversation.lastInteractedAt = Date()
-        if conversation.groupId == nil {
-            // Clear explicit displayOrder so ungrouped conversations revert to recency-based sorting.
+        if conversation.groupId == ConversationGroup.all.id {
+            // Clear explicit displayOrder so Recents conversations revert to recency-based sorting.
             // Grouped conversations keep their manual ordering.
             let hadOrder = conversation.displayOrder != nil
             if hadOrder { conversation.displayOrder = nil }
@@ -342,13 +354,13 @@ final class ConversationListStore {
            stored == nil || groups.contains(where: { $0.id == stored }) {
             // Restore the saved group only if it still exists (or was nil/ungrouped).
             // If the group was deleted while pinned, fall through to heuristics.
-            conversation.groupId = stored
+            conversation.groupId = stored ?? ConversationGroup.all.id
         } else if conversation.isScheduleConversation {
             conversation.groupId = ConversationGroup.scheduled.id
         } else if conversation.shouldReturnToBackgroundOnUnpin {
             conversation.groupId = ConversationGroup.background.id
         } else {
-            conversation.groupId = nil
+            conversation.groupId = ConversationGroup.all.id
         }
         conversation.displayOrder = nil
         conversations[index] = conversation
@@ -365,18 +377,19 @@ final class ConversationListStore {
             prePinGroupIds[conversationId] = conversations[index].groupId
         }
         var conversation = conversations[index]
-        conversation.groupId = groupId
-        if let groupId {
-            // Place at the end of the target group by assigning max + 1.
-            let maxOrder = conversations
-                .filter { $0.groupId == groupId && $0.id != conversationId }
-                .compactMap(\.displayOrder).max() ?? -1
-            conversation.displayOrder = maxOrder + 1
-        } else {
-            // When ungrouping, clear displayOrder and bump lastInteractedAt so
-            // the conversation appears at the top of the ungrouped list.
+        let effectiveGroupId = groupId ?? ConversationGroup.all.id
+        conversation.groupId = effectiveGroupId
+        if effectiveGroupId == ConversationGroup.all.id {
+            // When moving to Recents (system:all), clear displayOrder and bump
+            // lastInteractedAt so the conversation sorts by recency.
             conversation.displayOrder = nil
             conversation.lastInteractedAt = Date()
+        } else {
+            // Place at the end of the target group by assigning max + 1.
+            let maxOrder = conversations
+                .filter { $0.groupId == effectiveGroupId && $0.id != conversationId }
+                .compactMap(\.displayOrder).max() ?? -1
+            conversation.displayOrder = maxOrder + 1
         }
         conversations[index] = conversation
         sendReorderConversations()
@@ -522,7 +535,7 @@ final class ConversationListStore {
         // Batch-mutate a copy to avoid per-element SwiftUI re-renders
         var updated = conversations
         for i in updated.indices where updated[i].groupId == groupId {
-            updated[i].groupId = nil
+            updated[i].groupId = ConversationGroup.all.id
             updated[i].displayOrder = nil
         }
         conversations = updated

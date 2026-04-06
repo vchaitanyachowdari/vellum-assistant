@@ -314,12 +314,15 @@ export function createConversation(
 
   // group_id is NOT in the Drizzle schema (raw-query-only pattern).
   // Set via raw SQL after the INSERT succeeds.
-  if (groupId) {
+  // Always set group_id — default to "system:all" when none provided.
+  {
+    const effectiveGroupId = groupId ?? "system:all";
     for (let attempt = 0; ; attempt++) {
       try {
         rawRun(
-          "UPDATE conversations SET group_id = ? WHERE id = ?",
-          groupId,
+          "UPDATE conversations SET group_id = ?, is_pinned = ? WHERE id = ?",
+          effectiveGroupId,
+          effectiveGroupId === "system:pinned" ? 1 : 0,
           id,
         );
         break;
@@ -469,7 +472,7 @@ export function forkConversation(params: {
     const fc = createConversation({
       title: forkTitle,
       conversationType: "standard",
-      groupId: parentGroupId ?? undefined,
+      groupId: parentGroupId ?? "system:all",
     });
 
     db.update(conversations)
@@ -1547,17 +1550,19 @@ export function batchSetDisplayOrders(
       if (update.groupId !== undefined) {
         // New client: groupId is authoritative.
         // Derive is_pinned from groupId.
-        // Sanitize: if groupId references a deleted/unknown group, fall back
-        // to NULL to avoid FK violation that would roll back the entire batch.
+        // Sanitize: if groupId is null or references a deleted/unknown group,
+        // fall back to "system:all" to avoid FK violation that would roll back
+        // the entire batch.
         let safeGroupId = update.groupId;
-        if (
-          safeGroupId !== null &&
+        if (safeGroupId === null) {
+          safeGroupId = "system:all";
+        } else if (
           !rawGet<{ id: string }>(
             "SELECT id FROM conversation_groups WHERE id = ?",
             safeGroupId,
           )
         ) {
-          safeGroupId = null;
+          safeGroupId = "system:all";
         }
         rawRun(
           "UPDATE conversations SET display_order = ?, is_pinned = ?, group_id = ? WHERE id = ?",
@@ -1587,7 +1592,7 @@ export function batchSetDisplayOrders(
                  WHEN source IN ('schedule', 'reminder') THEN 'system:scheduled'
                  WHEN source IN ('heartbeat', 'task') THEN 'system:background'
                  WHEN conversation_type = 'background' AND COALESCE(source, '') != 'notification' THEN 'system:background'
-                 ELSE NULL
+                 ELSE 'system:all'
                END
              ELSE group_id END
              WHERE id = ?`,
