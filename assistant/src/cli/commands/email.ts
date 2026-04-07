@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 import type { Command } from "commander";
 
+import { getAssistantDomain } from "../../config/env.js";
 import { VellumPlatformClient } from "../../platform/client.js";
 import { getCliLogger } from "../logger.js";
 import { shouldOutputJson, writeOutput } from "../output.js";
@@ -9,6 +10,7 @@ import { shouldOutputJson, writeOutput } from "../output.js";
 const log = getCliLogger("email");
 
 export function registerEmailCommand(program: Command): void {
+  const domain = getAssistantDomain();
   const email = program
     .command("email")
     .description("Email channel operations")
@@ -30,12 +32,12 @@ Examples:
 
   email
     .command("register <username>")
-    .description("Register an @vellum.me email address for this assistant")
+    .description(`Register an @${domain} email address for this assistant`)
     .addHelpText(
       "after",
       `
 Arguments:
-  username   The local part of the email address (e.g. "mybot" → mybot@vellum.me)
+  username   The local part of the email address (e.g. "mybot" → mybot@${domain})
 
 Registers a new email address on the Vellum platform for the current
 assistant. Each assistant can have one email address. The address is
@@ -43,10 +45,10 @@ immediately active for receiving inbound email.
 
 Examples:
   $ assistant email register mybot
-  ✓ Registered mybot@vellum.me
+  ✓ Registered mybot@${domain}
 
   $ assistant email register support --json
-  {"address":"support@vellum.me","id":"...","created_at":"..."}`,
+  {"address":"support@${domain}","id":"...","created_at":"..."}`,
     )
     .action(async (username: string, _opts: unknown, cmd: Command) => {
       try {
@@ -122,14 +124,14 @@ immediately available for reuse.
 
 Examples:
   $ assistant email unregister
-  Remove mybot@vellum.me? (y/N) y
-  ✓ Unregistered mybot@vellum.me
+  Remove mybot@${domain}? (y/N) y
+  ✓ Unregistered mybot@${domain}
 
   $ assistant email unregister --confirm
-  ✓ Unregistered mybot@vellum.me
+  ✓ Unregistered mybot@${domain}
 
   $ assistant email unregister --json
-  {"unregistered":"mybot@vellum.me"}`,
+  {"unregistered":"mybot@${domain}"}`,
     )
     .action(async (_opts: { confirm?: boolean }, cmd: Command) => {
       try {
@@ -222,12 +224,12 @@ current usage and quota information from the platform.
 
 Examples:
   $ assistant email status
-  Address: mybot@vellum.me
+  Address: mybot@${domain}
   Status:  active
   Sent:    12 / 100 (daily)
 
   $ assistant email status --json
-  {"address":"mybot@vellum.me","status":"active","usage":{"sent_today":12,"daily_limit":100}}`,
+  {"address":"mybot@${domain}","status":"active","usage":{"sent_today":12,"daily_limit":100}}`,
     )
     .action(async (_opts: unknown, cmd: Command) => {
       try {
@@ -446,7 +448,7 @@ or --format json for the full message object.
 Examples:
   $ assistant email download msg_abc123
   From:    user@example.com
-  To:      mybot@vellum.me
+  To:      mybot@${domain}
   Subject: Hello
   Date:    2026-04-05 12:00:00
 
