@@ -167,6 +167,19 @@ extension MainWindowView {
                     groupToDelete = group
                 }
             },
+            onMarkAllRead: {
+                let unreadIds = Set(conversations.filter(\.hasUnseenLatestAssistantMessage).map(\.id))
+                guard !unreadIds.isEmpty else { return }
+                let markedIds = conversationManager.markConversationsSeen(in: unreadIds)
+                guard !markedIds.isEmpty else { return }
+                showMarkAllReadToast(count: markedIds.count, markedIds: markedIds)
+            },
+            onMarkAllReadInSubGroup: { _, ids in
+                let localIdSet = Set(ids)
+                let markedIds = conversationManager.markConversationsSeen(in: localIdSet)
+                guard !markedIds.isEmpty else { return }
+                showMarkAllReadToast(count: markedIds.count, markedIds: markedIds)
+            },
             onArchiveAll: {
                 let archivableIds = conversations.filter { !$0.isChannelConversation }.map(\.id)
                 guard !archivableIds.isEmpty else { return }
@@ -381,21 +394,7 @@ extension MainWindowView {
                 onMarkAllSeen: {
                     let markedIds = conversationManager.markAllConversationsSeen()
                     guard !markedIds.isEmpty else { return }
-                    let count = markedIds.count
-                    let toastId = windowState.showToast(
-                        message: "Marked \(count) conversation\(count == 1 ? "" : "s") as seen",
-                        style: .success,
-                        primaryAction: VToastAction(label: "Undo") {
-                            conversationManager.restoreUnseen(conversationIds: markedIds)
-                            windowState.dismissToast()
-                        },
-                        onDismiss: {
-                            conversationManager.commitPendingSeenSignals()
-                        }
-                    )
-                    conversationManager.schedulePendingSeenSignals {
-                        windowState.dismissToast(id: toastId)
-                    }
+                    showMarkAllReadToast(count: markedIds.count, markedIds: markedIds)
                 },
                 onNewConversation: { startNewConversation() },
                 onCreateGroup: assistantFeatureFlagStore.isEnabled("conversation-groups-ui") ? {
@@ -583,6 +582,25 @@ extension MainWindowView {
                     }
                 }
             )
+        }
+    }
+
+    // MARK: - Mark All Read Toast
+
+    private func showMarkAllReadToast(count: Int, markedIds: [UUID]) {
+        let toastId = windowState.showToast(
+            message: "Marked \(count) conversation\(count == 1 ? "" : "s") as read",
+            style: .success,
+            primaryAction: VToastAction(label: "Undo") {
+                conversationManager.restoreUnseen(conversationIds: markedIds)
+                windowState.dismissToast()
+            },
+            onDismiss: {
+                conversationManager.commitPendingSeenSignals()
+            }
+        )
+        conversationManager.schedulePendingSeenSignals {
+            windowState.dismissToast(id: toastId)
         }
     }
 
