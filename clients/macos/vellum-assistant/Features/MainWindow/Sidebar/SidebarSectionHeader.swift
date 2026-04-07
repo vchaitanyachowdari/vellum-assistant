@@ -22,6 +22,7 @@ struct SidebarSectionHeader: View {
     let conversationCount: Int
     let isExpanded: Bool
     let isDropTarget: Bool
+    let isDropForbidden: Bool
     let isGroupReorderTarget: Bool
     let groupDropIndicatorAtBottom: Bool
     let aggregateState: SectionAggregateState
@@ -80,7 +81,7 @@ struct SidebarSectionHeader: View {
                 }
             } else {
                 Text(group.name)
-                    .font(VFont.menuCompact)
+                    .font(VFont.bodySmallDefault)
                     .foregroundStyle(VColor.contentSecondary)
             }
 
@@ -129,7 +130,10 @@ struct SidebarSectionHeader: View {
         .pointerCursor(onHover: { hovering in
             isHeaderHovered = hovering
         })
-        .background(isDropTarget && !isGroupReorderTarget ? VColor.systemPositiveWeak : .clear)
+        .background(
+            isDropForbidden ? VColor.systemNegativeWeak :
+            isDropTarget && !isGroupReorderTarget ? VColor.systemPositiveWeak : .clear
+        )
         .cornerRadius(4)
         .overlay(alignment: groupDropIndicatorAtBottom ? .bottom : .top) {
             if isGroupReorderTarget {
