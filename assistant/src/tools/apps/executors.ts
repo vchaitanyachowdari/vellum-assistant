@@ -32,6 +32,7 @@ export interface ExecutorResult {
 export interface AppStoreReader {
   getApp(id: string): AppDefinition | null;
   listApps(): AppDefinition[];
+  appFileExists(appId: string, path: string): boolean;
 }
 
 export interface AppStoreWriter {
@@ -183,8 +184,16 @@ function App() {
 render(<App />, document.getElementById('app')!);
 `;
 
-    store.writeAppFile(app.id, "src/index.html", indexHtml);
-    store.writeAppFile(app.id, "src/main.tsx", mainTsx);
+    // Only write scaffold files when they don't already exist on disk.
+    // The LLM may have written custom source files via file_write before
+    // calling app_create, and overwriting them would destroy the real app
+    // content, leaving only the scaffold placeholder.
+    if (!store.appFileExists(app.id, "src/index.html")) {
+      store.writeAppFile(app.id, "src/index.html", indexHtml);
+    }
+    if (!store.appFileExists(app.id, "src/main.tsx")) {
+      store.writeAppFile(app.id, "src/main.tsx", mainTsx);
+    }
 
     // Compile src/ → dist/
     const appDir = getAppDirPath(app.id);
