@@ -909,30 +909,13 @@ struct SettingsDeveloperTab: View {
         isLoadingAssistantFlags = true
         assistantFlagsError = nil
         do {
-            var flags = try await featureFlagClient.getFeatureFlags()
-            // Merge persisted local overrides so user toggles survive app restarts
-            // even when the platform doesn't support the PATCH write endpoint.
-            let persistedOverrides = AssistantFeatureFlagResolver.readPersistedFlags()
-            if !persistedOverrides.isEmpty {
-                flags = flags.map { flag in
-                    if let override = persistedOverrides[flag.key] {
-                        return AssistantFeatureFlag(
-                            key: flag.key,
-                            enabled: override,
-                            defaultEnabled: flag.defaultEnabled,
-                            description: flag.description,
-                            label: flag.label
-                        )
-                    }
-                    return flag
-                }
-            }
+            let flags = try await featureFlagClient.getFeatureFlags()
             assistantFlags = flags
-            // Cache the MERGED state (including local overrides) for persistence across restarts
+            // Cache the gateway state for persistence across restarts
             let cacheValues = Dictionary(uniqueKeysWithValues: flags.map { ($0.key, $0.enabled) })
             AssistantFeatureFlagResolver.writeCachedFlags(cacheValues)
         } catch {
-            // Fall back to the bundled registry + local persisted overrides
+            // Fall back to the bundled registry + cached gateway flags
             if let registry = loadFeatureFlagRegistry() {
                 let resolved = AssistantFeatureFlagResolver.resolvedFlags(registry: registry)
                 assistantFlags = registry.assistantScopeFlags().map { def in
@@ -1083,14 +1066,14 @@ struct SettingsDeveloperTab: View {
                         userInfo: ["key": flag.key, "enabled": newValue]
                     )
                     AssistantFeatureFlagResolver.mergeCachedFlag(key: flag.key, enabled: newValue)
-                    try? AssistantFeatureFlagResolver.mergePersistedFlag(key: flag.key, enabled: newValue)
                     Task {
                         do {
                             try await featureFlagClient.setFeatureFlag(key: flag.key, enabled: newValue)
                         } catch {
-                            // Best-effort: local persistence (file + cache) already saved the override.
-                            // The gateway PATCH may fail for managed assistants where the platform
-                            // doesn't support the write endpoint. Log but don't revert.
+                            // Best-effort: the local cache already has the override for
+                            // optimistic UI. The gateway PATCH may fail for managed
+                            // assistants where the platform doesn't support the write
+                            // endpoint. Log but don't revert.
                             os.Logger(subsystem: Bundle.appBundleIdentifier, category: "FeatureFlags")
                                 .warning("Failed to sync feature flag '\(flag.key)' to gateway: \(error.localizedDescription)")
                         }
