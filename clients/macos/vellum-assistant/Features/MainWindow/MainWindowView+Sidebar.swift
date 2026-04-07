@@ -167,6 +167,20 @@ extension MainWindowView {
                     groupToDelete = group
                 }
             },
+            onArchiveAll: {
+                let archivableIds = conversations.filter { !$0.isChannelConversation }.map(\.id)
+                guard !archivableIds.isEmpty else { return }
+                archiveAllPending = ArchiveAllTarget(
+                    displayName: group.name,
+                    ids: archivableIds
+                )
+            },
+            onArchiveAllInSubGroup: { subGroupLabel, ids in
+                archiveAllPending = ArchiveAllTarget(
+                    displayName: subGroupLabel,
+                    ids: ids
+                )
+            },
             selectedConversationId: conversationManager.activeConversationId,
             onToggleExpand: { sidebar.toggleSection(group.id) },
             onToggleShowAll: { sidebar.toggleShowAll(group.id) },
@@ -419,6 +433,23 @@ extension MainWindowView {
                         groupToDelete = nil
                     }
                 )
+            }
+            .alert(
+                archiveAllPending.map { "Archive \($0.ids.count) conversation\($0.ids.count == 1 ? "" : "s") in \"\($0.displayName)\"?" } ?? "",
+                isPresented: Binding(
+                    get: { archiveAllPending != nil },
+                    set: { if !$0 { archiveAllPending = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { archiveAllPending = nil }
+                Button("Archive All", role: .destructive) {
+                    if let pending = archiveAllPending {
+                        archiveAllPending = nil
+                        conversationManager.archiveAllConversations(ids: pending.ids)
+                    }
+                }
+            } message: {
+                Text("This will archive all conversations in this group. You can restore them from Settings \u{203A} Archive.")
             }
             .background(GeometryReader { scrollGeo in
                 Color.clear.preference(
