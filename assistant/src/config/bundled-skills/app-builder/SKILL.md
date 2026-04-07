@@ -173,13 +173,16 @@ export const Header: FunctionComponent<Props> = ({ title, count }) => {
 
 **CSS:** Import CSS files directly in TSX (`import './styles.css'`). You can also use inline styles via the `style` attribute on JSX elements.
 
-**Data bridge:** The same `window.vellum.data` API works in TSX components - call it from `useEffect` hooks or event handlers:
+**Custom routes in TSX:** Use `window.vellum.fetch()` to call custom route handlers from components — see the [Custom route handlers](#custom-route-handlers-user-defined-routes) section for full details:
 
 ```tsx
-const [records, setRecords] = useState<Record[]>([]);
+const [items, setItems] = useState<Item[]>([]);
 
 useEffect(() => {
-  window.vellum.data.query().then(setRecords).catch(console.error);
+  window.vellum.fetch("/v1/x/items")
+    .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+    .then(setItems)
+    .catch(console.error);
 }, []);
 ```
 
@@ -211,7 +214,10 @@ export const App: FunctionComponent = () => {
   const [records, setRecords] = useState([]);
 
   useEffect(() => {
-    window.vellum.data.query().then(setRecords);
+    window.vellum.fetch("/v1/x/projects")
+      .then((res) => res.ok ? res.json() : Promise.reject(res.status))
+      .then(setRecords)
+      .catch(console.error);
   }, []);
 
   return (
@@ -431,9 +437,11 @@ vellum.widgets.countdown("timer-el", "2025-12-31T00:00:00Z", {
 - **Mix freely** - widgets compose well together and with custom elements
 - **ALWAYS use `vellum.widgets.*` chart functions** instead of hand-coding SVG/CSS charts. They handle overflow clipping, bounds, scaling, and dark mode. Hand-coded charts break layouts.
 
-#### Data bridge API
+#### Data bridge API (deprecated)
 
-The HTML interface can read and write records via `window.vellum.data`. All methods return Promises.
+> **Prefer custom route handlers** for new apps. The data bridge (`window.vellum.data`) only works for assistants that run on the same machine as the desktop app, which will also be deprecated soon.
+
+The native WebView can read and write app records via `window.vellum.data`. All methods return Promises.
 
 - `window.vellum.data.query()` - Returns all records: `{ id, appId, data, createdAt, updatedAt }[]`
 - `window.vellum.data.create(data)` - Creates a record. Returns the created record.
@@ -514,11 +522,12 @@ if (!res.ok) throw new Error(`HTTP ${res.status}`);
 const items = await res.json();
 
 // Create a new item
-await window.vellum.fetch("/v1/x/items", {
+const createRes = await window.vellum.fetch("/v1/x/items", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ name: "New item", status: "active" }),
 });
+if (!createRes.ok) throw new Error(`HTTP ${createRes.status}`);
 ```
 
 **Key rules:**
