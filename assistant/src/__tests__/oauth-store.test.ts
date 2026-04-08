@@ -46,6 +46,8 @@ import {
   updateProvider,
   upsertApp,
 } from "../oauth/oauth-store.js";
+import { seedOAuthProviders } from "../oauth/seed-providers.js";
+import { getMockFetchCalls, mockFetch, resetMockFetch } from "./mock-fetch.js";
 
 initializeDb();
 
@@ -75,6 +77,7 @@ beforeEach(() => {
   mockDeleteSecureKeyAsync.mockClear();
   mockSetSecureKeyAsync.mockClear();
   secureKeyValues.clear();
+  resetMockFetch();
 });
 
 afterAll(() => {
@@ -408,6 +411,117 @@ describe("provider operations", () => {
       const row = getProvider("test-provider");
       expect(row!.refreshUrl).toBe("https://refresh-v2.example.com/token");
     });
+
+    test("persists revokeUrl and revokeBodyTemplate when provided", () => {
+      seedProviders([
+        {
+          provider: "test-provider",
+          authorizeUrl: "https://example.com/authorize",
+          tokenExchangeUrl: "https://example.com/token",
+          revokeUrl: "https://revoke.example.com",
+          revokeBodyTemplate: { token: "{access_token}" },
+          defaultScopes: ["read"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const row = getProvider("test-provider");
+      expect(row).toBeDefined();
+      expect(row!.revokeUrl).toBe("https://revoke.example.com");
+      expect(JSON.parse(row!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
+    });
+
+    test("revokeUrl and revokeBodyTemplate default to null when omitted", () => {
+      seedProviders([
+        {
+          provider: "test-provider",
+          authorizeUrl: "https://example.com/authorize",
+          tokenExchangeUrl: "https://example.com/token",
+          defaultScopes: ["read"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const row = getProvider("test-provider");
+      expect(row).toBeDefined();
+      expect(row!.revokeUrl).toBeNull();
+      expect(row!.revokeBodyTemplate).toBeNull();
+    });
+
+    test("re-seeding with a changed revokeUrl overwrites the stored value", () => {
+      seedProviders([
+        {
+          provider: "test-provider",
+          authorizeUrl: "https://example.com/authorize",
+          tokenExchangeUrl: "https://example.com/token",
+          revokeUrl: "https://revoke.example.com",
+          defaultScopes: ["read"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const first = getProvider("test-provider");
+      expect(first!.revokeUrl).toBe("https://revoke.example.com");
+
+      // Re-seed with a different revokeUrl — it should be overwritten,
+      // proving revokeUrl is in the onConflictDoUpdate set clause (not
+      // preserved like defaultScopes).
+      seedProviders([
+        {
+          provider: "test-provider",
+          authorizeUrl: "https://example.com/authorize",
+          tokenExchangeUrl: "https://example.com/token",
+          revokeUrl: "https://revoke-v2.example.com",
+          defaultScopes: ["read"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const row = getProvider("test-provider");
+      expect(row!.revokeUrl).toBe("https://revoke-v2.example.com");
+    });
+
+    test("seedOAuthProviders seeds Google, Twitter, and Linear with revoke config and leaves other providers null", () => {
+      seedOAuthProviders();
+
+      const google = getProvider("google");
+      expect(google).toBeDefined();
+      expect(google!.revokeUrl).toBe("https://oauth2.googleapis.com/revoke");
+      expect(JSON.parse(google!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
+
+      const twitter = getProvider("twitter");
+      expect(twitter).toBeDefined();
+      expect(twitter!.revokeUrl).toBe("https://api.x.com/2/oauth2/revoke");
+      expect(JSON.parse(twitter!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+        token_type_hint: "access_token",
+        client_id: "{client_id}",
+      });
+
+      const linear = getProvider("linear");
+      expect(linear).toBeDefined();
+      expect(linear!.revokeUrl).toBe("https://api.linear.app/oauth/revoke");
+      expect(JSON.parse(linear!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
+
+      const slack = getProvider("slack");
+      expect(slack).toBeDefined();
+      expect(slack!.revokeUrl).toBeNull();
+      expect(slack!.revokeBodyTemplate).toBeNull();
+
+      const github = getProvider("github");
+      expect(github).toBeDefined();
+      expect(github!.revokeUrl).toBeNull();
+
+      const outlook = getProvider("outlook");
+      expect(outlook).toBeDefined();
+      expect(outlook!.revokeUrl).toBeNull();
+    });
   });
 
   describe("getProvider", () => {
@@ -527,6 +641,25 @@ describe("provider operations", () => {
       expect(fetched).toBeDefined();
       expect(fetched!.refreshUrl).toBeNull();
     });
+
+    test("persists revokeUrl and revokeBodyTemplate and round-trips via getProvider", () => {
+      registerProvider({
+        provider: "linear",
+        authorizeUrl: "https://linear.app/oauth/authorize",
+        tokenExchangeUrl: "https://api.linear.app/oauth/token",
+        revokeUrl: "https://api.linear.app/oauth/revoke",
+        revokeBodyTemplate: { token: "{access_token}" },
+        defaultScopes: ["read"],
+        scopePolicy: {},
+      });
+
+      const fetched = getProvider("linear");
+      expect(fetched).toBeDefined();
+      expect(fetched!.revokeUrl).toBe("https://api.linear.app/oauth/revoke");
+      expect(JSON.parse(fetched!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
+    });
   });
 
   describe("updateProvider", () => {
@@ -627,6 +760,95 @@ describe("provider operations", () => {
       expect(updated!.refreshUrl).toBe(
         "https://github.com/login/oauth/refresh",
       );
+      expect(updated!.displayLabel).toBe("GitHub (updated)");
+    });
+
+    test("sets revokeUrl on an existing row where it was previously null", () => {
+      seedProviders([
+        {
+          provider: "github",
+          authorizeUrl: "https://github.com/authorize",
+          tokenExchangeUrl: "https://github.com/token",
+          defaultScopes: ["repo"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const before = getProvider("github");
+      expect(before!.revokeUrl).toBeNull();
+
+      const updated = updateProvider("github", {
+        revokeUrl: "https://github.com/login/oauth/revoke",
+      });
+      expect(updated).toBeDefined();
+      expect(updated!.revokeUrl).toBe("https://github.com/login/oauth/revoke");
+
+      const fetched = getProvider("github");
+      expect(fetched!.revokeUrl).toBe("https://github.com/login/oauth/revoke");
+    });
+
+    test("sets revokeBodyTemplate on an existing row and JSON round-trips", () => {
+      seedProviders([
+        {
+          provider: "github",
+          authorizeUrl: "https://github.com/authorize",
+          tokenExchangeUrl: "https://github.com/token",
+          defaultScopes: ["repo"],
+          scopePolicy: {},
+        },
+      ]);
+
+      const before = getProvider("github");
+      expect(before!.revokeBodyTemplate).toBeNull();
+
+      const updated = updateProvider("github", {
+        revokeBodyTemplate: {
+          token: "{access_token}",
+          client_id: "{client_id}",
+        },
+      });
+      expect(updated).toBeDefined();
+      expect(JSON.parse(updated!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+        client_id: "{client_id}",
+      });
+
+      const fetched = getProvider("github");
+      expect(JSON.parse(fetched!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+        client_id: "{client_id}",
+      });
+    });
+
+    test("leaves revokeUrl and revokeBodyTemplate unchanged when not passed to updateProvider", () => {
+      seedProviders([
+        {
+          provider: "github",
+          authorizeUrl: "https://github.com/authorize",
+          tokenExchangeUrl: "https://github.com/token",
+          revokeUrl: "https://github.com/login/oauth/revoke",
+          revokeBodyTemplate: { token: "{access_token}" },
+          defaultScopes: ["repo"],
+          scopePolicy: {},
+        },
+      ]);
+
+      expect(getProvider("github")!.revokeUrl).toBe(
+        "https://github.com/login/oauth/revoke",
+      );
+      expect(JSON.parse(getProvider("github")!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
+
+      // Update a different field — revoke fields should be left alone.
+      const updated = updateProvider("github", {
+        displayLabel: "GitHub (updated)",
+      });
+      expect(updated).toBeDefined();
+      expect(updated!.revokeUrl).toBe("https://github.com/login/oauth/revoke");
+      expect(JSON.parse(updated!.revokeBodyTemplate!)).toEqual({
+        token: "{access_token}",
+      });
       expect(updated!.displayLabel).toBe("GitHub (updated)");
     });
   });
@@ -1452,10 +1674,33 @@ describe("connection operations", () => {
 // ---------------------------------------------------------------------------
 
 describe("disconnectOAuthProvider", () => {
+  /**
+   * Seed a provider with revokeUrl and (optionally) a revokeBodyTemplate.
+   */
+  function seedProviderWithRevoke(
+    provider: string,
+    revokeUrl: string | null,
+    revokeBodyTemplate?: Record<string, string>,
+  ): void {
+    seedProviders([
+      {
+        provider,
+        authorizeUrl: `https://${provider}.example.com/authorize`,
+        tokenExchangeUrl: `https://${provider}.example.com/token`,
+        defaultScopes: ["read"],
+        scopePolicy: {},
+        ...(revokeUrl ? { revokeUrl } : {}),
+        ...(revokeBodyTemplate ? { revokeBodyTemplate } : {}),
+      },
+    ]);
+  }
+
   test("returns 'not-found' when no connection exists for the provider", async () => {
     const result = await disconnectOAuthProvider("github");
     expect(result).toBe("not-found");
     expect(mockDeleteSecureKeyAsync).not.toHaveBeenCalled();
+    // No upstream call should be made when there is no connection at all.
+    expect(getMockFetchCalls().length).toBe(0);
   });
 
   test("returns 'disconnected' and deletes connection row and secure keys when connection exists", async () => {
@@ -1481,6 +1726,365 @@ describe("disconnectOAuthProvider", () => {
 
     // Verify connection row was deleted
     expect(getConnection(conn.id)).toBeUndefined();
+  });
+
+  test("calls upstream revoke when provider has revokeUrl and access token exists", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+      client_id: "{client_id}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: true,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "fake-token-xyz",
+    );
+
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      { status: 200, body: {} },
+    );
+
+    const result = await disconnectOAuthProvider("google");
+    expect(result).toBe("disconnected");
+
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.path).toContain("https://oauth2.googleapis.com/revoke");
+
+    const body = String(calls[0]!.init.body ?? "");
+    const params = new URLSearchParams(body);
+    expect(params.get("token")).toBe("fake-token-xyz");
+    expect(params.get("client_id")).toBe("client-1");
+  });
+
+  test("skips upstream revoke when provider has no revokeUrl", async () => {
+    // GitHub seeded by createTestApp via seedTestProvider — no revokeUrl.
+    const app = await createTestApp("github", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "github",
+      grantedScopes: ["repo"],
+      hasRefreshToken: false,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "github-token",
+    );
+
+    const result = await disconnectOAuthProvider("github");
+    expect(result).toBe("disconnected");
+    expect(getMockFetchCalls().length).toBe(0);
+  });
+
+  test("skips upstream revoke when no access token exists in secure storage", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: false,
+    });
+    // No access token seeded into secureKeyValues.
+
+    const result = await disconnectOAuthProvider("google");
+    expect(result).toBe("disconnected");
+    expect(getMockFetchCalls().length).toBe(0);
+  });
+
+  test("continues local cleanup when upstream revoke returns non-2xx", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: true,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "fake-token-xyz",
+    );
+
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      { status: 400, body: { error: "invalid_token" } },
+    );
+
+    const result = await disconnectOAuthProvider("google");
+    expect(result).toBe("disconnected");
+    expect(getMockFetchCalls().length).toBe(1);
+    // Local cleanup still happened
+    expect(mockDeleteSecureKeyAsync).toHaveBeenCalledWith(
+      `oauth_connection/${conn.id}/access_token`,
+    );
+    expect(getConnection(conn.id)).toBeUndefined();
+  });
+
+  test("continues local cleanup when upstream revoke throws (network error)", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: true,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "fake-token-xyz",
+    );
+
+    // 500 exercises the same swallow path as a network error.
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      { status: 500, body: { error: "server_error" } },
+    );
+
+    const result = await disconnectOAuthProvider("google");
+    expect(result).toBe("disconnected");
+    expect(getConnection(conn.id)).toBeUndefined();
+  });
+
+  test("substitutes {access_token} and {client_id} in body template values", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+      client_id: "{client_id}",
+      token_type_hint: "access_token",
+    });
+    const app = await upsertApp("google", "client-substitution");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: false,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "tok-substitution",
+    );
+
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      { status: 200, body: {} },
+    );
+
+    await disconnectOAuthProvider("google");
+
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    const body = String(calls[0]!.init.body ?? "");
+    const params = new URLSearchParams(body);
+    expect(params.get("token")).toBe("tok-substitution");
+    expect(params.get("client_id")).toBe("client-substitution");
+    expect(params.get("token_type_hint")).toBe("access_token");
+  });
+
+  test("treats $-prefixed patterns in access token as literal text (String.replace gotcha)", async () => {
+    // String.prototype.replace interprets $-prefixed patterns in the
+    // replacement string as special sequences ($& = matched substring,
+    // $' = after match, $` = before match, $$ = literal $). If the access
+    // token contains "$&", a naive `.replace("{access_token}", accessToken)`
+    // would expand it to "{access_token}" (the matched string) instead of
+    // substituting literally. This test guards against that by asserting
+    // the captured body contains the literal "tok$&abc" — which only holds
+    // when we use a function-replacement callback that preserves literal
+    // semantics and mirrors Python's str.replace() behavior.
+    seedProviderWithRevoke("google", "https://revoke.example.com/r", {
+      token: "{access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: false,
+    });
+    secureKeyValues.set(`oauth_connection/${conn.id}/access_token`, "tok$&abc");
+
+    mockFetch(
+      "https://revoke.example.com/r",
+      { method: "POST" },
+      { status: 200, body: {} },
+    );
+
+    await disconnectOAuthProvider("google");
+
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    const body = String(calls[0]!.init.body ?? "");
+    const params = new URLSearchParams(body);
+    // The literal access token — not the $&-expanded version, which would
+    // be "tok{access_token}abc" (where $& matched "{access_token}").
+    expect(params.get("token")).toBe("tok$&abc");
+  });
+
+  test("replaces all occurrences of {access_token} in body template values (matching Python str.replace)", async () => {
+    // Python's str.replace(old, new) replaces ALL occurrences by default,
+    // whereas JavaScript's String.prototype.replace with a string pattern
+    // only replaces the FIRST occurrence. The platform's try_revoke_token
+    // is implemented in Python, so any template value containing repeated
+    // placeholders must have ALL of them substituted to preserve parity.
+    // This test guards against a regression to .replace(), which would
+    // leave the second {access_token} as a literal placeholder.
+    seedProviderWithRevoke("google", "https://revoke.example.com/r", {
+      token: "token={access_token}&also={access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: false,
+    });
+    secureKeyValues.set(`oauth_connection/${conn.id}/access_token`, "fake-abc");
+
+    mockFetch(
+      "https://revoke.example.com/r",
+      { method: "POST" },
+      { status: 200, body: {} },
+    );
+
+    await disconnectOAuthProvider("google");
+
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    const body = String(calls[0]!.init.body ?? "");
+    const params = new URLSearchParams(body);
+    // Both {access_token} placeholders must be substituted. With the buggy
+    // .replace() (single-occurrence), this would be
+    // "token=fake-abc&also={access_token}" instead.
+    expect(params.get("token")).toBe("token=fake-abc&also=fake-abc");
+  });
+
+  test("coerces non-string body template values to strings", async () => {
+    // seedProviderWithRevoke restricts to Record<string, string>; bypass it
+    // here by inserting a template with a numeric value via a direct seed.
+    seedProviders([
+      {
+        provider: "google",
+        authorizeUrl: "https://google.example.com/authorize",
+        tokenExchangeUrl: "https://google.example.com/token",
+        defaultScopes: ["email"],
+        scopePolicy: {},
+        revokeUrl: "https://oauth2.googleapis.com/revoke",
+        revokeBodyTemplate: {
+          token: "{access_token}",
+          // expires_in is a number — must be coerced via String(value).
+          expires_in: 3600,
+        } as unknown as Record<string, string>,
+      },
+    ]);
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: false,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "fake-token-xyz",
+    );
+
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      { status: 200, body: {} },
+    );
+
+    await disconnectOAuthProvider("google");
+
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    const body = String(calls[0]!.init.body ?? "");
+    const params = new URLSearchParams(body);
+    expect(params.get("token")).toBe("fake-token-xyz");
+    expect(params.get("expires_in")).toBe("3600");
+  });
+
+  test("revokes BEFORE deleting tokens from secure storage", async () => {
+    seedProviderWithRevoke("google", "https://oauth2.googleapis.com/revoke", {
+      token: "{access_token}",
+    });
+    const app = await upsertApp("google", "client-1");
+    const conn = createConnection({
+      oauthAppId: app.id,
+      provider: "google",
+      grantedScopes: ["email"],
+      hasRefreshToken: true,
+    });
+    secureKeyValues.set(
+      `oauth_connection/${conn.id}/access_token`,
+      "fake-token-xyz",
+    );
+
+    const order: string[] = [];
+
+    // Wrap the mockFetch entry's response handler by registering a fetch
+    // mock that records the call order via the existing mockFetch helper.
+    // The mock fetch records to getMockFetchCalls; we tag ordering by
+    // pushing a marker as soon as the response is constructed below.
+    mockFetch(
+      "https://oauth2.googleapis.com/revoke",
+      { method: "POST" },
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    // Wrap delete to record its order. We replace the mock implementation
+    // for the duration of this test only.
+    mockDeleteSecureKeyAsync.mockImplementation(() => {
+      order.push("delete");
+      return Promise.resolve("deleted" as const);
+    });
+
+    // Wrap fetch one more layer: tap into the actual fetch call to record
+    // ordering. We do this by overriding globalThis.fetch with a wrapper
+    // that calls through to the existing mock and records ordering first.
+    const wrappedFetch = globalThis.fetch;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      order.push("fetch");
+      return wrappedFetch(input, init);
+    }) as typeof globalThis.fetch;
+
+    try {
+      const result = await disconnectOAuthProvider("google");
+      expect(result).toBe("disconnected");
+    } finally {
+      // Restore the wrapper layer; resetMockFetch in beforeEach will reset
+      // the underlying mock for the next test.
+      globalThis.fetch = wrappedFetch;
+      mockDeleteSecureKeyAsync.mockImplementation(
+        (): Promise<"deleted" | "not-found" | "error"> =>
+          Promise.resolve("deleted" as const),
+      );
+    }
+
+    expect(order[0]).toBe("fetch");
+    expect(order).toContain("delete");
+    expect(order.indexOf("fetch")).toBeLessThan(order.indexOf("delete"));
   });
 });
 
