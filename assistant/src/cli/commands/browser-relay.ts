@@ -1,83 +1,159 @@
+/**
+ * `assistant browser chrome relay <action>` CLI shim.
+ *
+ * Translates the legacy relay actions (find_tab, new_tab, navigate,
+ * evaluate, get_cookies, set_cookie, screenshot) into Chrome DevTools
+ * Protocol commands and forwards them to the daemon's
+ * `/v1/browser-cdp` HTTP endpoint, which routes the command through
+ * the connected chrome-extension WebSocket.
+ *
+ * Why this exists: PR #24329 deleted the in-process extension relay
+ * server and the original CLI surface. Two in-tree skills (amazon and
+ * influencer) still spawn `assistant browser chrome relay <action>` as
+ * a subprocess and parse the JSON output. Until those skills migrate
+ * onto the new CDP-based skill API, this shim keeps them working by
+ * preserving the legacy stdout contract:
+ *
+ *     { "ok": true,  "tabId"?: <id>, "result"?: <unknown> }
+ *     { "ok": false, "error": <string> }
+ *
+ * The CLI mints a short-lived daemon delivery JWT (same audience and
+ * scope profile as the daemon's internal callbacks) and POSTs directly
+ * to the runtime's loopback HTTP port — no gateway involvement
+ * required.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+
 import type { Command } from "commander";
 
-import type { ExtensionCommand } from "../../browser-extension-relay/protocol.js";
-import { extensionRelayServer } from "../../browser-extension-relay/server.js";
+import { getRuntimeHttpPort } from "../../config/env.js";
+import { CURRENT_POLICY_EPOCH } from "../../runtime/auth/policy.js";
+import { mintToken } from "../../runtime/auth/token-service.js";
 import {
   initAuthSigningKey,
   isSigningKeyInitialized,
   loadOrCreateSigningKey,
 } from "../../runtime/auth/token-service.js";
-import {
-  gatewayGet,
-  gatewayPost,
-} from "../../runtime/gateway-internal-client.js";
-import {
-  ensureChromeWithCdp,
-  minimizeChromeWindow,
-  restoreChromeWindow,
-} from "../../tools/browser/chrome-cdp.js";
+import { getRuntimePortFilePath } from "../../util/platform.js";
 
 // ---------------------------------------------------------------------------
-// Shared relay helper — in-process when connected, gateway HTTP otherwise
+// Daemon HTTP client
 // ---------------------------------------------------------------------------
 
-async function relayCommand(command: Record<string, unknown>): Promise<void> {
+interface BrowserCdpResponse {
+  result?: unknown;
+  error?: { code: string; message: string };
+}
+
+/**
+ * Resolve the daemon's runtime HTTP port. Prefers the runtime-port
+ * file written by the daemon at startup so non-default ports
+ * (RUNTIME_HTTP_PORT) are picked up automatically without an env var
+ * roundtrip. Falls back to the env-var-derived default.
+ */
+function resolveRuntimePort(): number {
   try {
-    // Dual-path: use in-process relay when connected (daemon context),
-    // otherwise fall back to gateway HTTP (out-of-process CLI context).
-    // We check connection status upfront rather than try/catch to avoid
-    // double-execution of side-effectful commands (navigate, new_tab, etc.)
-    // when sendCommand fails after the command was already dispatched.
-    let data: {
-      id?: string;
-      success: boolean;
-      result?: unknown;
-      error?: string;
-      tabId?: number;
-    };
-
-    if (extensionRelayServer.getStatus().connected) {
-      data = await extensionRelayServer.sendCommand(
-        command as Omit<ExtensionCommand, "id">,
-      );
-    } else {
-      // In-process relay not connected — fall back to gateway HTTP
-      if (!isSigningKeyInitialized()) {
-        initAuthSigningKey(loadOrCreateSigningKey());
+    const portFile = getRuntimePortFilePath();
+    if (existsSync(portFile)) {
+      const raw = readFileSync(portFile, "utf-8").trim();
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed > 0 && parsed < 65536) {
+        return parsed;
       }
-      ({ data } = await gatewayPost<typeof data>(
-        "/v1/browser-relay/command",
-        command,
-      ));
     }
-
-    if (data.success) {
-      process.stdout.write(
-        JSON.stringify({
-          ok: true,
-          ...(data.tabId !== undefined ? { tabId: data.tabId } : {}),
-          ...(data.result !== undefined ? { result: data.result } : {}),
-        }) + "\n",
-      );
-    } else {
-      process.stdout.write(
-        JSON.stringify({
-          ok: false,
-          error: data.error ?? "Unknown relay error",
-        }) + "\n",
-      );
-      process.exitCode = 1;
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stdout.write(JSON.stringify({ ok: false, error: message }) + "\n");
-    process.exitCode = 1;
+  } catch {
+    // Fall through to env-var default
   }
+  return getRuntimeHttpPort();
+}
+
+/**
+ * Mint a short-lived JWT acceptable to the runtime auth middleware.
+ * Mirrors `mintDaemonDeliveryToken` (sub=svc:daemon:self,
+ * scope_profile=gateway_service_v1, aud=vellum-daemon) but is minted
+ * out-of-process by the CLI using the on-disk signing key.
+ */
+function mintCliToken(): string {
+  if (!isSigningKeyInitialized()) {
+    initAuthSigningKey(loadOrCreateSigningKey());
+  }
+  return mintToken({
+    aud: "vellum-daemon",
+    sub: "svc:daemon:self",
+    scope_profile: "gateway_service_v1",
+    policy_epoch: CURRENT_POLICY_EPOCH,
+    ttlSeconds: 60,
+  });
+}
+
+/**
+ * Send a single CDP command to the daemon's /v1/browser-cdp route and
+ * return the parsed response. Throws on transport-level errors; the
+ * caller wraps the throw into a `{ ok: false, error }` envelope.
+ */
+async function postBrowserCdp(payload: {
+  cdpMethod: string;
+  cdpParams?: Record<string, unknown>;
+  cdpSessionId?: string;
+  timeoutMs?: number;
+}): Promise<BrowserCdpResponse> {
+  const port = resolveRuntimePort();
+  const token = mintCliToken();
+  const url = `http://127.0.0.1:${port}/v1/browser-cdp`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const bodyText = await resp.text();
+  let parsed: BrowserCdpResponse;
+  try {
+    parsed = JSON.parse(bodyText) as BrowserCdpResponse;
+  } catch {
+    throw new Error(
+      `Daemon returned non-JSON response (HTTP ${resp.status}): ${bodyText.slice(0, 200)}`,
+    );
+  }
+
+  if (!resp.ok) {
+    const message = parsed.error?.message ?? `HTTP ${resp.status}`;
+    throw new Error(message);
+  }
+
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
-// Stdin reader helper
+// Stdout helpers
 // ---------------------------------------------------------------------------
+
+interface RelayResultOk {
+  ok: true;
+  tabId?: number | string;
+  result?: unknown;
+}
+
+interface RelayResultErr {
+  ok: false;
+  error: string;
+}
+
+function emitOk(payload: Omit<RelayResultOk, "ok">): void {
+  const out: RelayResultOk = { ok: true, ...payload };
+  process.stdout.write(JSON.stringify(out) + "\n");
+}
+
+function emitError(message: string): void {
+  const out: RelayResultErr = { ok: false, error: message };
+  process.stdout.write(JSON.stringify(out) + "\n");
+  process.exitCode = 1;
+}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -88,6 +164,176 @@ async function readStdin(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// URL glob matching for find-tab
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a Chrome match-pattern style glob (e.g. `*://*.amazon.com/*`)
+ * into a regular expression. Matches the chrome.tabs.query semantics
+ * the legacy relay CLI exposed:
+ *
+ *   - `*` is a wildcard that matches any sequence (including `/` in
+ *     the path component, mirroring the legacy minimatch behaviour).
+ *   - All other regex metacharacters are escaped.
+ */
+function globToRegex(glob: string): RegExp {
+  const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = "^" + escaped.replace(/\*/g, ".*") + "$";
+  return new RegExp(pattern);
+}
+
+// ---------------------------------------------------------------------------
+// Action handlers — translate legacy actions into CDP commands
+// ---------------------------------------------------------------------------
+
+interface CdpTarget {
+  targetId: string;
+  type: string;
+  url: string;
+  title?: string;
+  attached?: boolean;
+}
+
+interface CdpTargetsResult {
+  targetInfos: CdpTarget[];
+}
+
+async function actionFindTab(urlPattern: string): Promise<void> {
+  try {
+    const resp = await postBrowserCdp({ cdpMethod: "Target.getTargets" });
+    const targets =
+      (resp.result as CdpTargetsResult | undefined)?.targetInfos ?? [];
+    const re = globToRegex(urlPattern);
+    const match = targets.find((t) => t.type === "page" && re.test(t.url));
+    if (!match) {
+      emitError(`No tab matched URL pattern: ${urlPattern}`);
+      return;
+    }
+    emitOk({ tabId: match.targetId });
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionNewTab(url: string): Promise<void> {
+  try {
+    const resp = await postBrowserCdp({
+      cdpMethod: "Target.createTarget",
+      cdpParams: { url },
+    });
+    const targetId = (resp.result as { targetId?: string } | undefined)
+      ?.targetId;
+    if (!targetId) {
+      emitError("Target.createTarget did not return a targetId");
+      return;
+    }
+    emitOk({ tabId: targetId });
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionNavigate(tabId: string, url: string): Promise<void> {
+  try {
+    await postBrowserCdp({
+      cdpMethod: "Page.navigate",
+      cdpParams: { url },
+      cdpSessionId: tabId,
+    });
+    emitOk({});
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionEvaluate(tabId: string, code: string): Promise<void> {
+  try {
+    const resp = await postBrowserCdp({
+      cdpMethod: "Runtime.evaluate",
+      cdpParams: {
+        expression: code,
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      cdpSessionId: tabId,
+    });
+    // CDP Runtime.evaluate returns { result: { type, value }, exceptionDetails? }.
+    // Surface exceptions as relay errors so callers don't silently get undefined.
+    const result = resp.result as
+      | {
+          result?: { value?: unknown };
+          exceptionDetails?: {
+            text?: string;
+            exception?: { description?: string };
+          };
+        }
+      | undefined;
+    if (result?.exceptionDetails) {
+      const desc =
+        result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        "Runtime exception during evaluate";
+      emitError(desc);
+      return;
+    }
+    emitOk({ result: result?.result?.value });
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionGetCookies(domain: string): Promise<void> {
+  try {
+    const resp = await postBrowserCdp({ cdpMethod: "Network.getCookies" });
+    const cookies =
+      (resp.result as { cookies?: Array<Record<string, unknown>> } | undefined)
+        ?.cookies ?? [];
+    // Filter by domain (Chrome stores cookies with leading-dot or bare-host
+    // domains depending on the Set-Cookie source). Match either form so the
+    // legacy "amazon.com" / ".amazon.com" callers both succeed.
+    const trimmed = domain.startsWith(".") ? domain.slice(1) : domain;
+    const filtered = cookies.filter((c) => {
+      const d = String(c.domain ?? "");
+      const dTrim = d.startsWith(".") ? d.slice(1) : d;
+      return dTrim === trimmed || dTrim.endsWith("." + trimmed);
+    });
+    emitOk({ result: filtered });
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionSetCookie(cookie: Record<string, unknown>): Promise<void> {
+  try {
+    await postBrowserCdp({
+      cdpMethod: "Network.setCookie",
+      cdpParams: cookie,
+    });
+    emitOk({});
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function actionScreenshot(tabId?: string): Promise<void> {
+  try {
+    const resp = await postBrowserCdp({
+      cdpMethod: "Page.captureScreenshot",
+      cdpParams: { format: "png" },
+      ...(tabId !== undefined ? { cdpSessionId: tabId } : {}),
+    });
+    const data = (resp.result as { data?: string } | undefined)?.data;
+    if (data === undefined) {
+      emitError("Page.captureScreenshot returned no data");
+      return;
+    }
+    emitOk({ result: data });
+  } catch (err) {
+    emitError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Command registration
 // ---------------------------------------------------------------------------
 
@@ -95,64 +341,34 @@ export function registerBrowserRelayCommand(program: Command): void {
   const browser = program
     .command("browser")
     .description(
-      "Browser automation, extension relay, and Chrome CDP management",
+      "Browser automation surface (`chrome relay <action>` CDP shim)",
     );
 
   browser.addHelpText(
     "after",
     `
-Browser automation commands. Use a browser-specific subcommand to interact
-with browser tabs and extensions.
-
-Examples:
-  $ assistant browser chrome relay find-tab --url "*://*.instagram.com/*"
-  $ assistant browser chrome relay evaluate --tab-id 123 --code "document.title"
-  $ assistant browser chrome relay screenshot --tab-id 123
-  $ assistant browser chrome relay status`,
-  );
-
-  const chrome = browser
-    .command("chrome")
-    .description("Chrome browser automation via the extension relay");
-
-  chrome.addHelpText(
-    "after",
-    `
-Manages a dedicated Chrome instance with Chrome DevTools Protocol (CDP)
-enabled, separate from the user's regular Chrome profile. The CDP instance
-uses a dedicated user data directory at ~/Library/Application Support/Google/Chrome-CDP
-and defaults to port 9222. Commands are routed through a Chrome extension
-relay that bridges the assistant to open Chrome tabs.
-
-Examples:
-  $ assistant browser chrome launch
-  $ assistant browser chrome launch --start-url "https://example.com" --port 9333
-  $ assistant browser chrome minimize
-  $ assistant browser chrome restore
-  $ assistant browser chrome relay status
-  $ assistant browser chrome relay find-tab --url "*://*.github.com/*"`,
-  );
-
-  const relay = chrome
-    .command("relay")
-    .description(
-      "Send commands to Chrome tabs via the browser extension relay",
-    );
-
-  relay.addHelpText(
-    "after",
-    `
-Routes commands to Chrome tabs through the browser extension relay. The relay
-connects the assistant to a Chrome extension that can inspect and control
-browser tabs. Commands support URL glob patterns for tab discovery and
-JavaScript evaluation with stdin piping for long scripts.
+Provides a thin CDP-over-HTTP shim used by in-tree skills that have not
+yet migrated onto the new CDP-based skill API. Each command translates
+the legacy action into a Chrome DevTools Protocol call and forwards it
+to the daemon's /v1/browser-cdp route, which routes through the
+connected chrome-extension WebSocket.
 
 Examples:
   $ assistant browser chrome relay find-tab --url "*://*.amazon.com/*"
   $ assistant browser chrome relay new-tab --url "https://example.com"
-  $ assistant browser chrome relay evaluate --tab-id 42 --code "document.title"
-  $ echo "document.querySelectorAll('a').length" | assistant browser chrome relay evaluate --tab-id 42`,
+  $ assistant browser chrome relay evaluate --tab-id <id> --code "document.title"
+  $ assistant browser chrome relay screenshot --tab-id <id>`,
   );
+
+  const chrome = browser
+    .command("chrome")
+    .description("Chrome browser automation via the chrome-extension proxy");
+
+  const relay = chrome
+    .command("relay")
+    .description(
+      "Send a single CDP command to a Chrome tab via the chrome extension",
+    );
 
   // -- find-tab --
 
@@ -163,21 +379,8 @@ Examples:
       "--url <pattern>",
       "URL glob pattern to match (e.g. *://*.instagram.com/*)",
     )
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --url <pattern>   Glob pattern matched against open tab URLs. Supports
-                    wildcards: *://*.instagram.com/* matches any Instagram page.
-
-Returns the tab ID of the first matching tab, or an error if no match is found.
-
-Examples:
-  $ assistant browser chrome relay find-tab --url "*://*.amazon.com/*"
-  $ assistant browser chrome relay find-tab --url "*://mail.google.com/*"`,
-    )
     .action(async (opts: { url: string }) => {
-      await relayCommand({ action: "find_tab", url: opts.url });
+      await actionFindTab(opts.url);
     });
 
   // -- new-tab --
@@ -186,20 +389,8 @@ Examples:
     .command("new-tab")
     .description("Open a new tab with the given URL")
     .requiredOption("--url <url>", "URL to open in a new tab")
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --url <url>   The full URL to open in a new Chrome tab.
-
-Returns the tab ID of the newly created tab.
-
-Examples:
-  $ assistant browser chrome relay new-tab --url "https://example.com"
-  $ assistant browser chrome relay new-tab --url "https://www.instagram.com/explore/"`,
-    )
     .action(async (opts: { url: string }) => {
-      await relayCommand({ action: "new_tab", url: opts.url });
+      await actionNewTab(opts.url);
     });
 
   // -- navigate --
@@ -207,24 +398,10 @@ Examples:
   relay
     .command("navigate")
     .description("Navigate an existing tab to a new URL")
-    .requiredOption("--tab-id <id>", "Target tab ID", parseInt)
+    .requiredOption("--tab-id <id>", "Target tab ID")
     .requiredOption("--url <url>", "URL to navigate to")
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --tab-id <id>   Numeric Chrome tab ID (from find-tab or new-tab output).
-  --url <url>     The URL to navigate the tab to.
-
-Examples:
-  $ assistant browser chrome relay navigate --tab-id 123 --url "https://example.com/page2"`,
-    )
-    .action(async (opts: { tabId: number; url: string }) => {
-      await relayCommand({
-        action: "navigate",
-        tabId: opts.tabId,
-        url: opts.url,
-      });
+    .action(async (opts: { tabId: string; url: string }) => {
+      await actionNavigate(opts.tabId, opts.url);
     });
 
   // -- evaluate --
@@ -232,45 +409,22 @@ Examples:
   relay
     .command("evaluate")
     .description("Execute JavaScript in a Chrome tab")
-    .requiredOption("--tab-id <id>", "Target tab ID", parseInt)
-    .option("--code <script>", "JavaScript code to evaluate in the tab")
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --tab-id <id>      Numeric Chrome tab ID (from find-tab or new-tab output).
-  --code <script>    JavaScript code to evaluate. If omitted, reads from stdin.
-
-If --code is omitted, reads JavaScript from stdin. This is useful for long
-scripts that would be unwieldy as a single CLI argument.
-
-Examples:
-  $ assistant browser chrome relay evaluate --tab-id 123 --code "document.title"
-  $ echo "document.querySelectorAll('a').length" | assistant browser chrome relay evaluate --tab-id 123
-  $ cat scrape.js | assistant browser chrome relay evaluate --tab-id 123`,
+    .requiredOption("--tab-id <id>", "Target tab ID")
+    .option(
+      "--code <script>",
+      "JavaScript code to evaluate (or read from stdin)",
     )
-    .action(async (opts: { tabId: number; code?: string }) => {
+    .action(async (opts: { tabId: string; code?: string }) => {
       let code: string;
       if (opts.code) {
         code = opts.code;
       } else if (process.stdin.isTTY) {
-        process.stdout.write(
-          JSON.stringify({
-            ok: false,
-            error: "No code provided. Use --code or pipe JavaScript via stdin.",
-          }) + "\n",
-        );
-        process.exitCode = 1;
+        emitError("No code provided. Use --code or pipe JavaScript via stdin.");
         return;
       } else {
         code = await readStdin();
       }
-
-      await relayCommand({
-        action: "evaluate",
-        tabId: opts.tabId,
-        code,
-      });
+      await actionEvaluate(opts.tabId, code);
     });
 
   // -- get-cookies --
@@ -279,20 +433,8 @@ Examples:
     .command("get-cookies")
     .description("Fetch cookies for a domain")
     .requiredOption("--domain <domain>", "Cookie domain to fetch")
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --domain <domain>   The cookie domain to query (e.g. ".instagram.com").
-
-Returns all cookies matching the specified domain.
-
-Examples:
-  $ assistant browser chrome relay get-cookies --domain ".instagram.com"
-  $ assistant browser chrome relay get-cookies --domain ".amazon.com"`,
-    )
     .action(async (opts: { domain: string }) => {
-      await relayCommand({ action: "get_cookies", domain: opts.domain });
+      await actionGetCookies(opts.domain);
     });
 
   // -- set-cookie --
@@ -301,236 +443,24 @@ Examples:
     .command("set-cookie")
     .description("Set a cookie in the browser")
     .requiredOption("--cookie <json>", "Cookie specification as JSON")
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --cookie <json>   JSON object specifying the cookie to set. Must include
-                    at minimum "name", "value", and "domain" fields.
-
-Examples:
-  $ assistant browser chrome relay set-cookie --cookie '{"name":"session","value":"abc123","domain":".example.com"}'`,
-    )
     .action(async (opts: { cookie: string }) => {
-      let parsed: unknown;
+      let parsed: Record<string, unknown>;
       try {
-        parsed = JSON.parse(opts.cookie);
+        parsed = JSON.parse(opts.cookie) as Record<string, unknown>;
       } catch {
-        process.stdout.write(
-          JSON.stringify({
-            ok: false,
-            error: "Invalid JSON in --cookie argument",
-          }) + "\n",
-        );
-        process.exitCode = 1;
+        emitError("Invalid JSON in --cookie argument");
         return;
       }
-      await relayCommand({ action: "set_cookie", cookie: parsed });
+      await actionSetCookie(parsed);
     });
 
   // -- screenshot --
 
   relay
     .command("screenshot")
-    .description("Capture a screenshot of a Chrome tab")
-    .option("--tab-id <id>", "Target tab ID", parseInt)
-    .addHelpText(
-      "after",
-      `
-Arguments:
-  --tab-id <id>   Optional numeric Chrome tab ID. If omitted, captures
-                  the currently active tab.
-
-Returns a base64-encoded screenshot image.
-
-Examples:
-  $ assistant browser chrome relay screenshot --tab-id 123
-  $ assistant browser chrome relay screenshot`,
-    )
-    .action(async (opts: { tabId?: number }) => {
-      await relayCommand({
-        action: "screenshot",
-        ...(opts.tabId !== undefined ? { tabId: opts.tabId } : {}),
-      });
-    });
-
-  // -- status --
-
-  relay
-    .command("status")
-    .description("Check browser extension relay connection status")
-    .addHelpText(
-      "after",
-      `
-Reports whether the browser extension relay is connected, including the
-connection ID, last heartbeat time, and number of pending commands.
-
-Examples:
-  $ assistant browser chrome relay status`,
-    )
-    .action(async () => {
-      try {
-        // Dual-path: use in-process status when connected (daemon context),
-        // otherwise query gateway HTTP (out-of-process CLI context).
-        // getStatus() is a synchronous getter that never throws — we check
-        // .connected to decide whether the local status is meaningful.
-        let data: {
-          connected: boolean;
-          connectionId?: string | null;
-          lastHeartbeatAt?: number | null;
-          pendingCommandCount: number;
-        };
-
-        const localStatus = extensionRelayServer.getStatus();
-        if (localStatus.connected) {
-          data = localStatus;
-        } else {
-          // In-process relay not connected — fall back to gateway HTTP
-          if (!isSigningKeyInitialized()) {
-            initAuthSigningKey(loadOrCreateSigningKey());
-          }
-          data = await gatewayGet<typeof data>("/v1/browser-relay/status");
-        }
-
-        process.stdout.write(
-          JSON.stringify({
-            ok: true,
-            connected: data.connected,
-            connectionId: data.connectionId ?? null,
-            lastHeartbeatAt: data.lastHeartbeatAt
-              ? new Date(data.lastHeartbeatAt).toISOString()
-              : null,
-            pendingCommandCount: data.pendingCommandCount,
-          }) + "\n",
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stdout.write(
-          JSON.stringify({ ok: false, error: message }) + "\n",
-        );
-        process.exitCode = 1;
-      }
-    });
-
-  // ---------------------------------------------------------------------------
-  // chrome launch
-  // ---------------------------------------------------------------------------
-
-  chrome
-    .command("launch")
-    .description(
-      "Launch or connect to a Chrome instance with CDP (Chrome DevTools Protocol)",
-    )
-    .option("--start-url <url>", "Initial URL to open when launching Chrome")
-    .option("--port <port>", "CDP port (default: 9222)", parseInt)
-    .addHelpText(
-      "after",
-      `
-Launches a Chrome instance with Chrome DevTools Protocol (CDP) enabled, or
-returns the existing session if Chrome is already running with open tabs.
-Idempotent — returns immediately if Chrome is already running with tabs.
-Kills stale CDP instances (CDP endpoint up but no tabs) and relaunches.
-Polls up to 15 seconds for the CDP endpoint to become ready.
-
-Arguments:
-  --start-url <url>   Initial URL to open in the new Chrome window. If
-                      omitted, Chrome opens to its default start page.
-  --port <port>       CDP port to use. Defaults to 9222.
-
-Examples:
-  $ assistant browser chrome launch
-  $ assistant browser chrome launch --start-url "https://x.com/login" --port 9333`,
-    )
-    .action(async (opts: { startUrl?: string; port?: number }) => {
-      try {
-        const session = await ensureChromeWithCdp({
-          startUrl: opts.startUrl,
-          port: opts.port,
-        });
-        process.stdout.write(
-          JSON.stringify({
-            ok: true,
-            baseUrl: session.baseUrl,
-            launchedByUs: session.launchedByUs,
-            userDataDir: session.userDataDir,
-          }) + "\n",
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stdout.write(
-          JSON.stringify({ ok: false, error: message }) + "\n",
-        );
-        process.exitCode = 1;
-      }
-    });
-
-  // ---------------------------------------------------------------------------
-  // chrome minimize
-  // ---------------------------------------------------------------------------
-
-  chrome
-    .command("minimize")
-    .description("Minimize the Chrome CDP window")
-    .option("--port <port>", "CDP port (default: 9222)", parseInt)
-    .addHelpText(
-      "after",
-      `
-Minimizes the Chrome window associated with the CDP session. Uses the
-Browser.setWindowBounds CDP method to set the window state to minimized.
-
-Arguments:
-  --port <port>   CDP port to connect to. Defaults to 9222.
-
-Examples:
-  $ assistant browser chrome minimize
-  $ assistant browser chrome minimize --port 9333`,
-    )
-    .action(async (opts: { port?: number }) => {
-      try {
-        const cdpBase = opts.port ? `http://localhost:${opts.port}` : undefined;
-        await minimizeChromeWindow(cdpBase);
-        process.stdout.write(JSON.stringify({ ok: true }) + "\n");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stdout.write(
-          JSON.stringify({ ok: false, error: message }) + "\n",
-        );
-        process.exitCode = 1;
-      }
-    });
-
-  // ---------------------------------------------------------------------------
-  // chrome restore
-  // ---------------------------------------------------------------------------
-
-  chrome
-    .command("restore")
-    .description("Restore the Chrome CDP window from minimized state")
-    .option("--port <port>", "CDP port (default: 9222)", parseInt)
-    .addHelpText(
-      "after",
-      `
-Restores (un-minimizes) the Chrome window associated with the CDP session.
-Uses the Browser.setWindowBounds CDP method to set the window state to normal.
-
-Arguments:
-  --port <port>   CDP port to connect to. Defaults to 9222.
-
-Examples:
-  $ assistant browser chrome restore
-  $ assistant browser chrome restore --port 9333`,
-    )
-    .action(async (opts: { port?: number }) => {
-      try {
-        const cdpBase = opts.port ? `http://localhost:${opts.port}` : undefined;
-        await restoreChromeWindow(cdpBase);
-        process.stdout.write(JSON.stringify({ ok: true }) + "\n");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stdout.write(
-          JSON.stringify({ ok: false, error: message }) + "\n",
-        );
-        process.exitCode = 1;
-      }
+    .description("Capture a base64-encoded PNG screenshot of a Chrome tab")
+    .option("--tab-id <id>", "Target tab ID (defaults to active tab)")
+    .action(async (opts: { tabId?: string }) => {
+      await actionScreenshot(opts.tabId);
     });
 }

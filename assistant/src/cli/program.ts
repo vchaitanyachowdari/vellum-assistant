@@ -60,6 +60,7 @@ Examples:
 
   registerDefaultAction(program);
   registerBashCommand(program);
+  registerBrowserRelayCommand(program);
   registerConversationsCommand(program);
   registerConfigCommand(program);
   registerKeysCommand(program);
@@ -85,7 +86,6 @@ Examples:
   registerOAuthCommand(program);
   registerRoutesCommand(program);
   registerSkillsCommand(program);
-  registerBrowserRelayCommand(program);
   registerUsageCommand(program);
 
   registerShotgunCommand(program);

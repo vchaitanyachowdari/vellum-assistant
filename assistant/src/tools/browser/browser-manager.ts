@@ -203,7 +203,13 @@ class BrowserManager {
   private pages = new Map<string, Page>();
   private rawPages = new Map<string, unknown>();
   private cdpSessions = new Map<string, CDPSession>();
-  private snapshotMaps = new Map<string, Map<string, string>>();
+  /**
+   * CDP backendNodeId lookup per conversation, populated by the
+   * AX-tree-based `executeBrowserSnapshot`. Click/type/hover/etc. tools
+   * resolve an element_id against this map and talk to CDP with the
+   * resulting backendNodeId.
+   */
+  private snapshotBackendNodeMaps = new Map<string, Map<string, number>>();
   private browserCdpSession: CDPSession | null = null;
   private browserWindowId: number | null = null;
   private interactiveModeSessions = new Set<string>();
@@ -358,7 +364,7 @@ class BrowserManager {
           this.rawPages.clear();
           this.cdpSessions.clear();
 
-          this.snapshotMaps.clear();
+          this.snapshotBackendNodeMaps.clear();
           this.downloads.clear();
           for (const pending of this.pendingDownloads.values()) {
             for (const waiter of pending)
@@ -384,7 +390,7 @@ class BrowserManager {
     }
 
     // Clear stale snapshot mappings and CDP state when replacing a closed page
-    this.snapshotMaps.delete(conversationId);
+    this.snapshotBackendNodeMaps.delete(conversationId);
     await this.stopScreencast(conversationId);
 
     const page = await context.newPage();
@@ -437,7 +443,7 @@ class BrowserManager {
     }
     this.pages.delete(conversationId);
     this.rawPages.delete(conversationId);
-    this.snapshotMaps.delete(conversationId);
+    this.snapshotBackendNodeMaps.delete(conversationId);
     this.downloads.delete(conversationId);
     // Reject any pending download waiters
     const pending = this.pendingDownloads.get(conversationId);
@@ -470,7 +476,7 @@ class BrowserManager {
     }
     this.pages.clear();
     this.rawPages.clear();
-    this.snapshotMaps.clear();
+    this.snapshotBackendNodeMaps.clear();
     this.downloads.clear();
     for (const pending of this.pendingDownloads.values()) {
       for (const waiter of pending) waiter.reject(new Error("Browser closed"));
@@ -526,19 +532,37 @@ class BrowserManager {
     }
   }
 
-  storeSnapshotMap(conversationId: string, map: Map<string, string>): void {
-    this.snapshotMaps.set(conversationId, map);
+  /**
+   * Store the backendNodeId lookup produced by the AX-tree-based
+   * `executeBrowserSnapshot`. Callers overwrite any prior map for the
+   * conversation so each snapshot fully supersedes the previous one.
+   */
+  storeSnapshotBackendNodeMap(
+    conversationId: string,
+    map: Map<string, number>,
+  ): void {
+    this.snapshotBackendNodeMaps.set(conversationId, map);
   }
 
-  clearSnapshotMap(conversationId: string): void {
-    this.snapshotMaps.delete(conversationId);
+  /**
+   * Drop the backendNodeId lookup for a conversation so stale element
+   * IDs from a previous snapshot cannot resolve after a navigation or
+   * page close.
+   */
+  clearSnapshotBackendNodeMap(conversationId: string): void {
+    this.snapshotBackendNodeMaps.delete(conversationId);
   }
 
-  resolveSnapshotSelector(
+  /**
+   * Look up the CDP backendNodeId for an element id produced by the
+   * most recent AX-tree snapshot. Returns `null` if no snapshot has
+   * been taken or the id is unknown.
+   */
+  resolveSnapshotBackendNodeId(
     conversationId: string,
     elementId: string,
-  ): string | null {
-    const map = this.snapshotMaps.get(conversationId);
+  ): number | null {
+    const map = this.snapshotBackendNodeMaps.get(conversationId);
     if (!map) return null;
     return map.get(elementId) ?? null;
   }

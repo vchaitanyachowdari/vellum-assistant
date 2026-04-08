@@ -382,10 +382,6 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
   // Queued message deletion
   { endpoint: "messages/queued", scopes: ["chat.write"] },
 
-  // Browser relay
-  { endpoint: "browser-relay/status", scopes: ["settings.read"] },
-  { endpoint: "browser-relay/command", scopes: ["settings.write"] },
-
   // Interfaces
   { endpoint: "interfaces", scopes: ["settings.read"] },
 
@@ -486,6 +482,10 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
   // Permission mode
   { endpoint: "permission-mode:GET", scopes: ["settings.read"] },
   { endpoint: "permission-mode", scopes: ["settings.write"] },
+
+  // Browser CDP shim — backs the `assistant browser chrome relay` CLI used
+  // by the in-tree Amazon and Influencer skills.
+  { endpoint: "browser-cdp", scopes: ["settings.write"] },
 ];
 
 for (const { endpoint, scopes } of ACTOR_ENDPOINTS) {

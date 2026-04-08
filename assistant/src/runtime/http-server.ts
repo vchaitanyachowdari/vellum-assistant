@@ -17,8 +17,6 @@ import { dirname, resolve } from "node:path";
 
 import type { ServerWebSocket } from "bun";
 
-import type { BrowserRelayWebSocketData } from "../browser-extension-relay/server.js";
-import { extensionRelayServer } from "../browser-extension-relay/server.js";
 import {
   startGuardianActionSweep,
   stopGuardianActionSweep,
@@ -120,6 +118,7 @@ import { attachmentRouteDefinitions } from "./routes/attachment-routes.js";
 import { handleGetAudio } from "./routes/audio-routes.js";
 import { avatarRouteDefinitions } from "./routes/avatar-routes.js";
 import { brainGraphRouteDefinitions } from "./routes/brain-graph-routes.js";
+import { browserCdpRouteDefinitions } from "./routes/browser-cdp-routes.js";
 import { handleBrowserExtensionPair } from "./routes/browser-extension-pair-routes.js";
 import { btwRouteDefinitions } from "./routes/btw-routes.js";
 import { callRouteDefinitions } from "./routes/call-routes.js";
@@ -240,6 +239,25 @@ const DEFAULT_HOSTNAME = "127.0.0.1";
 /** Global hard cap on request body size (512 MB — accommodates large .vbundle backup imports). */
 const MAX_REQUEST_BODY_BYTES = 512 * 1024 * 1024;
 
+/**
+ * WebSocket data attached to `/v1/browser-relay` connections. The route
+ * is used exclusively by the chrome-extension CDP proxy — inbound frames
+ * from the extension travel over HTTP (`/v1/host-browser-result`), and
+ * outbound frames are pushed through the {@link ChromeExtensionRegistry}.
+ */
+interface BrowserRelayWebSocketData {
+  wsType: "browser-relay";
+  connectionId: string;
+  /**
+   * Guardian identity derived from the JWT claims at WebSocket upgrade
+   * time. Used by the ChromeExtensionRegistry to route
+   * host_browser_request frames to the correct extension. Undefined when
+   * HTTP auth is disabled (dev bypass) or when the token's sub cannot be
+   * parsed into an actor principal.
+   */
+  guardianId?: string;
+}
+
 export class RuntimeHttpServer {
   private server: ReturnType<typeof Bun.serve> | null = null;
   private port: number;
@@ -341,14 +359,9 @@ export class RuntimeHttpServer {
         open(ws) {
           const data = ws.data as AllWebSocketData;
           if ("wsType" in data && data.wsType === "browser-relay") {
-            extensionRelayServer.handleOpen(
-              ws as ServerWebSocket<BrowserRelayWebSocketData>,
-            );
             // When the JWT sub resolved to a guardian principal at upgrade
-            // time, also register this connection with the chrome-extension
+            // time, register this connection with the chrome-extension
             // registry so host_browser_request frames can be routed to it.
-            // The legacy ExtensionCommand protocol handled by
-            // extensionRelayServer continues to work in parallel.
             if (data.guardianId) {
               getChromeExtensionRegistry().register({
                 id: data.connectionId,
@@ -376,9 +389,12 @@ export class RuntimeHttpServer {
               ? message
               : new TextDecoder().decode(message);
           if ("wsType" in data && data.wsType === "browser-relay") {
-            extensionRelayServer.handleMessage(
-              ws as ServerWebSocket<BrowserRelayWebSocketData>,
-              raw,
+            // The /v1/browser-relay socket is one-way (server → extension).
+            // The extension POSTs results via /v1/host-browser-result;
+            // inbound frames are unexpected.
+            log.debug(
+              { connectionId: data.connectionId },
+              "Unexpected inbound browser-relay message",
             );
             return;
           }
@@ -391,11 +407,6 @@ export class RuntimeHttpServer {
         close(ws, code, reason) {
           const data = ws.data as AllWebSocketData;
           if ("wsType" in data && data.wsType === "browser-relay") {
-            extensionRelayServer.handleClose(
-              ws as ServerWebSocket<BrowserRelayWebSocketData>,
-              code,
-              reason?.toString(),
-            );
             // Always attempt to unregister — the registry uses connectionId
             // as the key and no-ops if the entry is absent (e.g. when the
             // connection was never registered because guardianId was
@@ -1147,29 +1158,6 @@ export class RuntimeHttpServer {
       }),
       ...ttsRouteDefinitions(),
 
-      // Browser relay — not extracted into a domain module because
-      // these two routes depend on the in-process extensionRelayServer
-      // singleton which is only available here.
-      {
-        endpoint: "browser-relay/status",
-        method: "GET",
-        handler: () => Response.json(extensionRelayServer.getStatus()),
-      },
-      {
-        endpoint: "browser-relay/command",
-        method: "POST",
-        handler: async ({ req }) => {
-          const body = (await req.json()) as Record<string, unknown>;
-          const resp = await extensionRelayServer.sendCommand(
-            body as Omit<
-              import("../browser-extension-relay/protocol.js").ExtensionCommand,
-              "id"
-            >,
-          );
-          return Response.json(resp);
-        },
-      },
-
       // Conversation list and seen signal — kept inline because they
       // depend on multiple cross-cutting stores that aren't grouped
       // into a single domain module.
@@ -1360,6 +1348,7 @@ export class RuntimeHttpServer {
       ...approvalRouteDefinitions(),
       ...hostBashRouteDefinitions(),
       ...hostBrowserRouteDefinitions(),
+      ...browserCdpRouteDefinitions(),
       ...hostCuRouteDefinitions(),
       ...hostFileRouteDefinitions(),
       ...(this.getSkillContext

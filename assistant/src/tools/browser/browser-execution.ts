@@ -15,7 +15,7 @@ import {
   detectCaptchaChallenge,
   formatAuthChallenge,
 } from "./auth-detector.js";
-import type { PageResponse, RouteHandler } from "./browser-manager.js";
+import type { RouteHandler } from "./browser-manager.js";
 import { browserManager } from "./browser-manager.js";
 import {
   ensureScreencast,
@@ -23,6 +23,30 @@ import {
   stopAllScreencasts,
   stopBrowserScreencast,
 } from "./browser-screencast.js";
+import {
+  formatAxSnapshot,
+  transformAxTree,
+} from "./cdp-client/accessibility-snapshot.js";
+import {
+  captureScreenshotJpeg,
+  dispatchClickAt,
+  dispatchHoverAt,
+  dispatchInsertText,
+  dispatchKeyPress,
+  dispatchWheelScroll,
+  evaluateExpression,
+  focusElement,
+  getCenterPoint,
+  getCurrentUrl,
+  getPageTitle,
+  navigateAndWait,
+  querySelectorBackendNodeId,
+  scrollIntoViewIfNeeded,
+  waitForSelector as cdpWaitForSelector,
+  waitForText as cdpWaitForText,
+} from "./cdp-client/cdp-dom-helpers.js";
+import { getCdpClient } from "./cdp-client/factory.js";
+import type { CdpClient } from "./cdp-client/types.js";
 
 const log = getLogger("headless-browser");
 
@@ -32,43 +56,79 @@ export const NAVIGATE_TIMEOUT_MS = 15_000;
 
 export const ACTION_TIMEOUT_MS = 10_000;
 
-export const MAX_SNAPSHOT_ELEMENTS = 150;
-
-export const INTERACTIVE_SELECTOR = [
-  "a[href]",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  '[role="button"]',
-  '[role="link"]',
-  '[role="checkbox"]',
-  '[role="radio"]',
-  '[role="tab"]',
-  '[role="menuitem"]',
-  '[role="option"]',
-  '[role="combobox"]',
-  '[role="listbox"]',
-  '[contenteditable="true"]',
-].join(", ");
-
-export type SnapshotElement = {
-  eid: string;
-  tag: string;
-  attrs: Record<string, string>;
-  text: string;
-};
-
 export const MAX_WAIT_MS = 30_000;
 
 export const MAX_EXTRACT_LENGTH = 50_000;
 
+/**
+ * IIFE evaluated inside the page via `Runtime.evaluate` to auto-dismiss
+ * common blocker modals (regulatory notices, cookie banners) that
+ * aren't exposed in the accessibility tree. Runs silently - if no
+ * matching modal is present the expression is a no-op.
+ */
+const DISMISS_MODALS_EXPRESSION = `(() => {
+  const dismissPatterns = /^(got it|accept|ok|dismiss|i understand|close)$/i;
+  const buttons = document.querySelectorAll('button, [role="button"], input[type="submit"]');
+  for (const btn of buttons) {
+    const text = (btn.textContent || '').trim();
+    if (dismissPatterns.test(text)) {
+      const modal = btn.closest('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"], [class*="Overlay"]');
+      if (modal) {
+        btn.click();
+        break;
+      }
+    }
+  }
+})()`;
+
+/**
+ * IIFE evaluated by {@link executeBrowserExtract} when `include_links`
+ * is true. Walks `document.querySelectorAll('a[href]')`, caps at 200
+ * anchors, and shapes each entry as `{ text, href }`. Extracted to a
+ * module-level constant so the expression is shared between the
+ * runtime call site and any future refactors / tests that need to
+ * reason about the evaluated source.
+ */
+export const EXTRACT_LINKS_EXPRESSION = `
+(() => {
+  const anchors = Array.from(document.querySelectorAll('a[href]'));
+  return anchors.slice(0, 200).map(a => ({
+    text: (a.textContent || '').trim().slice(0, 80),
+    href: a.href,
+  }));
+})()
+`;
+
 // ── Shared element resolution ────────────────────────────────────────
 
-export function resolveSelector(
+/**
+ * Discriminated union returned by {@link resolveElement}. The
+ * `"backend"` variant is produced when an `element_id` from the most
+ * recent AX-tree snapshot is resolved to a CDP `backendNodeId`; the
+ * `"selector"` variant is produced when the caller passed a raw CSS
+ * `selector` that should be resolved via `DOM.querySelector` at
+ * send-time by the individual tool.
+ *
+ * Consumed by CDP-native interaction tools (click, hover, type, …)
+ * that talk to CDP directly.
+ */
+export type ResolvedElement =
+  | { kind: "backend"; backendNodeId: number; eid: string }
+  | { kind: "selector"; selector: string };
+
+/**
+ * Resolve an element reference (either `element_id` from a prior
+ * snapshot or a raw `selector`) for CDP-native tools. Returns a
+ * {@link ResolvedElement} discriminated union so callers can branch
+ * on whether a backendNodeId was recovered from the snapshot map.
+ * Returns `{ resolved: null, error: "Error: …" }` on invalid input
+ * or when an `element_id` is provided but the snapshot map is
+ * empty/stale.
+ */
+export function resolveElement(
   conversationId: string,
   input: Record<string, unknown>,
-): { selector: string | null; error: string | null } {
+): { resolved: ResolvedElement | null; error: string | null } {
   const elementId =
     typeof input.element_id === "string" ? input.element_id : null;
   const rawSelector =
@@ -76,26 +136,32 @@ export function resolveSelector(
 
   if (!elementId && !rawSelector) {
     return {
-      selector: null,
+      resolved: null,
       error: "Error: Either element_id or selector is required.",
     };
   }
 
   if (elementId) {
-    const resolved = browserManager.resolveSnapshotSelector(
+    const backendNodeId = browserManager.resolveSnapshotBackendNodeId(
       conversationId,
       elementId,
     );
-    if (!resolved) {
+    if (backendNodeId !== null) {
       return {
-        selector: null,
-        error: `Error: element_id "${elementId}" not found. Run browser_snapshot first to get current element IDs.`,
+        resolved: { kind: "backend", backendNodeId, eid: elementId },
+        error: null,
       };
     }
-    return { selector: resolved, error: null };
+    return {
+      resolved: null,
+      error: `Error: element_id "${elementId}" not found. Run browser_snapshot first to get current element IDs.`,
+    };
   }
 
-  return { selector: rawSelector!, error: null };
+  return {
+    resolved: { kind: "selector", selector: rawSelector! },
+    error: null,
+  };
 }
 
 // ── browser_navigate ─────────────────────────────────────────────────
@@ -122,7 +188,8 @@ export async function executeBrowserNavigate(
   const allowPrivateNetwork = input.allow_private_network === true;
   const safeRequestedUrl = sanitizeUrlForOutput(parsedUrl);
 
-  // Block private/local targets by default
+  // Block private/local targets by default. Runs before any CDP session
+  // is opened so we fail fast on obviously invalid URLs.
   if (!allowPrivateNetwork && isPrivateOrLocalHost(parsedUrl.hostname)) {
     return {
       content: `Error: Refusing to navigate to local/private network target (${parsedUrl.hostname}). Set allow_private_network=true if you explicitly need it.`,
@@ -130,7 +197,7 @@ export async function executeBrowserNavigate(
     };
   }
 
-  // DNS resolution check for non-literal hostnames
+  // DNS resolution check for non-literal hostnames.
   if (!allowPrivateNetwork) {
     const resolution = await resolveRequestAddress(
       parsedUrl.hostname,
@@ -145,29 +212,35 @@ export async function executeBrowserNavigate(
     }
   }
 
-  let routeHandler: RouteHandler | null = null;
-  let blockedUrl: string | null = null;
+  const cdp = getCdpClient(context);
 
-  // Start screencast if a sender is registered for this conversation
-  const sender = getSender(context.conversationId);
-  if (sender) {
+  // Screencast + handoff are Playwright-backed and only meaningful
+  // for the local sacrificial-profile path. On the extension path the
+  // user already has their own Chrome window, so both are no-ops.
+  const sender =
+    cdp.kind === "local" ? getSender(context.conversationId) : null;
+  if (cdp.kind === "local" && sender) {
     await ensureScreencast(context.conversationId);
   }
 
+  // SSRF route interception is a Playwright-specific affordance used on
+  // the local path to block redirect-time requests to private networks.
+  // On the extension path we rely on the pre-CDP URL validation above;
+  // see phase3-cdp-migration.md PR 7 for the rationale.
+  let routeHandler: RouteHandler | null = null;
+  let blockedUrl: string | null = null;
+
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
     log.debug(
       { url: safeRequestedUrl, conversationId: context.conversationId },
       "Navigating",
     );
 
-    // Install request interception to block redirects/sub-requests to private networks.
-    // This prevents SSRF bypass via server-side redirects and DNS rebinding attacks,
-    // since Playwright follows redirects internally and performs its own DNS resolution.
-    // Only skip for connectOverCDP browsers where page.route() is unreliable.
-    if (!allowPrivateNetwork && browserManager.supportsRouteInterception) {
+    if (
+      cdp.kind === "local" &&
+      !allowPrivateNetwork &&
+      browserManager.supportsRouteInterception
+    ) {
       // Cache DNS results per-hostname to avoid redundant lookups on subrequests
       // (heavy sites like DoorDash fire hundreds of requests to the same CDN hostnames).
       // Use a short TTL to mitigate DNS rebinding attacks where a hostname first
@@ -242,47 +315,60 @@ export async function executeBrowserNavigate(
           );
         }
       };
+      // Bridge through browserManager to reach the Playwright Page for
+      // route installation. The route handler intercepts redirect-time
+      // requests before Page.navigate's network fetches can hit them.
+      const page = await browserManager.getOrCreateSessionPage(
+        context.conversationId,
+      );
       await page.route("**/*", routeHandler);
     }
 
-    // Use domcontentloaded but with a shorter timeout - if it times out,
-    // the page is likely still usable (heavy SPAs like DoorDash keep loading
-    // scripts after DOMContentLoaded). Fall back gracefully instead of failing.
-    let response: PageResponse | null = null;
-    let navigationTimedOut = false;
-    const urlBeforeNav = page.url();
-    try {
-      response = await page.goto(parsedUrl.href, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATE_TIMEOUT_MS,
-      });
-    } catch (navErr) {
-      const navMsg = navErr instanceof Error ? navErr.message : String(navErr);
-      if (navMsg.includes("Timeout") || navMsg.includes("timeout")) {
-        // If the page URL never changed from before navigation, the page
-        // never actually loaded - re-throw instead of reporting success.
-        if (page.url() === urlBeforeNav && urlBeforeNav !== parsedUrl.href) {
-          throw navErr;
-        }
-        navigationTimedOut = true;
-        log.info(
-          { url: safeRequestedUrl },
-          "Navigation timed out waiting for domcontentloaded, continuing with partial load",
+    // Read the current URL BEFORE calling navigateAndWait so we can
+    // detect the "page never moved" case on timeout.
+    const urlBeforeNav = await getCurrentUrl(cdp, context.signal);
+
+    // Navigate via CDP Page.navigate + document.readyState polling.
+    // navigateAndWait returns { finalUrl, timedOut }; HTTP status is
+    // not available on the CDP path because Page.navigate does not
+    // surface the response status.
+    const { finalUrl, timedOut: navigationTimedOut } = await navigateAndWait(
+      cdp,
+      parsedUrl.href,
+      { timeoutMs: NAVIGATE_TIMEOUT_MS },
+      context.signal,
+    );
+    if (navigationTimedOut) {
+      // If the page URL never changed from before navigation, the page
+      // never actually loaded - re-throw instead of reporting success.
+      if (finalUrl === urlBeforeNav && urlBeforeNav !== parsedUrl.href) {
+        throw new Error(
+          `Navigation to ${parsedUrl.href} timed out after ${NAVIGATE_TIMEOUT_MS}ms`,
         );
-      } else {
-        throw navErr;
       }
+      log.info(
+        { url: safeRequestedUrl },
+        "Navigation timed out waiting for document.readyState, continuing with partial load",
+      );
     }
 
-    // Remove the route handler now that navigation is complete
+    // Remove the Playwright route handler now that navigation is
+    // complete (local path only).
     if (routeHandler) {
+      const page = await browserManager.getOrCreateSessionPage(
+        context.conversationId,
+      );
       await page.unroute("**/*", routeHandler);
       routeHandler = null;
     }
 
-    // Reposition the browser window after navigation so the user can watch.
-    // positionWindowSidebar() is a no-op when browserCdpSession is unavailable.
-    if (!browserManager.isInteractive(context.conversationId)) {
+    // Window positioning is a Playwright-internal affordance - on the
+    // extension path the user owns their Chrome window, so positioning
+    // is a no-op.
+    if (
+      cdp.kind === "local" &&
+      !browserManager.isInteractive(context.conversationId)
+    ) {
       await browserManager.positionWindowSidebar();
     }
 
@@ -293,38 +379,34 @@ export async function executeBrowserNavigate(
       };
     }
 
-    // Navigation changed the page content, so clear stale snapshot mappings.
-    // Without this, element IDs from a previous page could resolve and cause
-    // confusing Playwright timeout errors instead of the actionable
-    // "run browser_snapshot first" message.
-    browserManager.clearSnapshotMap(context.conversationId);
+    // Navigation changed the page content, so clear stale snapshot
+    // mappings regardless of backend. The backendNodeId map is shared
+    // per-conversation state that needs to be invalidated on any nav.
+    browserManager.clearSnapshotBackendNodeMap(context.conversationId);
 
-    // Auto-dismiss common blocker modals (regulatory notices, cookie banners)
-    // that aren't exposed in the accessibility tree. Runs silently - if no
-    // modal is present the evaluate is a no-op.
+    // Auto-dismiss common blocker modals (regulatory notices, cookie
+    // banners) that aren't exposed in the accessibility tree. Runs
+    // silently - if no modal is present the evaluate is a no-op.
     try {
-      await page.evaluate(`(() => {
-        const dismissPatterns = /^(got it|accept|ok|dismiss|i understand|close)$/i;
-        const buttons = document.querySelectorAll('button, [role="button"], input[type="submit"]');
-        for (const btn of buttons) {
-          const text = (btn.textContent || '').trim();
-          if (dismissPatterns.test(text)) {
-            const modal = btn.closest('[role="dialog"], [class*="modal"], [class*="Modal"], [class*="overlay"], [class*="Overlay"]');
-            if (modal) {
-              btn.click();
-              break;
-            }
-          }
-        }
-      })()`);
+      await evaluateExpression(
+        cdp,
+        DISMISS_MODALS_EXPRESSION,
+        {},
+        context.signal,
+      );
     } catch {
       // Page may have navigated during evaluate - safe to ignore
     }
 
-    const finalUrl = page.url();
     const safeFinalUrl = sanitizeUrlForOutput(new URL(finalUrl));
-    const title = await page.title();
-    const status = response?.status() ?? null;
+    const title = await getPageTitle(cdp, context.signal);
+    // HTTP status is not available on the CDP path: `Page.navigate`
+    // resolves the frame id and (on failure) an error text, but does
+    // not carry the response status code. Both the local and extension
+    // paths therefore print "unknown" here. A future phase may subscribe
+    // to `Network.responseReceived` events during the navigation window
+    // if the status is needed again.
+    const status: number | null = null;
 
     const lines: string[] = [
       `Requested URL: ${safeRequestedUrl}`,
@@ -335,7 +417,7 @@ export async function executeBrowserNavigate(
 
     if (navigationTimedOut) {
       lines.push(
-        `Note: Page is still loading (domcontentloaded timed out). The page should still be interactive - use browser_snapshot to check.`,
+        `Note: Page is still loading (document.readyState timed out). The page should still be interactive - use browser_snapshot to check.`,
       );
     }
 
@@ -343,10 +425,14 @@ export async function executeBrowserNavigate(
       lines.push(`Note: Page redirected from the requested URL.`);
     }
 
-    // Detect auth challenges (login pages, 2FA, OAuth consent) and CAPTCHA challenges
+    // Detect auth challenges (login pages, 2FA, OAuth consent) and CAPTCHA
+    // challenges via the CDP-migrated auth-detector helpers.
     try {
-      const authChallenge = await detectAuthChallenge(page);
-      const captchaChallenge = await detectCaptchaChallenge(page);
+      const authChallenge = await detectAuthChallenge(cdp, context.signal);
+      const captchaChallenge = await detectCaptchaChallenge(
+        cdp,
+        context.signal,
+      );
       // CAPTCHA takes priority - it blocks all interaction including login
       let challenge = captchaChallenge ?? authChallenge;
 
@@ -359,12 +445,12 @@ export async function executeBrowserNavigate(
             return { content: "Navigation cancelled.", isError: true };
           }
           await new Promise((r) => setTimeout(r, 1000));
-          const still = await detectCaptchaChallenge(page);
+          const still = await detectCaptchaChallenge(cdp, context.signal);
           if (!still) {
             log.info("CAPTCHA auto-resolved");
             // Re-check for auth challenge now that CAPTCHA is gone -
             // the page may have loaded a login form behind it.
-            challenge = await detectAuthChallenge(page);
+            challenge = await detectAuthChallenge(cdp, context.signal);
             break;
           }
         }
@@ -373,7 +459,11 @@ export async function executeBrowserNavigate(
       if (challenge) {
         if (challenge.type === "captcha") {
           // CAPTCHA persisted after auto-resolve wait - hand off to user
-          if (sender) {
+          // only when we have a local Playwright-managed Chrome window
+          // AND a sender is registered. The extension path falls back
+          // to the text-only "solve manually" branch because the user
+          // already owns their Chrome window.
+          if (cdp.kind === "local" && sender) {
             const { startHandoff } = await import("./browser-handoff.js");
             await startHandoff(context.conversationId, {
               reason: "captcha",
@@ -381,15 +471,18 @@ export async function executeBrowserNavigate(
                 "Cloudflare verification detected. Please solve the CAPTCHA in the Chrome window. The browser will automatically detect when you're done and resume.",
               bringToFront: true,
             });
-            const newUrl = page.url();
-            const newTitle = await page.title();
+            const newUrl = await getCurrentUrl(cdp, context.signal);
+            const newTitle = await getPageTitle(cdp, context.signal);
             lines.push("");
             lines.push(
               `CAPTCHA solved by user. Current page: ${newTitle} (${newUrl})`,
             );
 
             // Re-check for auth challenges - the page behind the CAPTCHA may have a login form
-            const postCaptchaAuth = await detectAuthChallenge(page);
+            const postCaptchaAuth = await detectAuthChallenge(
+              cdp,
+              context.signal,
+            );
             if (postCaptchaAuth) {
               lines.push("");
               lines.push(formatAuthChallenge(postCaptchaAuth));
@@ -448,7 +541,7 @@ export async function executeBrowserNavigate(
 
     return { content: lines.join("\n"), isError: false };
   } catch (err) {
-    // Best-effort cleanup of route handler on error
+    // Best-effort cleanup of route handler on error (local path only)
     if (routeHandler) {
       try {
         const page = await browserManager.getOrCreateSessionPage(
@@ -461,8 +554,8 @@ export async function executeBrowserNavigate(
     }
 
     // If the route handler blocked a redirect to a private network address,
-    // page.goto() throws. Return the clear security message instead of the
-    // raw Playwright error (which could leak credentials from the URL).
+    // Page.navigate throws. Return the clear security message instead of
+    // the raw underlying error (which could leak credentials from the URL).
     if (blockedUrl) {
       return {
         content: `Error: Navigation blocked. A request targeted a local/private network address (${blockedUrl}). Set allow_private_network=true if you explicitly need it.`,
@@ -473,6 +566,8 @@ export async function executeBrowserNavigate(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err, url: safeRequestedUrl }, "Navigation failed");
     return { content: `Error: Navigation failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -482,79 +577,42 @@ export async function executeBrowserSnapshot(
   _input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
+    const currentUrl = await getCurrentUrl(cdp, context.signal);
+    const title = await getPageTitle(cdp, context.signal);
+
+    // Pull the full accessibility tree via CDP and fold it into typed
+    // interactive elements + an `eid → backendNodeId` map. Interaction
+    // tools (click, hover, type, …) resolve element_id against this map
+    // and jump straight to CDP DOM commands without another round-trip
+    // through any selector engine.
+    await cdp.send("Accessibility.enable", {}, context.signal);
+    const rawTree = await cdp.send(
+      "Accessibility.getFullAXTree",
+      {},
+      context.signal,
     );
-    const currentUrl = page.url();
-    const title = await page.title();
+    const { elements, selectorMap: backendNodeMap } = transformAxTree(rawTree);
 
-    const elements = (await page.evaluate(`
-      (() => {
-        const SELECTOR = ${JSON.stringify(INTERACTIVE_SELECTOR)};
-        const MAX = ${MAX_SNAPSHOT_ELEMENTS};
-        // Clear stale eid attributes from previous snapshots
-        document.querySelectorAll('[data-vellum-eid]').forEach(el => el.removeAttribute('data-vellum-eid'));
-        const els = Array.from(document.querySelectorAll(SELECTOR));
-        const visible = els.filter(el => {
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        });
-        return visible.slice(0, MAX).map((el, i) => {
-          const eid = 'e' + (i + 1);
-          el.setAttribute('data-vellum-eid', eid);
-          const tag = el.tagName.toLowerCase();
-          const attrs = {};
-          for (const attr of ['type', 'name', 'placeholder', 'href', 'value', 'role', 'aria-label', 'id']) {
-            if (el.hasAttribute(attr)) attrs[attr] = el.getAttribute(attr);
-          }
-          const text = (el.textContent || '').trim().slice(0, 80);
-          return { eid, tag, attrs, text };
-        });
-      })()
-    `)) as SnapshotElement[];
+    browserManager.storeSnapshotBackendNodeMap(
+      context.conversationId,
+      backendNodeMap,
+    );
 
-    // Build and store selector map
-    const selectorMap = new Map<string, string>();
-    for (const el of elements) {
-      selectorMap.set(el.eid, `[data-vellum-eid="${el.eid}"]`);
-    }
-    browserManager.storeSnapshotMap(context.conversationId, selectorMap);
-
-    // Format output
-    const lines: string[] = [
-      `URL: ${currentUrl}`,
-      `Title: ${title || "(none)"}`,
-      "",
-    ];
-
-    if (elements.length === 0) {
-      lines.push("(no interactive elements found)");
-    } else {
-      for (const el of elements) {
-        let desc = `<${el.tag}`;
-        for (const [key, val] of Object.entries(el.attrs)) {
-          desc += ` ${key}="${val}"`;
-        }
-        desc += ">";
-        if (el.text) {
-          desc += ` ${el.text}`;
-        }
-        lines.push(`[${el.eid}] ${desc}`);
-      }
-      lines.push("");
-      lines.push(
-        `${elements.length} interactive element${
-          elements.length === 1 ? "" : "s"
-        } found.`,
-      );
-    }
-
-    return { content: lines.join("\n"), isError: false };
+    return {
+      content: formatAxSnapshot(
+        { elements, selectorMap: backendNodeMap },
+        { url: currentUrl, title },
+      ),
+      isError: false,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Snapshot failed");
     return { content: `Error: Snapshot failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -566,15 +624,13 @@ export async function executeBrowserScreenshot(
 ): Promise<ToolExecutionResult> {
   const fullPage = input.full_page === true;
 
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
+    const buffer = await captureScreenshotJpeg(
+      cdp,
+      { quality: 80, fullPage },
+      context.signal,
     );
-    const buffer = await page.screenshot({
-      type: "jpeg",
-      quality: 80,
-      fullPage,
-    });
     const base64Data = buffer.toString("base64");
 
     const imageBlock: ImageContent = {
@@ -597,6 +653,8 @@ export async function executeBrowserScreenshot(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Screenshot failed");
     return { content: `Error: Screenshot failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -606,29 +664,46 @@ export async function executeBrowserClose(
   input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
+  const cdp = getCdpClient(context);
   try {
-    const sender = getSender(context.conversationId);
-    if (sender) {
-      await stopBrowserScreencast(context.conversationId);
-    }
+    if (cdp.kind === "local") {
+      // Local/sacrificial-profile path: tear down the Playwright page,
+      // screencast, and associated CDP state for this conversation.
+      const sender = getSender(context.conversationId);
+      if (sender) {
+        await stopBrowserScreencast(context.conversationId);
+      }
 
-    if (input.close_all_pages === true) {
-      await stopAllScreencasts();
-      await browserManager.closeAllPages();
+      if (input.close_all_pages === true) {
+        await stopAllScreencasts();
+        await browserManager.closeAllPages();
+        return {
+          content: "All browser pages and context closed.",
+          isError: false,
+        };
+      }
+      await browserManager.closeSessionPage(context.conversationId);
       return {
-        content: "All browser pages and context closed.",
+        content: "Browser page closed for this conversation.",
         isError: false,
       };
     }
-    await browserManager.closeSessionPage(context.conversationId);
+
+    // Extension path: the user owns their Chrome tab — we must not
+    // close it. Only drop the cached snapshot state so stale eids
+    // from prior snapshots cannot be resolved by later tool calls.
+    browserManager.clearSnapshotBackendNodeMap(context.conversationId);
     return {
-      content: "Browser page closed for this conversation.",
+      content:
+        "Browser session cleared. (Your Chrome tab was not closed — close it yourself if desired.)",
       isError: false,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Close failed");
     return { content: `Error: Close failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -638,23 +713,97 @@ export async function executeBrowserClick(
   input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const { selector, error } = resolveSelector(context.conversationId, input);
+  const { resolved, error } = resolveElement(context.conversationId, input);
   if (error) return { content: error, isError: true };
 
-  const timeout =
-    typeof input.timeout === "number" ? input.timeout : ACTION_TIMEOUT_MS;
-
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
-    await page.click(selector!, { timeout });
-    return { content: `Clicked element: ${selector}`, isError: false };
+    let backendNodeId: number;
+    if (resolved!.kind === "backend") {
+      backendNodeId = resolved!.backendNodeId;
+    } else {
+      // Wait until the selector matches a visible element. Mirrors
+      // Playwright's `page.click(selector, { timeout })` semantics
+      // and lets click work on async-hydrated pages where the
+      // target may not yet exist when the tool is invoked.
+      // cdpWaitForSelector returns the backendNodeId so we don't
+      // need a separate querySelectorBackendNodeId round-trip.
+      backendNodeId = await cdpWaitForSelector(
+        cdp,
+        resolved!.selector,
+        ACTION_TIMEOUT_MS,
+        context.signal,
+      );
+    }
+    await scrollIntoViewIfNeeded(cdp, backendNodeId, context.signal);
+    const point = await getCenterPoint(cdp, backendNodeId, context.signal);
+    await dispatchClickAt(cdp, point, context.signal);
+    const desc =
+      resolved!.kind === "backend"
+        ? `eid=${resolved!.eid}`
+        : resolved!.selector;
+    return { content: `Clicked element: ${desc}`, isError: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err, selector }, "Click failed");
+    log.error({ err }, "Click failed");
     return { content: `Error: Click failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
+}
+
+// ── Shared input helpers ─────────────────────────────────────────────
+
+/**
+ * Focus an element, clear its existing value (handling both
+ * `<input>`/`<textarea>` and `contentEditable` targets), re-focus
+ * (sites sometimes blur on a programmatic value reset), and insert
+ * the requested text via `Input.insertText`.
+ *
+ * Used by both `executeBrowserType` and `executeBrowserFillCredential`
+ * so credential fills cannot append to autofilled / pre-populated
+ * fields — appending would leak the existing value into the broker
+ * payload and corrupt the resulting password.
+ */
+async function clearAndInsertText(
+  cdp: CdpClient,
+  backendNodeId: number,
+  value: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await focusElement(cdp, backendNodeId, signal);
+
+  // Resolve the node to a Runtime.RemoteObject so we can invoke a
+  // function on the element itself via Runtime.callFunctionOn. This
+  // is more reliable than a keyboard select-all + delete sequence
+  // across input, textarea, and contenteditable targets.
+  const { object } = await cdp.send<{ object: { objectId: string } }>(
+    "DOM.resolveNode",
+    { backendNodeId },
+    signal,
+  );
+  await cdp.send(
+    "Runtime.callFunctionOn",
+    {
+      objectId: object.objectId,
+      functionDeclaration: `function() {
+        if (typeof this.value === "string") {
+          this.value = "";
+        } else if (this.isContentEditable) {
+          this.textContent = "";
+        }
+        this.dispatchEvent(new Event("input", { bubbles: true }));
+      }`,
+      arguments: [],
+    },
+    signal,
+  );
+
+  // Re-focus after clearing — some sites move focus when the value
+  // property is reassigned programmatically.
+  await focusElement(cdp, backendNodeId, signal);
+
+  await dispatchInsertText(cdp, value, signal);
 }
 
 // ── browser_type ─────────────────────────────────────────────────────
@@ -663,7 +812,7 @@ export async function executeBrowserType(
   input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const { selector, error } = resolveSelector(context.conversationId, input);
+  const { resolved, error } = resolveElement(context.conversationId, input);
   if (error) return { content: error, isError: true };
 
   const text = typeof input.text === "string" ? input.text : "";
@@ -674,40 +823,45 @@ export async function executeBrowserType(
   const clearFirst = input.clear_first !== false; // default true
   const pressEnter = input.press_enter === true;
 
-  try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
+  const targetDescription =
+    resolved!.kind === "backend"
+      ? `element_id "${resolved!.eid}"`
+      : resolved!.selector;
 
-    const fillTimeout =
-      typeof input.timeout === "number" ? input.timeout : ACTION_TIMEOUT_MS;
+  const cdp = getCdpClient(context);
+  try {
+    let backendNodeId: number;
+    if (resolved!.kind === "backend") {
+      backendNodeId = resolved!.backendNodeId;
+    } else {
+      backendNodeId = await querySelectorBackendNodeId(
+        cdp,
+        resolved!.selector,
+        context.signal,
+      );
+    }
 
     if (clearFirst) {
-      await page.fill(selector!, text, { timeout: fillTimeout });
+      await clearAndInsertText(cdp, backendNodeId, text, context.signal);
     } else {
-      // Read existing content before appending. Use .value for form inputs,
-      // with fallback to .innerText for contenteditable elements (preserves
-      // visual line breaks from <br> and block elements, unlike textContent).
-      const currentValue = (await page.evaluate(
-        `(() => { const el = document.querySelector(${JSON.stringify(
-          selector!,
-        )}); if (!el) return ''; if (typeof el.value === 'string') return el.value; return el.innerText ?? ''; })()`,
-      )) as string;
-      await page.fill(selector!, currentValue + text, { timeout: fillTimeout });
+      await focusElement(cdp, backendNodeId, context.signal);
+      await dispatchInsertText(cdp, text, context.signal);
     }
 
     if (pressEnter) {
-      await page.press(selector!, "Enter");
+      await dispatchKeyPress(cdp, "Enter", context.signal);
     }
 
-    const lines = [`Typed into element: ${selector}`];
+    const lines = [`Typed into element: ${targetDescription}`];
     if (clearFirst) lines.push("(cleared existing content first)");
     if (pressEnter) lines.push("(pressed Enter after typing)");
     return { content: lines.join("\n"), isError: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err, selector }, "Type failed");
+    log.error({ err, target: targetDescription }, "Type failed");
     return { content: `Error: Type failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -722,39 +876,56 @@ export async function executeBrowserPressKey(
     return { content: "Error: key is required.", isError: true };
   }
 
+  const elementId =
+    typeof input.element_id === "string" ? input.element_id : null;
+  const rawSelector =
+    typeof input.selector === "string" ? input.selector : null;
+  const hasTarget = elementId !== null || rawSelector !== null;
+
+  let targetDescription: string | null = null;
+  let resolved: ResolvedElement | null = null;
+  if (hasTarget) {
+    const res = resolveElement(context.conversationId, input);
+    if (res.error) {
+      return { content: res.error, isError: true };
+    }
+    resolved = res.resolved;
+    targetDescription =
+      resolved!.kind === "backend"
+        ? `element_id "${resolved!.eid}"`
+        : resolved!.selector;
+  }
+
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
-
-    // If element_id or selector is provided, press key on that element
-    const elementId =
-      typeof input.element_id === "string" ? input.element_id : null;
-    const rawSelector =
-      typeof input.selector === "string" ? input.selector : null;
-
-    if (elementId || rawSelector) {
-      const { selector, error } = resolveSelector(
-        context.conversationId,
-        input,
-      );
-      if (error) {
-        return { content: error, isError: true };
+    if (resolved) {
+      let backendNodeId: number;
+      if (resolved.kind === "backend") {
+        backendNodeId = resolved.backendNodeId;
+      } else {
+        backendNodeId = await querySelectorBackendNodeId(
+          cdp,
+          resolved.selector,
+          context.signal,
+        );
       }
-      await page.press(selector!, key);
+      await focusElement(cdp, backendNodeId, context.signal);
+      await dispatchKeyPress(cdp, key, context.signal);
       return {
-        content: `Pressed "${key}" on element: ${selector}`,
+        content: `Pressed "${key}" on element: ${targetDescription}`,
         isError: false,
       };
     }
 
-    // No target -> press key on the page (focused element)
-    await page.keyboard.press(key);
+    // No target -> press key on the currently focused element
+    await dispatchKeyPress(cdp, key, context.signal);
     return { content: `Pressed "${key}"`, isError: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err, key }, "Press key failed");
     return { content: `Error: Press key failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -776,35 +947,49 @@ export async function executeBrowserScroll(
   const amount =
     typeof input.amount === "number" ? Math.abs(input.amount) : 500;
 
+  let deltaX = 0;
+  let deltaY = 0;
+  switch (direction) {
+    case "up":
+      deltaY = -amount;
+      break;
+    case "down":
+      deltaY = amount;
+      break;
+    case "left":
+      deltaX = -amount;
+      break;
+    case "right":
+      deltaX = amount;
+      break;
+  }
+
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
+    // Fetch viewport dimensions so we can dispatch the wheel event at
+    // the viewport center — scrolling from (0, 0) misses sticky
+    // headers and overflow containers on many sites.
+    const { w, h } = await evaluateExpression<{ w: number; h: number }>(
+      cdp,
+      "({ w: window.innerWidth, h: window.innerHeight })",
+      {},
+      context.signal,
     );
 
-    let deltaX = 0;
-    let deltaY = 0;
-    switch (direction) {
-      case "up":
-        deltaY = -amount;
-        break;
-      case "down":
-        deltaY = amount;
-        break;
-      case "left":
-        deltaX = -amount;
-        break;
-      case "right":
-        deltaX = amount;
-        break;
-    }
-
-    await page.mouse.wheel(deltaX, deltaY);
+    await dispatchWheelScroll(
+      cdp,
+      { x: w / 2, y: h / 2 },
+      { deltaX, deltaY },
+      context.signal,
+    );
 
     return { content: `Scrolled ${direction} by ${amount}px`, isError: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err, direction }, "Scroll failed");
     return { content: `Error: Scroll failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -814,7 +999,7 @@ export async function executeBrowserSelectOption(
   input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const { selector, error } = resolveSelector(context.conversationId, input);
+  const { resolved, error } = resolveElement(context.conversationId, input);
   if (error) return { content: error, isError: true };
 
   const value = typeof input.value === "string" ? input.value : undefined;
@@ -828,32 +1013,106 @@ export async function executeBrowserSelectOption(
     };
   }
 
+  const targetDescription =
+    resolved!.kind === "backend"
+      ? `element_id "${resolved!.eid}"`
+      : resolved!.selector;
+
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
+    let backendNodeId: number;
+    if (resolved!.kind === "backend") {
+      backendNodeId = resolved!.backendNodeId;
+    } else {
+      backendNodeId = await querySelectorBackendNodeId(
+        cdp,
+        resolved!.selector,
+        context.signal,
+      );
+    }
+
+    // CDP does not expose a native "set select value" command, so we
+    // resolve the node to a Runtime.RemoteObject and invoke a function
+    // on it that applies value/label/index and dispatches `input`
+    // followed by `change` (HTML spec order — Angular's
+    // DefaultValueAccessor listens for `input`, so missing it breaks
+    // form bindings on Angular sites).
+    const { object } = await cdp.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId },
+      context.signal,
+    );
+    const callResult = await cdp.send<{
+      result?: { value?: boolean };
+    }>(
+      "Runtime.callFunctionOn",
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function(value, label, index) {
+          let matched = false;
+          if (value !== null && value !== undefined) {
+            for (const opt of this.options) {
+              if (opt.value === value) {
+                this.value = value;
+                matched = true;
+                break;
+              }
+            }
+          } else if (label !== null && label !== undefined) {
+            for (const opt of this.options) {
+              if (opt.label === label) {
+                this.value = opt.value;
+                matched = true;
+                break;
+              }
+            }
+          } else if (index !== null && index !== undefined) {
+            if (index >= 0 && index < this.options.length) {
+              this.selectedIndex = index;
+              matched = true;
+            }
+          }
+          if (matched) {
+            this.dispatchEvent(new Event("input", { bubbles: true }));
+            this.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          return matched;
+        }`,
+        arguments: [
+          { value: value ?? null },
+          { value: label ?? null },
+          { value: index ?? null },
+        ],
+        returnByValue: true,
+      },
+      context.signal,
     );
 
-    const option: Record<string, string | number> = {};
-    if (value !== undefined) option.value = value;
-    else if (label !== undefined) option.label = label;
-    else if (index !== undefined) option.index = index;
-
-    await page.selectOption(selector!, option);
-
+    const matched = callResult?.result?.value === true;
     const desc =
       value !== undefined
         ? `value="${value}"`
         : label !== undefined
           ? `label="${label}"`
           : `index=${index}`;
+
+    if (!matched) {
+      return {
+        content: `Error: Select option failed: no option matched ${desc} on ${targetDescription}.`,
+        isError: true,
+      };
+    }
+
     return {
-      content: `Selected option (${desc}) on element: ${selector}`,
+      content: `Selected option (${desc}) on element: ${targetDescription}`,
       isError: false,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err, selector }, "Select option failed");
+    log.error({ err, target: targetDescription }, "Select option failed");
     return { content: `Error: Select option failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -863,20 +1122,39 @@ export async function executeBrowserHover(
   input: Record<string, unknown>,
   context: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const { selector, error } = resolveSelector(context.conversationId, input);
+  const { resolved, error } = resolveElement(context.conversationId, input);
   if (error) return { content: error, isError: true };
 
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
-    await page.hover(selector!, { timeout: ACTION_TIMEOUT_MS });
-
-    return { content: `Hovered element: ${selector}`, isError: false };
+    let backendNodeId: number;
+    if (resolved!.kind === "backend") {
+      backendNodeId = resolved!.backendNodeId;
+    } else {
+      // Wait until the selector matches a visible element. See the
+      // matching note in executeBrowserClick — async-hydrated pages
+      // need this to behave like Playwright's hover-with-timeout.
+      backendNodeId = await cdpWaitForSelector(
+        cdp,
+        resolved!.selector,
+        ACTION_TIMEOUT_MS,
+        context.signal,
+      );
+    }
+    await scrollIntoViewIfNeeded(cdp, backendNodeId, context.signal);
+    const point = await getCenterPoint(cdp, backendNodeId, context.signal);
+    await dispatchHoverAt(cdp, point, context.signal);
+    const desc =
+      resolved!.kind === "backend"
+        ? `eid=${resolved!.eid}`
+        : resolved!.selector;
+    return { content: `Hovered element: ${desc}`, isError: false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error({ err, selector }, "Hover failed");
+    log.error({ err }, "Hover failed");
     return { content: `Error: Hover failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -917,39 +1195,43 @@ export async function executeBrowserWaitFor(
       ? Math.min(input.timeout, MAX_WAIT_MS)
       : MAX_WAIT_MS;
 
-  try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
+  // Duration mode has no CDP interaction — handle without acquiring
+  // a CdpClient so the common "sleep" path stays transport-agnostic.
+  if (duration != null) {
+    const waitMs = Math.min(duration, MAX_WAIT_MS);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return { content: `Waited ${waitMs}ms.`, isError: false };
+  }
 
+  const cdp = getCdpClient(context);
+  try {
     if (selector) {
-      await page.waitForSelector(selector, { timeout });
+      // browser_wait_for selector mode is "did this node appear at
+      // all" — preserve the existing semantics by polling for DOM
+      // attachment, not full visibility. Tools that need
+      // visible-state polling (click/hover) get it via the default
+      // state in cdpWaitForSelector.
+      await cdpWaitForSelector(cdp, selector, timeout, context.signal, {
+        state: "attached",
+      });
       return {
         content: `Element matching "${selector}" appeared.`,
         isError: false,
       };
     }
 
-    if (text) {
-      const escaped = JSON.stringify(text);
-      await page.waitForFunction(
-        `document.body?.innerText?.includes(${escaped})`,
-        { timeout },
-      );
-      return {
-        content: `Text "${truncate(text, 80)}" appeared on page.`,
-        isError: false,
-      };
-    }
-
-    // duration mode (milliseconds)
-    const waitMs = Math.min(duration!, MAX_WAIT_MS);
-    await new Promise((r) => setTimeout(r, waitMs));
-    return { content: `Waited ${waitMs}ms.`, isError: false };
+    // text mode (validated above — modeCount === 1 means text is set)
+    await cdpWaitForText(cdp, text!, timeout, context.signal);
+    return {
+      content: `Text "${truncate(text!, 80)}" appeared on page.`,
+      isError: false,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Wait failed");
     return { content: `Error: Wait failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -961,16 +1243,17 @@ export async function executeBrowserExtract(
 ): Promise<ToolExecutionResult> {
   const includeLinks = input.include_links === true;
 
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
-    const currentUrl = page.url();
-    const title = await page.title();
+    const currentUrl = await getCurrentUrl(cdp, context.signal);
+    const title = await getPageTitle(cdp, context.signal);
 
-    let textContent = (await page.evaluate(
-      `document.body?.innerText ?? ''`,
-    )) as string;
+    let textContent = await evaluateExpression<string>(
+      cdp,
+      "document.body?.innerText ?? ''",
+      {},
+      context.signal,
+    );
 
     if (textContent.length > MAX_EXTRACT_LENGTH) {
       textContent =
@@ -985,15 +1268,9 @@ export async function executeBrowserExtract(
     ];
 
     if (includeLinks) {
-      const links = (await page.evaluate(`
-        (() => {
-          const anchors = Array.from(document.querySelectorAll('a[href]'));
-          return anchors.slice(0, 200).map(a => ({
-            text: (a.textContent || '').trim().slice(0, 80),
-            href: a.href,
-          }));
-        })()
-      `)) as Array<{ text: string; href: string }>;
+      const links = await evaluateExpression<
+        Array<{ text: string; href: string }>
+      >(cdp, EXTRACT_LINKS_EXPRESSION, {}, context.signal);
 
       if (links.length > 0) {
         lines.push("");
@@ -1009,6 +1286,8 @@ export async function executeBrowserExtract(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Extract failed");
     return { content: `Error: Extract failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
 
@@ -1028,26 +1307,41 @@ export async function executeBrowserFillCredential(
     return { content: "Error: field is required.", isError: true };
   }
 
-  const { selector, error } = resolveSelector(context.conversationId, input);
+  const { resolved, error } = resolveElement(context.conversationId, input);
   if (error) return { content: error, isError: true };
 
   const pressEnter = input.press_enter === true;
+  const targetDescription =
+    resolved!.kind === "backend"
+      ? `element_id "${resolved!.eid}"`
+      : resolved!.selector;
 
+  const cdp = getCdpClient(context);
   try {
-    const page = await browserManager.getOrCreateSessionPage(
-      context.conversationId,
-    );
+    let backendNodeId: number;
+    if (resolved!.kind === "backend") {
+      backendNodeId = resolved!.backendNodeId;
+    } else {
+      backendNodeId = await querySelectorBackendNodeId(
+        cdp,
+        resolved!.selector,
+        context.signal,
+      );
+    }
 
-    // Extract domain from the current page for domain policy enforcement
+    // Extract the current page's hostname for broker domain policy
+    // enforcement. Failures here (pre-navigation, about:blank, malformed
+    // URL) fall through with pageDomain undefined; if the credential
+    // has a domain policy the broker will deny the fill.
     let pageDomain: string | undefined;
     try {
-      const pageUrl = page.url();
+      const pageUrl = await getCurrentUrl(cdp, context.signal);
       if (pageUrl && pageUrl !== "about:blank") {
         const parsed = new URL(pageUrl);
         pageDomain = parsed.hostname;
       }
     } catch {
-      // Invalid URL - pageDomain stays undefined, broker will deny if domain policy exists
+      // pageDomain stays undefined
     }
 
     const result = await credentialBroker.browserFill({
@@ -1056,7 +1350,13 @@ export async function executeBrowserFillCredential(
       toolName: "browser_fill_credential",
       domain: pageDomain,
       fill: async (value) => {
-        await page.fill(selector!, value);
+        // Clear-then-focus-then-insert via the shared helper. We
+        // MUST clear first: Input.insertText writes at the cursor,
+        // so on autofilled / pre-populated fields a bare insert
+        // would append the credential to the existing value,
+        // producing a corrupted password and leaking partial state
+        // back into the page.
+        await clearAndInsertText(cdp, backendNodeId, value, context.signal);
       },
     });
 
@@ -1086,7 +1386,10 @@ export async function executeBrowserFillCredential(
           isError: true,
         };
       }
-      log.error({ selector, reason }, "Fill credential failed");
+      log.error(
+        { target: targetDescription, reason },
+        "Fill credential failed",
+      );
       return {
         content: `Error: Fill credential failed: ${reason}`,
         isError: true,
@@ -1094,7 +1397,7 @@ export async function executeBrowserFillCredential(
     }
 
     if (pressEnter) {
-      await page.press(selector!, "Enter");
+      await dispatchKeyPress(cdp, "Enter", context.signal);
     }
 
     return {
@@ -1105,5 +1408,7 @@ export async function executeBrowserFillCredential(
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Fill credential failed");
     return { content: `Error: Fill credential failed: ${msg}`, isError: true };
+  } finally {
+    cdp.dispose();
   }
 }
