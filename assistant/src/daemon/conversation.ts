@@ -117,6 +117,7 @@ import type {
   UserMessageAttachment,
 } from "./message-protocol.js";
 import type { ConversationTransportMetadata } from "./message-types/conversations.js";
+import { isHostProxyTransport } from "./message-types/conversations.js";
 import type {
   AssistantActivityState,
   ConfirmationStateChanged,
@@ -263,16 +264,18 @@ export class Conversation {
   /** @internal */ workspaceTopLevelContext: string | null = null;
   /** @internal */ workspaceTopLevelDirty = true;
   /**
-   * Host home directory reported by the client (macOS `NSHomeDirectory()`).
-   * Populated from `MacosTransportMetadata` when a message arrives. Consumed
-   * by the `<workspace>` block renderer so platform-managed (containerized)
-   * daemons show the user's actual Mac home dir instead of the container's.
+   * Host home directory reported by the client (e.g. macOS
+   * `NSHomeDirectory()`). Populated from `HostProxyTransportMetadata` when
+   * a message arrives from an interface that supports host-proxy tools
+   * (see `supportsHostProxy`). Consumed by the `<workspace>` block renderer
+   * so platform-managed (containerized) daemons show the user's actual
+   * client-side home dir instead of the container's `os.homedir()`.
    * @internal
    */
   hostHomeDir?: string;
   /**
-   * Host username reported by the client (macOS `NSUserName()`). See
-   * `hostHomeDir`.
+   * Host username reported by the client (e.g. macOS `NSUserName()`).
+   * See `hostHomeDir`.
    * @internal
    */
   hostUsername?: string;
@@ -1090,6 +1093,40 @@ export class Conversation {
 
   setTransportHints(hints: string[] | undefined): void {
     this.transportHints = hints;
+  }
+
+  /**
+   * Apply client-reported host environment (home dir, username) from
+   * transport metadata onto the conversation. Only interfaces whose
+   * interfaceId passes `supportsHostProxy()` contribute values — all other
+   * interfaces (CLI, channels, iOS, chrome-extension) clear any previously
+   * stored values so a conversation reused across interfaces doesn't leak
+   * stale paths into later `<workspace>` blocks.
+   *
+   * Gating on `supportsHostProxy` (rather than a specific interface name)
+   * keeps this in lock-step with the capability set defined in
+   * `HostProxyInterfaceId` — adding a new host-capable client only requires
+   * extending those two, not touching this method.
+   *
+   * Invalidates the cached workspace top-level block when values change so
+   * the next render picks up the new host env.
+   */
+  applyHostEnvFromTransport(transport: ConversationTransportMetadata): void {
+    const prevHomeDir = this.hostHomeDir;
+    const prevUsername = this.hostUsername;
+    if (isHostProxyTransport(transport)) {
+      this.hostHomeDir = transport.hostHomeDir;
+      this.hostUsername = transport.hostUsername;
+    } else {
+      this.hostHomeDir = undefined;
+      this.hostUsername = undefined;
+    }
+    if (
+      prevHomeDir !== this.hostHomeDir ||
+      prevUsername !== this.hostUsername
+    ) {
+      this.workspaceTopLevelDirty = true;
+    }
   }
 
   setAssistantId(assistantId: string | null): void {
