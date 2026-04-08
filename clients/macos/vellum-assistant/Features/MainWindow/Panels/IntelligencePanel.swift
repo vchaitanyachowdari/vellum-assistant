@@ -12,6 +12,7 @@ struct IntelligencePanel: View {
     let eventStreamClient: EventStreamClient?
     var store: SettingsStore?
     var conversationManager: ConversationManager?
+    var authManager: AuthManager?
     var showToast: ((String, ToastInfo.Style) -> Void)?
     var initialTab: String? = nil
     @Binding var pendingMemoryId: String?
@@ -32,6 +33,7 @@ struct IntelligencePanel: View {
         self.eventStreamClient = eventStreamClient
         self.store = store
         self.conversationManager = conversationManager
+        self.authManager = authManager
         self.showToast = showToast
         self.initialTab = initialTab
         _pendingMemoryId = pendingMemoryId
