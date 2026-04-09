@@ -1204,6 +1204,7 @@ export class RuntimeHttpServer {
       lastMessageAt: conversation.lastMessageAt,
       conversationType: conversation.conversationType ?? "standard",
       source: conversation.source ?? "user",
+      hostAccess: conversation.hostAccess === 1,
       ...(conversation.scheduleJobId
         ? { scheduleJobId: conversation.scheduleJobId }
         : {}),
