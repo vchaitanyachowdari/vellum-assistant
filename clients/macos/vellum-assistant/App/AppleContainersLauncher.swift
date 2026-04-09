@@ -1,3 +1,4 @@
+import Containerization
 import Foundation
 import os
 import Security
@@ -82,12 +83,18 @@ final class AppleContainersLauncher: AssistantManagementClient {
             uniqueKeysWithValues: imageRefs.map { ($0.key, $0.value.fullReference) }
         )
 
-        let platformURL: String
-        #if DEBUG
-        platformURL = "https://dev-platform.vellum.ai"
-        #else
-        platformURL = "https://platform.vellum.ai"
-        #endif
+        // In local builds, build images from local source instead of
+        // pulling from Docker Hub. The images are loaded into the shared
+        // ImageStore so PodRuntime finds them in cache via store.get().
+        if VellumEnvironment.current == .local {
+            await self.buildLocalImagesIfAvailable(
+                kernelStore: kernelStore,
+                imageRefs: imageRefs,
+                onProgress: onProgress
+            )
+        }
+
+        let platformURL = VellumEnvironment.current.platformURL
 
         let config = AppleContainersPodRuntime.Configuration(
             instanceName: assistantName,
@@ -134,6 +141,47 @@ final class AppleContainersLauncher: AssistantManagementClient {
         guard let runtime = podRuntime else { return }
         podRuntime = nil
         try await runtime.stop()
+    }
+
+    // MARK: - Local Image Building
+
+    /// Attempts to build service images from local source code using Docker.
+    /// Falls back silently to Docker Hub pull (via PodRuntime) if any step fails.
+    /// Only called when `VellumEnvironment.current == .local`.
+    private func buildLocalImagesIfAvailable(
+        kernelStore: KataKernelStore,
+        imageRefs: [VellumServiceName: VellumImageReference],
+        onProgress: (@MainActor (String) -> Void)?
+    ) async {
+        guard let repoRoot = LocalImageBuilder.findRepoRoot() else {
+            log.info("No repo root found — will pull images from registry")
+            return
+        }
+        guard LocalImageBuilder.hasFullSourceTree(at: repoRoot) else {
+            log.info("Repo root at \(repoRoot.path, privacy: .public) has no full source tree — will pull from registry")
+            return
+        }
+        guard await LocalImageBuilder.isDockerAvailable() else {
+            log.info("Docker not available — will pull images from registry")
+            return
+        }
+
+        log.info("Building images locally from \(repoRoot.path, privacy: .public)")
+        do {
+            let imageStore = try await kernelStore.makeImageStore()
+            try await LocalImageBuilder.buildAndLoadImages(
+                repoRoot: repoRoot,
+                imageRefs: imageRefs,
+                store: imageStore,
+                progress: { message in
+                    log.info("\(message, privacy: .public)")
+                    await onProgress?(message)
+                }
+            )
+        } catch {
+            log.warning("Local image build failed, falling back to registry pull: \(error.localizedDescription, privacy: .public)")
+            await onProgress?("Local build failed — will pull images from registry")
+        }
     }
 
     // MARK: - Signing Key
