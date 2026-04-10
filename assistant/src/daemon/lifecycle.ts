@@ -624,8 +624,6 @@ export async function runDaemon(): Promise<void> {
       }
     }
 
-    await initializeProvidersAndTools(config);
-
     // Start the DaemonServer (conversation manager) before Qdrant so HTTP
     // routes can begin accepting requests while Qdrant initializes.
     log.info("Daemon startup: starting DaemonServer");
@@ -1208,6 +1206,21 @@ export async function runDaemon(): Promise<void> {
         "Failed to start runtime HTTP server, continuing without it",
       );
       runtimeHttp = null;
+    }
+
+    // Initialize providers and tools after the HTTP server is listening so
+    // health-check and pairing requests can be served immediately.  Wrapped in
+    // its own try/catch so a failure here doesn't tear down the running HTTP
+    // server (DaemonServer.start() already calls initializeProviders internally
+    // and tools are resolved lazily at conversation creation time).
+    try {
+      log.info("Daemon startup: initializing providers and tools");
+      await initializeProvidersAndTools(config);
+    } catch (err) {
+      log.warn(
+        { err },
+        "Provider/tool initialization failed — continuing with degraded functionality",
+      );
     }
 
     writePid(process.pid);
