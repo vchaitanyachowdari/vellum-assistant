@@ -36,6 +36,10 @@ extension MainWindowView {
                     sidebar.showPreferencesDrawer = false
                     windowState.selection = .panel(.logsAndUsage)
                 },
+                onShareFeedback: {
+                    sidebar.showPreferencesDrawer = false
+                    AppDelegate.shared?.sendFeedback()
+                },
                 onLogOut: {
                     sidebar.showPreferencesDrawer = false
                     AppDelegate.shared?.performLogout()
