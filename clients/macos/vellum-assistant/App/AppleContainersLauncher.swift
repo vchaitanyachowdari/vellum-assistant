@@ -44,6 +44,7 @@ final class AppleContainersLauncher: AssistantManagementClient {
     // MARK: - Running State
 
     private var podRuntime: AppleContainersPodRuntime?
+    private var mgmtServer: ExecManagementServer?
 
     // MARK: - Testable Hooks
 
@@ -131,6 +132,18 @@ final class AppleContainersLauncher: AssistantManagementClient {
         self.podRuntime = runtime
         onProgress?("Container started")
 
+        // Start the management socket server so the CLI can exec into the container.
+        let mgmtSocketPath = instanceDir.appendingPathComponent("mgmt.sock").path
+        var mgmtSocketStarted = false
+        let server = ExecManagementServer(socketPath: mgmtSocketPath, podRuntime: runtime)
+        do {
+            try server.start()
+            self.mgmtServer = server
+            mgmtSocketStarted = true
+        } catch {
+            log.warning("Failed to start management socket: \(error.localizedDescription, privacy: .public) — exec will be unavailable")
+        }
+
         // Lease a guardian token so the desktop app can authenticate with the
         // gateway. The CLI does this in hatch-local.ts after the gateway starts;
         // for apple containers we do it directly from Swift.
@@ -147,6 +160,8 @@ final class AppleContainersLauncher: AssistantManagementClient {
                 onProgress: onProgress
             )
             if !gatewayReady {
+                mgmtServer?.stop()
+                mgmtServer = nil
                 try? await runtime.stop()
                 self.podRuntime = nil
                 throw LauncherError.hatchFailed(
@@ -161,6 +176,8 @@ final class AppleContainersLauncher: AssistantManagementClient {
                 onProgress: onProgress
             )
             if !tokenLeased {
+                mgmtServer?.stop()
+                mgmtServer = nil
                 try? await runtime.stop()
                 self.podRuntime = nil
                 throw LauncherError.hatchFailed(
@@ -176,7 +193,8 @@ final class AppleContainersLauncher: AssistantManagementClient {
             assistantId: assistantName,
             hatchedAt: hatchedAt,
             signingKey: signingKey,
-            runtimeUrl: runtime.gatewayURL
+            runtimeUrl: runtime.gatewayURL,
+            mgmtSocket: mgmtSocketStarted ? mgmtSocketPath : nil
         )
         LockfileAssistant.setActiveAssistantId(assistantName)
         log.info("Apple container '\(assistantName, privacy: .public)' is running")
@@ -184,6 +202,8 @@ final class AppleContainersLauncher: AssistantManagementClient {
 
     /// Stops the running pod and clears state.
     func stop() async throws {
+        mgmtServer?.stop()
+        mgmtServer = nil
         guard let runtime = podRuntime else { return }
         podRuntime = nil
         try await runtime.stop()
@@ -459,6 +479,7 @@ final class AppleContainersLauncher: AssistantManagementClient {
         hatchedAt: String,
         signingKey: String,
         runtimeUrl: String? = nil,
+        mgmtSocket: String? = nil,
         lockfilePath: String? = nil
     ) -> Bool {
         let path = lockfilePath ?? LockfilePaths.primaryPath
@@ -485,6 +506,9 @@ final class AppleContainersLauncher: AssistantManagementClient {
         ]
         if let runtimeUrl {
             newEntry["runtimeUrl"] = runtimeUrl
+        }
+        if let mgmtSocket {
+            newEntry["mgmtSocket"] = mgmtSocket
         }
 
         if let existingIndex = assistants.firstIndex(where: { ($0["assistantId"] as? String) == assistantId }) {
