@@ -108,6 +108,8 @@ import { fetchImpl } from "./fetch.js";
 import { isNewCommand, handleNewCommand } from "./webhook-pipeline.js";
 import { reconcileTelegramWebhook } from "./telegram/webhook-manager.js";
 import { registerEmailCallbackRoute } from "./email/register-callback.js";
+import { GatewayIpcServer } from "./ipc/server.js";
+import { featureFlagRoutes } from "./ipc/feature-flag-handlers.js";
 
 const log = getLogger("main");
 
@@ -1622,6 +1624,10 @@ async function main() {
 
   configFileWatcher.start();
 
+  // ── IPC server ──
+  const ipcServer = new GatewayIpcServer([...featureFlagRoutes]);
+  ipcServer.start();
+
   const featureFlagWatcher = new FeatureFlagWatcher();
   featureFlagWatcher.start();
 
@@ -1670,6 +1676,7 @@ async function main() {
     configFileWatcher.stop();
     featureFlagWatcher.stop();
     remoteFeatureFlagSync.stop();
+    ipcServer.stop();
     telegramDedupCache.stopCleanup();
     whatsappDedupCache.stopCleanup();
     emailDedupCache.stopCleanup();
