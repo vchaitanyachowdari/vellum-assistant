@@ -2,7 +2,7 @@
  * Chrome MV3 service worker — browser-relay bridge.
  *
  * Connects to either
- *   - the local daemon's browser-relay endpoint
+ *   - the local assistant's browser-relay endpoint
  *     (`ws://127.0.0.1:<relayPort>/v1/browser-relay`), or
  *   - the cloud gateway's browser-relay endpoint
  *     (`wss://<cloud-gateway>/v1/browser-relay`)
@@ -12,11 +12,24 @@
  * vocabulary — the choice is strictly about where the socket points and
  * which token is presented on the handshake.
  *
+ * The worker owns the full connect lifecycle:
+ *   - **One-click Connect**: When the popup sends `connect` with
+ *     `interactive=true`, the worker auto-bootstraps credentials
+ *     (local pair or cloud OAuth) before opening the socket. The user
+ *     never needs to manually pair or sign in.
+ *   - **Auto-connect on reopen**: After a successful connect, the
+ *     `autoConnect` storage flag is set. On service-worker startup
+ *     the `bootstrap()` function reads this flag and reconnects
+ *     non-interactively using stored credentials.
+ *   - **Pause**: The `pause` message clears the `autoConnect` flag
+ *     and tears down the socket. Credentials are preserved so the
+ *     next Connect is instant.
+ *
  * Once connected, the worker routes incoming server messages:
  *   - `host_browser_request` / `host_browser_cancel` envelopes are
  *     dispatched to the CDP proxy dispatcher, which drives a
  *     `chrome.debugger` session and POSTs a result envelope back to
- *     the daemon's `/v1/host-browser-result` endpoint.
+ *     the assistant's `/v1/host-browser-result` endpoint.
  *   - Every other payload is logged and discarded.
  */
 
@@ -26,6 +39,7 @@ import {
   getStoredToken as getStoredCloudToken,
   getStoredTokenRaw as getStoredCloudTokenRaw,
   validateCloudToken,
+  isCloudTokenStale,
   CLOUD_AUTH_FAILURE_CLOSE_CODES,
   LEGACY_CLOUD_STORAGE_KEY,
   type CloudAuthConfig,
@@ -118,6 +132,12 @@ async function getOrCreateClientInstanceId(): Promise<string> {
   return fresh;
 }
 
+// Storage key that controls auto-connect on service-worker startup.
+// Set to `true` after a successful user-initiated connect, cleared to
+// `false` by the `pause` action so the extension stays quiet until
+// the user explicitly reconnects.
+const AUTO_CONNECT_KEY = 'autoConnect';
+
 // Storage key used to surface the most recent auth-related relay error
 // to the popup. The popup reads this on open and shows it next to the
 // cloud sign-in button. Cleared on a successful connect so stale errors
@@ -143,6 +163,19 @@ async function clearRelayAuthError(): Promise<void> {
     await chrome.storage.local.remove(RELAY_AUTH_ERROR_KEY);
   } catch (err) {
     console.warn('[vellum-relay] Failed to clear relay auth error', err);
+  }
+}
+
+/**
+ * Persist the auto-connect flag. Called after a successful user-initiated
+ * connect so the next service-worker startup (e.g. browser reopen)
+ * automatically reconnects.
+ */
+async function setAutoConnect(enabled: boolean): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [AUTO_CONNECT_KEY]: enabled });
+  } catch (err) {
+    console.warn('[vellum-relay] Failed to persist autoConnect flag', err);
   }
 }
 
@@ -253,7 +286,7 @@ let shouldConnect = false;
 // `host_browser_request` / `host_browser_cancel` envelopes arriving on
 // the relay WebSocket are routed into the CDP proxy dispatcher, which
 // drives a chrome.debugger session and POSTs a result envelope back to
-// the daemon's `/v1/host-browser-result` endpoint.
+// the assistant's `/v1/host-browser-result` endpoint.
 
 async function resolveHostBrowserTarget(
   cdpSessionId: string | undefined,
@@ -295,7 +328,7 @@ async function resolveHostBrowserTarget(
  * When no relay connection exists yet (e.g. a stale result arriving
  * after `disconnect()`), we fall back per the current auth profile:
  *
- *   - `local-pair`: POST directly to the local daemon using live
+ *   - `local-pair`: POST directly to the local assistant using live
  *     creds resolved from storage.
  *   - `cloud-oauth`: warn and drop the envelope. POSTing to localhost
  *     in cloud mode would always fail, and we have no WebSocket to
@@ -321,7 +354,7 @@ async function dispatchHostBrowserResult(
     return;
   }
 
-  // Self-hosted fallback: POST directly to the local daemon using the
+  // Self-hosted fallback: POST directly to the local assistant using the
   // capability token from the native-messaging pair flow. If no paired
   // token is available the result is dropped. When no assistant is
   // selected, fall back to the legacy unscoped token key.
@@ -661,7 +694,7 @@ async function cloudReconnectHook(
   return {
     kind: 'abort',
     error:
-      `${reason}. Please sign in with Vellum (cloud) again from the extension popup to reconnect.`,
+      `${reason}. Use 'Re-sign in' in Troubleshooting, then try Connect again.`,
   };
 }
 
@@ -744,7 +777,7 @@ function createRelayConnection(
       return {
         kind: 'abort',
         error:
-          'Self-hosted relay token missing or expired. Pair the Vellum assistant again from the extension popup.',
+          "Self-hosted relay token missing or expired. Use 'Re-pair' in Troubleshooting, then try Connect again.",
       };
     },
   });
@@ -752,10 +785,11 @@ function createRelayConnection(
 
 /**
  * Thrown by `connect()` when the selected assistant's auth profile
- * has no usable token yet, or when the topology is unsupported.
- * Callers (e.g. the popup connect handler) surface the message
- * verbatim to the user so they can take action — signing in to cloud,
- * re-pairing the local daemon, or updating the extension.
+ * has no usable token and the interactive bootstrap also failed, or
+ * when the topology is unsupported. Callers (e.g. the popup connect
+ * handler) surface the message verbatim so the user can take action
+ * via the Troubleshooting controls (re-pair or re-sign-in) or by
+ * updating the extension.
  */
 class MissingTokenError extends Error {
   constructor(message: string) {
@@ -770,10 +804,10 @@ class MissingTokenError extends Error {
  */
 function missingTokenMessage(profile: AssistantAuthProfile | null): string {
   if (profile === 'cloud-oauth') {
-    return 'Sign in with Vellum (cloud) before connecting';
+    return "Automatic cloud sign-in failed \u2014 use 'Re-sign in' in Troubleshooting, then try Connect again";
   }
   if (profile === 'local-pair') {
-    return 'Pair the Vellum assistant (self-hosted) before connecting';
+    return "Automatic local pairing failed \u2014 use 'Re-pair' in Troubleshooting, then try Connect again";
   }
   if (profile === 'unsupported') {
     return 'This assistant uses an unsupported topology. Please update the Vellum extension.';
@@ -782,7 +816,164 @@ function missingTokenMessage(profile: AssistantAuthProfile | null): string {
   return 'Select an assistant before connecting';
 }
 
-async function connect(): Promise<void> {
+// ── Connect options ────────────────────────────────────────────────
+//
+// Threading an explicit `interactive` flag through the connect flow
+// lets the worker decide whether missing/stale credentials should
+// trigger an interactive sign-in/pair flow or produce an immediate
+// error. User-initiated Connect passes `interactive: true`; non-user-
+// initiated paths (auto-connect on bootstrap, reconnect) pass `false`.
+
+/**
+ * Options bag threaded through {@link connect} to control whether
+ * missing credentials trigger an interactive auth bootstrap.
+ *
+ * - `interactive: true` — the worker will auto-bootstrap auth when
+ *   credentials are missing or stale. For `local-pair` this runs
+ *   `bootstrapLocalToken`; for `cloud-oauth` this runs `signInCloud`.
+ * - `interactive: false` — the worker will attempt a non-interactive
+ *   refresh for cloud tokens but will NOT launch an interactive flow.
+ *   Missing credentials produce a {@link MissingTokenError}.
+ */
+interface ConnectOptions {
+  interactive: boolean;
+}
+
+/**
+ * Resolve credentials for the selected assistant before the socket
+ * opens. This is the single authority for whether auth is satisfied —
+ * the popup no longer needs to pre-check pairing/sign-in state.
+ *
+ * For `local-pair`:
+ *   - If the assistant-scoped local token is present and unexpired,
+ *     the existing relay mode is returned as-is.
+ *   - If the token is missing/expired and `interactive=true`, runs
+ *     `bootstrapLocalToken({ assistantId })` and rebuilds the mode.
+ *   - If the token is missing/expired and `interactive=false`, throws
+ *     a {@link MissingTokenError}.
+ *
+ * For `cloud-oauth`:
+ *   - If the stored cloud token is present and not stale, the existing
+ *     relay mode is returned as-is.
+ *   - If the token is missing/stale and `interactive=true`, runs
+ *     `signInCloud(...)` and rebuilds the mode.
+ *   - If the token is missing/stale and `interactive=false`, attempts
+ *     `refreshCloudToken(...)` first. If the non-interactive refresh
+ *     succeeds, rebuilds the mode with the fresh token. If the refresh
+ *     fails but the original mode still carries a token (stale but not
+ *     yet expired), the existing mode is returned as-is so the
+ *     `onReconnect` hook can handle actual expiry later. Only when
+ *     both the refresh fails and no token exists does it throw a
+ *     {@link MissingTokenError}.
+ *
+ * Returns the (possibly refreshed) {@link RelayMode} ready for socket
+ * open.
+ */
+async function connectPreflight(
+  assistant: AssistantDescriptor | null,
+  authProfile: AssistantAuthProfile | null,
+  mode: RelayMode,
+  options: ConnectOptions,
+): Promise<RelayMode> {
+  // Token already present — nothing to do.
+  if (mode.token) {
+    // For cloud mode, check staleness: a token that's about to expire
+    // should be proactively refreshed even when it's technically present.
+    if (mode.kind === 'cloud' && assistant) {
+      const stored = await getStoredCloudToken(assistant.assistantId);
+      if (!isCloudTokenStale(stored)) {
+        return mode;
+      }
+      // Token is stale — fall through to the refresh/sign-in logic below.
+    } else {
+      return mode;
+    }
+  }
+
+  if (authProfile === 'local-pair') {
+    if (!options.interactive) {
+      throw new MissingTokenError(missingTokenMessage('local-pair'));
+    }
+    // Interactive: auto-bootstrap the local capability token.
+    const assistantId = assistant?.assistantId ?? null;
+    const stored = await bootstrapLocalToken(assistantId);
+    const port = stored.assistantPort ?? assistant?.daemonPort ?? (await getRelayPort());
+    return {
+      kind: 'self-hosted',
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: stored.token,
+    };
+  }
+
+  if (authProfile === 'cloud-oauth') {
+    const assistantId = assistant?.assistantId ?? null;
+    if (!assistantId) {
+      throw new MissingTokenError(missingTokenMessage(null));
+    }
+
+    if (!options.interactive) {
+      // Non-interactive: attempt a silent refresh first.
+      const gatewayBaseUrl = assistant?.runtimeUrl || CLOUD_GATEWAY_BASE_URL;
+      const refreshed = await refreshCloudToken(assistantId, {
+        gatewayBaseUrl,
+        clientId: CLOUD_OAUTH_CLIENT_ID,
+      });
+      if (refreshed) {
+        const baseUrl = assistant?.runtimeUrl || CLOUD_GATEWAY_BASE_URL;
+        return { kind: 'cloud', baseUrl, token: refreshed.token };
+      }
+      // If the token is stale but still technically valid, fall back to
+      // the existing mode rather than discarding a usable token. The
+      // onReconnect hook will handle actual expiry later.
+      if (mode.token) {
+        return mode;
+      }
+      throw new MissingTokenError(missingTokenMessage('cloud-oauth'));
+    }
+
+    // Interactive: launch the full OAuth sign-in flow.
+    const gatewayBaseUrl = assistant?.runtimeUrl || CLOUD_GATEWAY_BASE_URL;
+    const stored = await signInCloud(assistantId, {
+      gatewayBaseUrl,
+      clientId: CLOUD_OAUTH_CLIENT_ID,
+    });
+    const baseUrl = assistant?.runtimeUrl || CLOUD_GATEWAY_BASE_URL;
+    return { kind: 'cloud', baseUrl, token: stored.token };
+  }
+
+  // Unsupported or no assistant selected — preflight can't help.
+  throw new MissingTokenError(missingTokenMessage(authProfile));
+}
+
+// Serialization lock: if a connect is already in progress, subsequent
+// callers await the existing attempt rather than launching a concurrent
+// preflight. This prevents duplicate auth/pair flows when multiple
+// connect calls arrive before the first socket opens (e.g., repeated
+// user action or overlapping message paths).
+//
+// Exception: an interactive connect (user-initiated) always supersedes a
+// non-interactive one (bootstrap). If the in-flight connect is
+// non-interactive and the new caller is interactive, we discard the
+// in-flight promise and start a fresh interactive connect so the user
+// gets the interactive auth flow they expect.
+let connectInFlight: Promise<void> | null = null;
+let connectInFlightInteractive = false;
+
+async function connect(options: ConnectOptions = { interactive: false }): Promise<void> {
+  if (connectInFlight && (connectInFlightInteractive || !options.interactive)) {
+    return connectInFlight;
+  }
+  connectInFlightInteractive = !!options.interactive;
+  connectInFlight = doConnect(options);
+  try {
+    await connectInFlight;
+  } finally {
+    connectInFlight = null;
+    connectInFlightInteractive = false;
+  }
+}
+
+async function doConnect(options: ConnectOptions): Promise<void> {
   if (relayConnection && relayConnection.isOpen()) return;
   // Defensive: a fresh connect() always starts the 1006 refresh
   // budget from scratch. The counter is normally reset from onOpen,
@@ -812,12 +1003,12 @@ async function connect(): Promise<void> {
     throw new MissingTokenError(msg);
   }
 
-  const mode = await buildRelayModeForAssistant(selected);
-  if (!mode.token) {
-    const msg = missingTokenMessage(authProfile);
-    console.warn(`[vellum-relay] ${msg}`);
-    throw new MissingTokenError(msg);
-  }
+  const rawMode = await buildRelayModeForAssistant(selected);
+  // Run the preflight to resolve/bootstrap credentials. When
+  // interactive=true the preflight auto-pairs or auto-signs-in;
+  // when interactive=false it either refreshes non-interactively or
+  // throws MissingTokenError.
+  const mode = await connectPreflight(selected, authProfile, rawMode, options);
   // Tear down any stale instance before constructing a new one. This
   // keeps the close/reconnect lifecycle simple — one RelayConnection
   // per live socket, no hidden state carried across mode switches.
@@ -875,23 +1066,52 @@ async function handleServerMessage(raw: string): Promise<void> {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponseFn) => {
   if (message.type === 'connect') {
     shouldConnect = true;
-    connect()
-      .then(() => sendResponseFn({ ok: true }))
-      .catch((err) => {
+    // User-initiated Connect is interactive: the worker will auto-
+    // bootstrap missing auth (pair for local, sign-in for cloud)
+    // rather than requiring the popup to pre-check credentials.
+    connect({ interactive: true })
+      .then(async () => {
+        // Guard: skip if the user paused/disconnected while the connect
+        // was in-flight — their pause intent takes precedence.
+        if (shouldConnect) {
+          await setAutoConnect(true);
+        }
+        sendResponseFn({ ok: true });
+      })
+      .catch(async (err) => {
         // Reset shouldConnect so a subsequent storage change or
         // bootstrap doesn't silently retry a doomed connect. The user
         // will press Connect again after signing in / pairing.
         shouldConnect = false;
+        // Undo the popup's eager autoConnect write — a failed connect
+        // must not leave the flag set, otherwise the next bootstrap
+        // would retry a doomed connect.
+        await setAutoConnect(false);
         const errorMessage = err instanceof Error ? err.message : String(err);
         sendResponseFn({ ok: false, error: errorMessage });
       });
     return true; // async
   }
-  if (message.type === 'disconnect') {
+  // `pause` is the canonical user-level stop action: it clears the
+  // sticky auto-connect flag so the extension does not reconnect on
+  // the next startup, then tears down the relay connection.
+  // `disconnect` is kept as a backward-compatible alias during rollout
+  // — both actions perform identical state transitions.
+  if (message.type === 'pause' || message.type === 'disconnect') {
     shouldConnect = false;
-    disconnect();
-    sendResponseFn({ ok: true });
-    return false;
+    // Await the storage write so MV3 can't terminate the worker before
+    // the autoConnect flag is persisted to false.
+    setAutoConnect(false)
+      .then(() => {
+        disconnect();
+        sendResponseFn({ ok: true });
+      })
+      .catch(() => {
+        // Even if the storage write fails, still disconnect and respond.
+        disconnect();
+        sendResponseFn({ ok: true });
+      });
+    return true; // async
   }
   if (message.type === 'get_status') {
     sendResponseFn({
@@ -1019,18 +1239,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponseFn) => {
         if (shouldConnect && relayConnection) {
           disconnect();
           // Attempt a reconnect to the newly selected assistant.
+          // Interactive since the user is actively switching.
           // Errors are non-fatal — the user can manually reconnect.
           try {
-            await connect();
+            await connect({ interactive: true });
           } catch (err) {
-            if (err instanceof MissingTokenError) {
-              shouldConnect = false;
-              console.warn(
-                `[vellum-relay] Assistant switch left disconnected: ${err.message}`,
-              );
-            } else {
-              throw err;
-            }
+            // The assistant selection was already persisted and the old
+            // relay disconnected, so the switch itself succeeded regardless
+            // of whether the reconnect worked. MissingTokenError means no
+            // credentials at all; other errors (e.g. "cloud sign-in
+            // cancelled" when the user closes the OAuth window) are
+            // transient. In both cases, log and continue — the user can
+            // manually reconnect via the Connect button.
+            shouldConnect = false;
+            console.warn(
+              `[vellum-relay] Assistant switch left disconnected: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
 
@@ -1051,28 +1275,43 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponseFn) => {
 });
 
 // Auto-connect on service worker start if previously connected.
+// Only fires when the sticky `autoConnect` flag is `true` (set by a
+// prior successful user-initiated Connect). Bootstrap uses a non-
+// interactive connect so it never pops up auth UIs — if credentials
+// are missing the user will see the disconnected state in the popup
+// and can trigger an interactive connect manually.
 async function bootstrap(): Promise<void> {
-  const { autoConnect } = await chrome.storage.local.get('autoConnect');
-  if (autoConnect !== true) return;
+  const result = await chrome.storage.local.get(AUTO_CONNECT_KEY);
+  if (result[AUTO_CONNECT_KEY] !== true) return;
   shouldConnect = true;
   try {
-    await connect();
+    await connect({ interactive: false });
   } catch (err) {
     // A missing token at auto-connect time is not a hard failure —
     // the user will see the disconnected state in the popup and can
-    // sign in / pair to try again. Log and move on.
+    // sign in / pair to try again. Persist the error detail exactly
+    // once so the popup can surface it, then stop retrying.
+    shouldConnect = false;
     if (err instanceof MissingTokenError) {
-      shouldConnect = false;
       console.warn(`[vellum-relay] Skipping auto-connect: ${err.message}`);
+      void setRelayAuthError({
+        message: err.message,
+        mode: currentAuthProfile === 'cloud-oauth' ? 'cloud' : 'self-hosted',
+        at: Date.now(),
+      });
       return;
     }
     // Non-token errors (e.g. native host not installed) are not
     // recoverable at auto-connect time. Reset state and log so the
     // popup shows disconnected rather than crashing the worker with
     // an unhandled rejection.
-    shouldConnect = false;
     const detail = err instanceof Error ? err.message : String(err);
     console.warn(`[vellum-relay] Auto-connect failed: ${detail}`);
+    void setRelayAuthError({
+      message: detail,
+      mode: currentAuthProfile === 'cloud-oauth' ? 'cloud' : 'self-hosted',
+      at: Date.now(),
+    });
   }
 }
 
