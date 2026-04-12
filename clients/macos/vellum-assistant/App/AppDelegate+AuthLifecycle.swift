@@ -636,61 +636,33 @@ extension AppDelegate {
     /// `false` if the user cancelled after a failure.
     @discardableResult
     func performRetireAsync() async -> Bool {
-        let assistantName = LockfileAssistant.loadActiveAssistantId()
+        // Disconnect SSE and health checks *before* killing the
+        // daemon/gateway. Otherwise the EventStreamClient reconnect loop
+        // hits the gateway while the upstream daemon is already dead,
+        // producing spurious "SSE connection failed with status 502" errors.
+        connectionManager.disconnect()
 
-        if assistantName == nil {
-            log.error("No stored connected assistant ID found — skipping retire")
-        }
+        let client = managementClient()
+        do {
+            try await client.retire()
+        } catch {
+            log.error("Retire failed: \(error.localizedDescription)")
 
-        if let name = assistantName {
-            // Disconnect SSE and health checks *before* killing the
-            // daemon/gateway. Otherwise the EventStreamClient reconnect loop
-            // hits the gateway while the upstream daemon is already dead,
-            // producing spurious "SSE connection failed with status 502" errors.
-            connectionManager.disconnect()
-
-            // Dispatch to the correct management client based on cloud type.
-            let assistantEntry = LockfileAssistant.loadByName(name)
-            let client = managementClient(for: assistantEntry)
-
-            do {
-                try await client.retire(name: name)
-            } catch {
-                log.error("Retire failed: \(error.localizedDescription)")
-
-                // For managed (cloud-hosted) assistants the cloud instance may
-                // be partially or fully torn down even when the CLI reports
-                // failure.  Reconnecting to a dead gateway strands the user on
-                // an "unreachable" error screen (LUM-755).  Skip the alert and
-                // proceed with local cleanup automatically so the app always
-                // navigates to a sensible post-retirement state.
-                if assistantEntry?.isManaged == true {
-                    log.warning("Managed assistant — automatically cleaning up local state after retire failure")
-                    await vellumCli.stop(name: name)
-                    self.removeLockfileEntry(assistantId: name)
-                } else {
-                    // Local assistant — the daemon may genuinely still be
-                    // running after a CLI failure.  Let the user choose between
-                    // force-removing and reconnecting.
-                    let alert = NSAlert()
-                    alert.messageText = "Failed to Retire Assistant"
-                    alert.informativeText = "\(error.localizedDescription)\n\nYou can force-remove the local configuration, but the assistant may still be running and will need to be cleaned up manually."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Force Remove")
-                    alert.addButton(withTitle: "Cancel")
-                    if alert.runModal() != .alertFirstButtonReturn {
-                        // Assistant is still running — reconnect so the user can
-                        // continue using the app (we disconnected above to avoid
-                        // 502 errors during the retire attempt).
-                        try? await connectionManager.connect()
-                        return false
-                    }
-                    await vellumCli.stop(name: name)
-                    self.removeLockfileEntry(assistantId: name)
-                }
+            let alert = NSAlert()
+            alert.messageText = "Failed to Retire Assistant"
+            alert.informativeText = "\(error.localizedDescription)\n\nYou can force-remove the local configuration, but the assistant may still be running and will need to be cleaned up manually."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Force Remove")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() != .alertFirstButtonReturn {
+                try? await connectionManager.connect()
+                return false
             }
-        } else {
-            await vellumCli.stop(name: assistantName)
+            // User chose "Force Remove" — clean up the lockfile entry so the
+            // app can proceed to onboarding or switch to another assistant.
+            if let activeId = LockfileAssistant.loadActiveAssistantId() {
+                LockfileAssistant.removeEntry(assistantId: activeId)
+            }
         }
 
         // Clear the stale connectedAssistantId immediately after retire so
@@ -700,8 +672,10 @@ extension AppDelegate {
         LockfileAssistant.setActiveAssistantId(nil)
 
         // Check if other assistants remain in the lockfile.
-        // Prefer remote assistants (always reachable), then try waking local ones.
-        let remaining = LockfileAssistant.loadAll().filter { $0.assistantId != assistantName && $0.isCurrentEnvironment }
+        // On the success path the CLI deregisters the entry; on the Force
+        // Remove path we removed it above. Either way, only other assistants
+        // for the current environment remain.
+        let remaining = LockfileAssistant.loadAll().filter { $0.isCurrentEnvironment }
         if !remaining.isEmpty {
             // Try remote assistants first — they're always reachable
             if let remote = remaining.first(where: { $0.isRemote }) {
