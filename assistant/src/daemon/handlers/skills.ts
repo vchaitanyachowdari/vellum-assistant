@@ -72,9 +72,11 @@ import {
 import type { SkillFileProvider } from "../../skills/skill-file-provider.js";
 import { createSkillsShProvider } from "../../skills/skillssh-files.js";
 import {
+  fetchSkillAudits,
   installExternalSkill,
   resolveSkillSource,
   searchSkillsRegistry,
+  type SkillAuditData,
 } from "../../skills/skillssh-registry.js";
 import { getWorkspaceSkillsDir } from "../../util/platform.js";
 import type {
@@ -385,6 +387,7 @@ function toSlimSkillResponse(
         stars: 0,
         installs: 0,
         reports: 0,
+        version: "",
       };
     }
     case "skillssh": {
@@ -485,6 +488,22 @@ export async function getSkill(
       // Commit to this provider — don't fall through to subsequent providers.
       const slim = await provider.toSlimSkill(skillId);
       if (slim) {
+        // Enrich uninstalled skills.sh skills with audit data (non-fatal)
+        if (slim.origin === "skillssh") {
+          try {
+            const sourceRepo = slim.sourceRepo;
+            const skillSlug = slim.slug.split("/").pop() ?? slim.slug;
+            const audits = await fetchSkillAudits(sourceRepo, [skillSlug]);
+            if (audits[skillSlug]) {
+              (slim as { audit?: SkillAuditData }).audit = audits[skillSlug];
+            }
+          } catch (err) {
+            log.warn(
+              { err, skillId },
+              "Failed to enrich uninstalled skillssh skill with audit data",
+            );
+          }
+        }
         return { skill: slim as SkillDetailResponse };
       }
       return { error: `Skill "${skillId}" not found`, status: 404 };
@@ -512,6 +531,7 @@ export async function getSkill(
       installs: slim.installs,
       reports: slim.reports,
       publishedAt: slim.publishedAt,
+      version: slim.version,
     };
     try {
       const inspectResult = await clawhubInspect(slim.slug);
@@ -546,6 +566,20 @@ export async function getSkill(
       sourceRepo: slim.sourceRepo,
       installs: slim.installs,
     };
+    // Enrich with audit data (non-fatal on failure)
+    try {
+      const sourceRepo = slim.sourceRepo;
+      const skillSlug = slim.slug.split("/").pop() ?? slim.slug;
+      const audits = await fetchSkillAudits(sourceRepo, [skillSlug]);
+      if (audits[skillSlug]) {
+        (detail as { audit?: SkillAuditData }).audit = audits[skillSlug];
+      }
+    } catch (err) {
+      log.warn(
+        { err, skillId },
+        "Failed to enrich skillssh skill detail with audit data",
+      );
+    }
     return { skill: detail };
   }
 
@@ -1191,6 +1225,7 @@ export async function searchSkills(
         publishedAt: s.createdAt
           ? new Date(s.createdAt * 1000).toISOString()
           : undefined,
+        version: s.version,
       }));
     } else {
       log.warn(
@@ -1212,6 +1247,50 @@ export async function searchSkills(
         sourceRepo: r.source,
         installs: r.installs,
       }));
+
+      // Batch-fetch audit data for skills.sh results, grouped by source repo.
+      try {
+        if (skillsshResult.value.length > 0) {
+          const sourceToSlugs = new Map<string, string[]>();
+          for (const r of skillsshResult.value) {
+            const slugs = sourceToSlugs.get(r.source) ?? [];
+            slugs.push(r.skillId);
+            sourceToSlugs.set(r.source, slugs);
+          }
+
+          const auditResults = await Promise.allSettled(
+            [...sourceToSlugs.entries()].map(([source, slugs]) =>
+              fetchSkillAudits(source, slugs).then((audits) => ({
+                source,
+                audits,
+              })),
+            ),
+          );
+
+          // Build a lookup map keyed by full skill ID (e.g. "owner/repo/skill-name")
+          const auditMap = new Map<string, SkillAuditData>();
+          for (const result of auditResults) {
+            if (result.status !== "fulfilled") continue;
+            const { source, audits } = result.value;
+            for (const [skillSlug, auditData] of Object.entries(audits)) {
+              auditMap.set(`${source}/${skillSlug}`, auditData);
+            }
+          }
+
+          // Enrich each skills.sh skill with audit data
+          skillsshSkills = skillsshSkills.map((skill) => {
+            if (skill.origin !== "skillssh") return skill;
+            const audit = auditMap.get(skill.id);
+            if (!audit) return skill;
+            return { ...skill, audit };
+          });
+        }
+      } catch (err) {
+        log.warn(
+          { err },
+          "Audit fetch failed for skills.sh results, continuing without audit data",
+        );
+      }
     } else {
       log.warn(
         { err: skillsshResult.reason },

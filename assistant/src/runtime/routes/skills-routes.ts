@@ -40,6 +40,13 @@ export interface SkillRouteDeps {
   getSkillContext: () => SkillOperationContext;
 }
 
+const partnerAuditSchema = z.object({
+  risk: z.enum(["safe", "low", "medium", "high", "critical", "unknown"]),
+  alerts: z.number().optional(),
+  score: z.number().optional(),
+  analyzedAt: z.string(),
+});
+
 const slimSkillBase = {
   id: z.string(),
   name: z.string(),
@@ -60,6 +67,7 @@ const slimSkillSchema = z.discriminatedUnion("origin", [
     installs: z.number(),
     reports: z.number(),
     publishedAt: z.string().optional(),
+    version: z.string(),
   }),
   z.object({
     ...slimSkillBase,
@@ -67,6 +75,7 @@ const slimSkillSchema = z.discriminatedUnion("origin", [
     slug: z.string(),
     sourceRepo: z.string(),
     installs: z.number(),
+    audit: z.record(z.string(), partnerAuditSchema).optional(),
   }),
   z.object({ ...slimSkillBase, origin: z.literal("custom") }),
 ]);
@@ -82,6 +91,7 @@ const skillDetailSchema = z.discriminatedUnion("origin", [
     installs: z.number(),
     reports: z.number(),
     publishedAt: z.string().optional(),
+    version: z.string(),
     owner: z
       .object({
         handle: z.string(),
@@ -115,6 +125,7 @@ const skillDetailSchema = z.discriminatedUnion("origin", [
     slug: z.string(),
     sourceRepo: z.string(),
     installs: z.number(),
+    audit: z.record(z.string(), partnerAuditSchema).optional(),
   }),
   z.object({ ...slimSkillBase, origin: z.literal("custom") }),
 ]);

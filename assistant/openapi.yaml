@@ -6471,6 +6471,8 @@ paths:
                               type: number
                             publishedAt:
                               type: string
+                            version:
+                              type: string
                           required:
                             - id
                             - name
@@ -6483,6 +6485,7 @@ paths:
                             - stars
                             - installs
                             - reports
+                            - version
                           additionalProperties: false
                         - type: object
                           properties:
@@ -6515,6 +6518,32 @@ paths:
                               type: string
                             installs:
                               type: number
+                            audit:
+                              type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties:
+                                type: object
+                                properties:
+                                  risk:
+                                    type: string
+                                    enum:
+                                      - safe
+                                      - low
+                                      - medium
+                                      - high
+                                      - critical
+                                      - unknown
+                                  alerts:
+                                    type: number
+                                  score:
+                                    type: number
+                                  analyzedAt:
+                                    type: string
+                                required:
+                                  - risk
+                                  - analyzedAt
+                                additionalProperties: false
                           required:
                             - id
                             - name
@@ -6714,6 +6743,8 @@ paths:
                             type: number
                           publishedAt:
                             type: string
+                          version:
+                            type: string
                           owner:
                             anyOf:
                               - type: object
@@ -6780,6 +6811,7 @@ paths:
                           - stars
                           - installs
                           - reports
+                          - version
                         additionalProperties: false
                       - type: object
                         properties:
@@ -6812,6 +6844,32 @@ paths:
                             type: string
                           installs:
                             type: number
+                          audit:
+                            type: object
+                            propertyNames:
+                              type: string
+                            additionalProperties:
+                              type: object
+                              properties:
+                                risk:
+                                  type: string
+                                  enum:
+                                    - safe
+                                    - low
+                                    - medium
+                                    - high
+                                    - critical
+                                    - unknown
+                                alerts:
+                                  type: number
+                                score:
+                                  type: number
+                                analyzedAt:
+                                  type: string
+                              required:
+                                - risk
+                                - analyzedAt
+                              additionalProperties: false
                         required:
                           - id
                           - name
@@ -7262,6 +7320,8 @@ paths:
                               type: number
                             publishedAt:
                               type: string
+                            version:
+                              type: string
                           required:
                             - id
                             - name
@@ -7274,6 +7334,7 @@ paths:
                             - stars
                             - installs
                             - reports
+                            - version
                           additionalProperties: false
                         - type: object
                           properties:
@@ -7306,6 +7367,32 @@ paths:
                               type: string
                             installs:
                               type: number
+                            audit:
+                              type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties:
+                                type: object
+                                properties:
+                                  risk:
+                                    type: string
+                                    enum:
+                                      - safe
+                                      - low
+                                      - medium
+                                      - high
+                                      - critical
+                                      - unknown
+                                  alerts:
+                                    type: number
+                                  score:
+                                    type: number
+                                  analyzedAt:
+                                    type: string
+                                required:
+                                  - risk
+                                  - analyzedAt
+                                additionalProperties: false
                           required:
                             - id
                             - name
