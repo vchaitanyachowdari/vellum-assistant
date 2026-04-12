@@ -1475,10 +1475,28 @@ if [ "$CMD" = "run" ]; then
             $still_running || break
             sleep 0.1
         done
-        # Force-kill any stragglers
+        # Force-kill any stragglers — re-read ps and re-match the bundle
+        # ID so we never SIGKILL a PID that was reused by an unrelated
+        # process since the original snapshot.
         if $still_running; then
             echo "Force-killing remaining sibling process(es)..."
-            echo "$other_vellum" | awk '{print $1}' | xargs kill -9 2>/dev/null || true
+            survivors=""
+            while IFS= read -r line; do
+                pid=${line%% *}
+                exe_path=${line#* }
+                case "$exe_path" in
+                    */Contents/MacOS/*) ;;
+                    *) continue ;;
+                esac
+                bundle_root=${exe_path%/Contents/MacOS/*}
+                other_id=$(plutil -extract CFBundleIdentifier raw "$bundle_root/Contents/Info.plist" 2>/dev/null || true)
+                [ "$other_id" = "$BUNDLE_ID" ] || continue
+                [ "$exe_path" != "$bundle_root/Contents/MacOS/$BUNDLE_DISPLAY_NAME" ] || continue
+                survivors+="$pid "
+            done < <(ps -ax -o pid=,comm=)
+            if [ -n "$survivors" ]; then
+                echo "$survivors" | xargs kill -9 2>/dev/null || true
+            fi
             sleep 0.3
         fi
     fi
