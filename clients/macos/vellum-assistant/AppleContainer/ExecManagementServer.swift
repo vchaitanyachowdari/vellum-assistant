@@ -52,8 +52,11 @@ final class ExecManagementServer: @unchecked Sendable {
             case .ready:
                 log.info("Management socket listening at \(self.socketPath, privacy: .public)")
                 // NWListener reports .ready before the socket file appears on disk.
-                // Poll briefly so we can restrict permissions before any client connects.
-                self.restrictSocketPermissions()
+                // Restrict permissions on a separate queue so we don't block the
+                // listener queue — NWListener may need it to finalize the bind.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    self.restrictSocketPermissions()
+                }
             case .failed(let error):
                 log.error("Management socket listener failed: \(error.localizedDescription, privacy: .public)")
                 self.stopInternal()
@@ -87,10 +90,14 @@ final class ExecManagementServer: @unchecked Sendable {
     }
 
     /// NWListener reports `.ready` before the socket file is created on disk.
-    /// Poll up to ~1 s for the file to appear, then set 0600 permissions.
+    /// Poll up to ~5 s for the file to appear, then set 0600 permissions.
+    ///
+    /// This MUST run on a queue other than the listener queue because
+    /// `NWListener` may need to dispatch work on its queue to finalize the
+    /// socket bind. Blocking the listener queue with `usleep` would deadlock.
     private func restrictSocketPermissions() {
-        let maxAttempts = 20
-        let delayUs: UInt32 = 50_000 // 50 ms (usleep takes microseconds)
+        let maxAttempts = 50
+        let delayUs: UInt32 = 100_000 // 100 ms
         for attempt in 1...maxAttempts {
             if FileManager.default.fileExists(atPath: socketPath) {
                 do {
@@ -99,6 +106,9 @@ final class ExecManagementServer: @unchecked Sendable {
                     )
                     log.info("Management socket permissions set to 0600")
                 } catch {
+                    // Fail closed: if we can't restrict permissions on a socket
+                    // that grants exec access, shut down rather than serve with
+                    // potentially world-readable permissions.
                     log.error("Failed to restrict socket permissions: \(error.localizedDescription, privacy: .public)")
                     self.stopInternal()
                 }
@@ -108,8 +118,10 @@ final class ExecManagementServer: @unchecked Sendable {
                 usleep(delayUs)
             }
         }
-        log.error("Socket file did not appear after \(maxAttempts) attempts — stopping server")
-        self.stopInternal()
+        // Don't stop the server — the listener is still functional, we just
+        // couldn't verify / chmod the socket file. Log a warning so the
+        // operator knows permissions may be wider than intended.
+        log.warning("Socket file did not appear after \(maxAttempts) attempts — permissions may not be restricted")
     }
 
     // MARK: - Connection Handling
