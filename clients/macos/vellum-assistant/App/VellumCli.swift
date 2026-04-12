@@ -160,7 +160,7 @@ final class VellumCli: AssistantManagementClient {
     /// - Parameters:
     ///   - name: Optional assistant name to reuse.
     ///   - configValues: Key-value pairs forwarded as `--config k=v` flags.
-    func hatch(name: String? = nil, configValues: [String: String] = [:]) async throws {
+    override func hatch(name: String? = nil, configValues: [String: String] = [:]) async throws {
         guard let binaryURL = cliBinaryURL else {
             log.info("No bundled CLI binary found — skipping hatch (dev mode)")
             return
@@ -213,7 +213,7 @@ final class VellumCli: AssistantManagementClient {
     /// Times out after 5 minutes; on timeout the CLI process is terminated.
     /// CLI stdout/stderr are streamed to `os.Logger` so progress is visible
     /// in Console.app.
-    func retire(name: String?) async throws {
+    override func retire(name: String? = nil) async throws -> LockfileAssistant? {
         guard let resolvedName = name ?? LockfileAssistant.loadActiveAssistantId() else {
             throw ManagementClientError.noActiveAssistant
         }
@@ -311,6 +311,10 @@ final class VellumCli: AssistantManagementClient {
 
         log.info("CLI retire completed successfully")
         log.info("[audit] CLI done: retire exit=0 duration=\(retireMs)ms")
+
+        // The CLI already removed the lockfile entry on the success path.
+        // Clear the active ID and find a replacement assistant.
+        return await findReplacementAfterRetire(retiredId: resolvedName)
     }
 
     /// How long to wait for the `sleep` CLI before giving up.
