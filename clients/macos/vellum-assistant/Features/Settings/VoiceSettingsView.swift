@@ -23,14 +23,34 @@ private enum TTSProviderOption: String, CaseIterable {
     }
 }
 
+/// STT provider options for the speech-to-text service card.
+private enum STTProviderOption: String, CaseIterable {
+    case openaiWhisper = "openai-whisper"
+
+    var displayName: String {
+        switch self {
+        case .openaiWhisper: return "OpenAI Whisper"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .openaiWhisper:
+            return "High-accuracy speech-to-text transcription. Requires an OpenAI API key."
+        }
+    }
+}
+
 /// Voice settings tab — configure push-to-talk activation key,
-/// conversation timeout, and text-to-speech provider.
+/// conversation timeout, text-to-speech provider, and speech-to-text provider.
 struct VoiceSettingsView: View {
     @ObservedObject var store: SettingsStore
+    var isSttServiceEnabled: Bool = false
 
     @AppStorage("activationKey") private var activationKey: String = "fn"
     @AppStorage("voiceConversationTimeoutSeconds") private var conversationTimeoutSeconds: Int = 30
     @AppStorage("ttsProvider") private var ttsProviderRaw: String = TTSProviderOption.elevenlabs.rawValue
+    @AppStorage("sttProvider") private var sttProviderRaw: String = STTProviderOption.openaiWhisper.rawValue
 
     @State private var elevenLabsKeyText: String = ""
     @State private var elevenLabsVoiceId: String = ""
@@ -47,8 +67,18 @@ struct VoiceSettingsView: View {
     @State private var recordingMonitors: [Any] = []
     @State private var modifierHoldTimer: Timer? = nil
 
+    // STT-specific state
+    @State private var sttOpenAIKeyText: String = ""
+    @State private var sttSetupExpanded: Bool = false
+    /// Whether an OpenAI API key is stored for STT (fetched per-component).
+    @State private var sttOpenAIHasKey = false
+
     private var ttsProvider: TTSProviderOption {
         TTSProviderOption(rawValue: ttsProviderRaw) ?? .elevenlabs
+    }
+
+    private var sttProvider: STTProviderOption {
+        STTProviderOption(rawValue: sttProviderRaw) ?? .openaiWhisper
     }
 
     private var currentActivator: PTTActivator {
@@ -75,6 +105,9 @@ struct VoiceSettingsView: View {
             pttCard
             conversationTimeoutCard
             ttsProviderCard
+            if isSttServiceEnabled {
+                sttProviderCard
+            }
         }
         .onDisappear {
             stopRecordingCustomKey()
@@ -82,6 +115,7 @@ struct VoiceSettingsView: View {
         .onAppear {
             elevenLabsHasKey = APIKeyManager.getCredential(service: "elevenlabs", field: "api_key") != nil
             fishAudioHasKey = APIKeyManager.getCredential(service: "fish-audio", field: "api_key") != nil
+            sttOpenAIHasKey = APIKeyManager.getKey(for: "openai") != nil
         }
         .onChange(of: conversationTimeoutSeconds) {
             VoiceModeManager.conversationTimeoutOverride = conversationTimeoutSeconds
@@ -518,6 +552,99 @@ struct VoiceSettingsView: View {
             } else {
                 VButton(label: "Set Up", style: .outlined) {
                     fishAudioSetupExpanded = true
+                }
+            }
+        }
+    }
+
+    // MARK: - STT Provider Card
+
+    private var sttProviderCard: some View {
+        SettingsCard(title: "Speech-to-Text", subtitle: "Choose an STT provider for audio transcription. The selected provider is used globally across all transcription features.") {
+            VStack(alignment: .leading, spacing: VSpacing.md) {
+                // Provider selector
+                VStack(alignment: .leading, spacing: VSpacing.sm) {
+                    Text("Provider:")
+                        .font(VFont.bodySmallDefault)
+                        .foregroundStyle(VColor.contentSecondary)
+
+                    HStack(spacing: VSpacing.sm) {
+                        ForEach(STTProviderOption.allCases, id: \.rawValue) { provider in
+                            let isSelected = sttProvider == provider
+                            providerOption(label: provider.displayName, isSelected: isSelected) {
+                                sttProviderRaw = provider.rawValue
+                                store.setSTTProvider(provider.rawValue)
+                            }
+                        }
+                    }
+                }
+
+                // Provider-specific subtitle
+                Text(sttProvider.subtitle)
+                    .font(VFont.bodySmallDefault)
+                    .foregroundStyle(VColor.contentTertiary)
+
+                // Provider-specific configuration
+                switch sttProvider {
+                case .openaiWhisper:
+                    openaiWhisperProviderConfig
+                }
+            }
+        }
+    }
+
+    // MARK: - OpenAI Whisper Provider Config
+
+    private var openaiWhisperProviderConfig: some View {
+        Group {
+            if sttOpenAIHasKey {
+                // The OpenAI key is shared with the inference provider.
+                // Show a read-only "Connected" indicator without a
+                // "Disconnect" button — deleting the shared credential
+                // from the STT card would break inference.
+                VButton(label: "Connected", leftIcon: VIcon.circleCheck.rawValue, style: .primary) {}
+
+                HStack(spacing: VSpacing.xs) {
+                    VIconView(.info, size: 10)
+                        .foregroundStyle(VColor.contentTertiary)
+                    Text("Using your OpenAI API key from inference settings.")
+                        .font(VFont.labelDefault)
+                        .foregroundStyle(VColor.contentTertiary)
+                }
+            } else if sttSetupExpanded {
+                VStack(alignment: .leading, spacing: VSpacing.sm) {
+                    VTextField(
+                        "OpenAI API Key",
+                        placeholder: "Your OpenAI API key",
+                        text: $sttOpenAIKeyText,
+                        isSecure: true,
+                        maxWidth: 400
+                    )
+
+                    HStack(spacing: VSpacing.xs) {
+                        VIconView(.lock, size: 10)
+                            .foregroundStyle(VColor.contentTertiary)
+                        Text("Your API key is stored securely in the macOS Keychain and shared with inference.")
+                            .font(VFont.labelDefault)
+                            .foregroundStyle(VColor.contentTertiary)
+                    }
+
+                    HStack(spacing: VSpacing.sm) {
+                        VButton(label: "Connect", style: .outlined, isDisabled: sttOpenAIKeyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                            store.saveSTTOpenAIKey(sttOpenAIKeyText)
+                            sttOpenAIHasKey = true
+                            sttOpenAIKeyText = ""
+                            sttSetupExpanded = false
+                        }
+                        VButton(label: "Cancel", style: .outlined) {
+                            sttSetupExpanded = false
+                            sttOpenAIKeyText = ""
+                        }
+                    }
+                }
+            } else {
+                VButton(label: "Set Up", style: .outlined) {
+                    sttSetupExpanded = true
                 }
             }
         }
