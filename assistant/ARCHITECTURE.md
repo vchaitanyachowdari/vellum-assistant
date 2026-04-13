@@ -602,7 +602,7 @@ Audio-to-text conversion occurs in five distinct runtime boundaries, each with i
 
 Telephony STT uses a provider-conditional hybrid model driven by `services.stt.provider`. The routing resolver (`src/calls/telephony-stt-routing.ts`) maps the configured provider to a discriminated strategy at call setup time:
 
-- **`conversation-relay-native`** (Deepgram, Google) — TwiML emits `<Connect><ConversationRelay>` with `transcriptionProvider` and `speechModel` attributes. Twilio handles audio ingestion and transcription natively; the daemon receives transcribed text via the relay WebSocket. Model normalization: Deepgram defaults `speechModel` to `"nova-3"` when unset; Google leaves `speechModel` undefined (suppresses the Deepgram default to avoid sending a Deepgram model name to Google's API).
+- **`conversation-relay-native`** (Deepgram, Google) — TwiML emits `<Connect><ConversationRelay>` with `transcriptionProvider` and `speechModel` attributes. Twilio handles audio ingestion and transcription natively; the daemon receives transcribed text via the relay WebSocket. The Twilio-native provider name and default speech model are read from the provider catalog entry's `telephonyRouting.twilioNativeMapping` (e.g. Deepgram maps to `provider: "Deepgram"` with `defaultSpeechModel: "nova-3"`; Google maps to `provider: "Google"` with `defaultSpeechModel: undefined`).
 
 - **`media-stream-custom`** (OpenAI Whisper) — TwiML emits `<Connect><Stream>` pointing to the daemon's media-stream server. Raw audio flows from Twilio through the gateway's WebSocket proxy (`twilio-media-websocket.ts`) to the daemon, which transcribes server-side via the provider's batch API.
 
@@ -622,7 +622,7 @@ Key modules:
 
 Guard tests in `__tests__/twilio-routes-twiml.test.ts` and `__tests__/twilio-routes.test.ts` assert that TwiML generation matches the provider-conditional strategy for each supported provider.
 
-To add a new telephony STT provider: add the provider to `TWILIO_NATIVE_PROVIDER_MAP` in `telephony-stt-routing.ts` if it is Twilio-native, or leave it absent to use the media-stream custom path. Add model normalization logic in `resolveNativeSpeechModel()` for Twilio-native providers.
+To add a new telephony STT provider: add a `telephonyRouting` entry to the provider's catalog entry in `provider-catalog.ts`. Set `strategyKind` to `"conversation-relay-native"` for Twilio-native providers (and include a `twilioNativeMapping` with the Twilio `provider` name and `defaultSpeechModel`), or `"media-stream-custom"` for providers that require daemon-side transcription. The routing resolver reads these fields from the catalog — no hardcoded maps to update.
 
 **Daemon batch boundary:**
 
@@ -653,8 +653,8 @@ Two provider adapters are supported, each implementing the `StreamingTranscriber
 
 **Session lifecycle (daemon side):**
 
-1. Client opens a WebSocket to `/v1/stt/stream` with query parameters `provider`, `mimeType`, and optional `sampleRate`.
-2. `SttStreamSession` (in `src/stt/stt-stream-session.ts`) resolves a `StreamingTranscriber` via `resolveStreamingTranscriber()` from `src/providers/speech-to-text/resolve.ts`.
+1. Client opens a WebSocket to `/v1/stt/stream` with required query parameter `mimeType` and optional `provider` and `sampleRate`. The `provider` parameter is optional compatibility metadata — the runtime is config-authoritative and always resolves the streaming transcriber from `services.stt.provider`. When a requested provider disagrees with the configured provider, the runtime logs a mismatch warning.
+2. `SttStreamSession` (in `src/stt/stt-stream-session.ts`) resolves a `StreamingTranscriber` via `resolveStreamingTranscriber()` from `src/providers/speech-to-text/resolve.ts`, using the configured provider (not the requested one).
 3. The transcriber's `start()` method opens the provider session.
 4. A `ready` event (with `provider` field) is sent to the client, signaling that audio frames are accepted.
 5. Client sends `audio` frames (binary WebSocket frames or base64-encoded JSON) and a `stop` event when recording ends.
