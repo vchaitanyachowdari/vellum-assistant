@@ -6,15 +6,28 @@ import { SttError } from "../types.js";
 // Module mocks — must precede dynamic imports
 // ---------------------------------------------------------------------------
 
-let mockTranscribeResult: { text: string } = { text: "" };
-let mockTranscribeError: Error | null = null;
+let mockWhisperTranscribeResult: { text: string } = { text: "" };
+let mockWhisperTranscribeError: Error | null = null;
 
 mock.module("../../providers/speech-to-text/openai-whisper.js", () => ({
   OpenAIWhisperProvider: class MockWhisperProvider {
     constructor(_apiKey: string) {}
     async transcribe(_audio: Buffer, _mimeType: string, _signal?: AbortSignal) {
-      if (mockTranscribeError) throw mockTranscribeError;
-      return mockTranscribeResult;
+      if (mockWhisperTranscribeError) throw mockWhisperTranscribeError;
+      return mockWhisperTranscribeResult;
+    }
+  },
+}));
+
+let mockDeepgramTranscribeResult: { text: string } = { text: "" };
+let mockDeepgramTranscribeError: Error | null = null;
+
+mock.module("../../providers/speech-to-text/deepgram.js", () => ({
+  DeepgramProvider: class MockDeepgramProvider {
+    constructor(_apiKey: string) {}
+    async transcribe(_audio: Buffer, _mimeType: string, _signal?: AbortSignal) {
+      if (mockDeepgramTranscribeError) throw mockDeepgramTranscribeError;
+      return mockDeepgramTranscribeResult;
     }
   },
 }));
@@ -29,8 +42,10 @@ const { createDaemonBatchTranscriber, normalizeSttError } =
 
 describe("createDaemonBatchTranscriber", () => {
   beforeEach(() => {
-    mockTranscribeResult = { text: "" };
-    mockTranscribeError = null;
+    mockWhisperTranscribeResult = { text: "" };
+    mockWhisperTranscribeError = null;
+    mockDeepgramTranscribeResult = { text: "" };
+    mockDeepgramTranscribeError = null;
   });
 
   // -------------------------------------------------------------------------
@@ -38,37 +53,51 @@ describe("createDaemonBatchTranscriber", () => {
   // -------------------------------------------------------------------------
 
   test("returns null when no API key is provided", () => {
-    expect(createDaemonBatchTranscriber(null)).toBeNull();
-    expect(createDaemonBatchTranscriber(undefined)).toBeNull();
+    expect(createDaemonBatchTranscriber(null, "openai-whisper")).toBeNull();
+    expect(
+      createDaemonBatchTranscriber(undefined, "openai-whisper"),
+    ).toBeNull();
   });
 
   test("returns a BatchTranscriber when API key is present", () => {
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
     expect(transcriber).not.toBeNull();
   });
 
   // -------------------------------------------------------------------------
-  // Provider identity
+  // Provider identity — Whisper
   // -------------------------------------------------------------------------
 
-  test("reports providerId as openai-whisper", () => {
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+  test("reports providerId as openai-whisper when created with openai-whisper", () => {
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
     expect(transcriber!.providerId).toBe("openai-whisper");
   });
 
   test("reports boundaryId as daemon-batch", () => {
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
     expect(transcriber!.boundaryId).toBe("daemon-batch");
   });
 
   // -------------------------------------------------------------------------
-  // Successful transcription
+  // Successful transcription — Whisper
   // -------------------------------------------------------------------------
 
-  test("delegates transcription to the underlying provider", async () => {
-    mockTranscribeResult = { text: "Hello from Whisper" };
+  test("delegates transcription to the Whisper provider", async () => {
+    mockWhisperTranscribeResult = { text: "Hello from Whisper" };
 
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
     const result = await transcriber!.transcribe({
       audio: Buffer.from("fake-audio"),
       mimeType: "audio/ogg",
@@ -87,9 +116,12 @@ describe("createDaemonBatchTranscriber", () => {
       "The operation was aborted",
       "AbortError",
     );
-    mockTranscribeError = original;
+    mockWhisperTranscribeError = original;
 
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
 
     try {
       await transcriber!.transcribe({
@@ -105,9 +137,12 @@ describe("createDaemonBatchTranscriber", () => {
 
   test("propagates generic errors unchanged", async () => {
     const original = new Error("Something went wrong");
-    mockTranscribeError = original;
+    mockWhisperTranscribeError = original;
 
-    const transcriber = createDaemonBatchTranscriber("sk-test-key");
+    const transcriber = createDaemonBatchTranscriber(
+      "sk-test-key",
+      "openai-whisper",
+    );
 
     try {
       await transcriber!.transcribe({
@@ -118,6 +153,67 @@ describe("createDaemonBatchTranscriber", () => {
     } catch (err) {
       expect(err).toBe(original);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Provider identity — Deepgram
+  // -------------------------------------------------------------------------
+
+  test("reports providerId as deepgram when created with deepgram", () => {
+    const transcriber = createDaemonBatchTranscriber("dg-test-key", "deepgram");
+    expect(transcriber).not.toBeNull();
+    expect(transcriber!.providerId).toBe("deepgram");
+  });
+
+  test("reports boundaryId as daemon-batch for deepgram", () => {
+    const transcriber = createDaemonBatchTranscriber("dg-test-key", "deepgram");
+    expect(transcriber!.boundaryId).toBe("daemon-batch");
+  });
+
+  // -------------------------------------------------------------------------
+  // Successful transcription — Deepgram
+  // -------------------------------------------------------------------------
+
+  test("delegates transcription to the Deepgram provider", async () => {
+    mockDeepgramTranscribeResult = { text: "Hello from Deepgram" };
+
+    const transcriber = createDaemonBatchTranscriber("dg-test-key", "deepgram");
+    const result = await transcriber!.transcribe({
+      audio: Buffer.from("fake-audio"),
+      mimeType: "audio/ogg",
+    });
+
+    expect(result).toEqual({ text: "Hello from Deepgram" });
+  });
+
+  // -------------------------------------------------------------------------
+  // Error propagation — Deepgram
+  // -------------------------------------------------------------------------
+
+  test("propagates Deepgram errors unchanged", async () => {
+    const original = new Error("Deepgram API error (401): Invalid credentials");
+    mockDeepgramTranscribeError = original;
+
+    const transcriber = createDaemonBatchTranscriber("dg-test-key", "deepgram");
+
+    try {
+      await transcriber!.transcribe({
+        audio: Buffer.from("audio"),
+        mimeType: "audio/wav",
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBe(original);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Null on missing key — Deepgram
+  // -------------------------------------------------------------------------
+
+  test("returns null for deepgram when no API key is provided", () => {
+    expect(createDaemonBatchTranscriber(null, "deepgram")).toBeNull();
+    expect(createDaemonBatchTranscriber(undefined, "deepgram")).toBeNull();
   });
 });
 
@@ -184,5 +280,23 @@ describe("normalizeSttError", () => {
     const result = normalizeSttError(original);
     expect(result).toBe(original);
     expect(result.category).toBe("auth");
+  });
+
+  // Deepgram error normalization (same categories apply)
+
+  test("normalizes Deepgram 401 errors to auth category", () => {
+    const result = normalizeSttError(
+      new Error("Deepgram API error (401): Invalid credentials"),
+    );
+    expect(result).toBeInstanceOf(SttError);
+    expect(result.category).toBe("auth");
+  });
+
+  test("normalizes Deepgram 429 errors to rate-limit category", () => {
+    const result = normalizeSttError(
+      new Error("Deepgram API error (429): Rate limited"),
+    );
+    expect(result).toBeInstanceOf(SttError);
+    expect(result.category).toBe("rate-limit");
   });
 });

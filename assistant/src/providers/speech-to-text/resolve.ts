@@ -43,7 +43,7 @@ export async function resolveBatchTranscriber(): Promise<BatchTranscriber | null
   }
 
   const apiKey = await getProviderKeyAsync(credentialProviderName);
-  return createDaemonBatchTranscriber(apiKey);
+  return createDaemonBatchTranscriber(apiKey, provider as SttProviderId);
 }
 
 // ---------------------------------------------------------------------------

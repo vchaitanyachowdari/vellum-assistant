@@ -75,6 +75,15 @@ const CATALOG: ReadonlyMap<SttProviderId, SttProviderEntry> = new Map<
       telephonyMode: "batch-only",
     },
   ],
+  [
+    "deepgram",
+    {
+      id: "deepgram",
+      credentialProvider: "deepgram",
+      supportedBoundaries: new Set<SttBoundaryId>(["daemon-batch"]),
+      telephonyMode: "realtime-ws",
+    },
+  ],
 ]);
 
 // ---------------------------------------------------------------------------
