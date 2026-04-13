@@ -256,9 +256,7 @@ describe("syncUpdateBulletinOnStartup", () => {
     expect(completed).not.toContain("1.0.0");
 
     // 1.0.0 should be in the active set.
-    const active: string[] = JSON.parse(
-      store.get("updates:active_releases")!,
-    );
+    const active: string[] = JSON.parse(store.get("updates:active_releases")!);
     expect(active).toContain("1.0.0");
   });
 
@@ -432,11 +430,7 @@ describe("syncUpdateBulletinOnStartup", () => {
       "<!-- /vellum-update-release:entry-b -->",
       "",
     ].join("\n");
-    writeFileSync(
-      join(tempTemplateDir, "UPDATES.md"),
-      sameTemplate,
-      "utf-8",
-    );
+    writeFileSync(join(tempTemplateDir, "UPDATES.md"), sameTemplate, "utf-8");
 
     syncUpdateBulletinOnStartup();
 

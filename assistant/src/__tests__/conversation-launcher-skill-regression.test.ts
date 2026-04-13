@@ -3,7 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 const REPO_ROOT = resolve(import.meta.dirname ?? __dirname, "..", "..", "..");
-const SKILL_PATH = resolve(REPO_ROOT, "skills", "conversation-launcher", "SKILL.md");
+const SKILL_PATH = resolve(
+  REPO_ROOT,
+  "skills",
+  "conversation-launcher",
+  "SKILL.md",
+);
 const skillContent = readFileSync(SKILL_PATH, "utf-8");
 
 describe("conversation-launcher skill regression", () => {

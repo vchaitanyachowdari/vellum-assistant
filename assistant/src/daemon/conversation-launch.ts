@@ -54,10 +54,7 @@ export interface LaunchConversationDeps {
    * Forward a `ServerMessage` to the process-level assistant event hub.
    * Wraps `DaemonServer.publishAssistantEvent`.
    */
-  publishAssistantEvent: (
-    msg: ServerMessage,
-    conversationId?: string,
-  ) => void;
+  publishAssistantEvent: (msg: ServerMessage, conversationId?: string) => void;
   /** Assistant id to stamp onto the `open_conversation` event. */
   getAssistantId: () => string | undefined;
 }
@@ -131,9 +128,7 @@ export async function launchConversation(
   // direct callers can't accidentally emit `open_conversation` events with a
   // blank title (which would create a blank-titled sidebar entry on macOS).
   if (!params.title || !params.seedPrompt) {
-    throw new Error(
-      "launchConversation: title and seedPrompt are required",
-    );
+    throw new Error("launchConversation: title and seedPrompt are required");
   }
   if (!_deps) {
     throw new Error(

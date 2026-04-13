@@ -95,8 +95,7 @@ export function syncUpdateBulletinOnStartup(): void {
   const activeReleases = getActiveReleases();
   const fileMissing = !existsSync(workspacePath);
   const fileEmpty =
-    !fileMissing &&
-    readFileSync(workspacePath, "utf-8").trim().length === 0;
+    !fileMissing && readFileSync(workspacePath, "utf-8").trim().length === 0;
   const currentReleaseMaterialized =
     activeReleases.includes(currentReleaseId) ||
     isReleaseCompleted(currentReleaseId);
@@ -124,10 +123,7 @@ export function syncUpdateBulletinOnStartup(): void {
   } else {
     const existing = readFileSync(workspacePath, "utf-8");
     if (!hasReleaseBlock(existing, currentReleaseId)) {
-      const contentToAppend = filterNewContentBlocks(
-        templateContent,
-        existing,
-      );
+      const contentToAppend = filterNewContentBlocks(templateContent, existing);
       if (contentToAppend.length > 0) {
         const updated = appendReleaseBlock(
           existing,

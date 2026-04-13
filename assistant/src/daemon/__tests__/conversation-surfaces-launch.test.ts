@@ -78,9 +78,8 @@ mock.module("../../memory/conversation-crud.js", () => ({
 
 // Dynamic imports after mock.module calls so the stubs take effect
 // before the modules under test are loaded.
-const { createSurfaceMutex, handleSurfaceAction } = await import(
-  "../conversation-surfaces.js"
-);
+const { createSurfaceMutex, handleSurfaceAction } =
+  await import("../conversation-surfaces.js");
 const { registerLaunchConversationDeps, resetLaunchConversationDeps } =
   await import("../conversation-launch.js");
 type SurfaceConversationContext =
@@ -464,16 +463,11 @@ describe("handleSurfaceAction — launch_conversation dispatch", () => {
     // (which it does for any interactive card, including persistent ones).
     ctx.pendingSurfaceActions.set("surface-pending", { surfaceType: "card" });
 
-    const result = await handleSurfaceAction(
-      ctx,
-      "surface-pending",
-      "launch",
-      {
-        _action: "launch_conversation",
-        title: "T",
-        seedPrompt: "S",
-      },
-    );
+    const result = await handleSurfaceAction(ctx, "surface-pending", "launch", {
+      _action: "launch_conversation",
+      title: "T",
+      seedPrompt: "S",
+    });
 
     expect(result).toEqual({
       accepted: true,
