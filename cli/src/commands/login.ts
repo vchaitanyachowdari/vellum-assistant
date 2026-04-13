@@ -3,8 +3,16 @@ import { spawn } from "child_process";
 import { randomBytes } from "crypto";
 
 import {
+  findAssistantByName,
+  getActiveAssistant,
+  loadLatestAssistant,
+} from "../lib/assistant-config";
+import { computeDeviceId } from "../lib/guardian-token";
+import {
   clearPlatformToken,
+  ensureSelfHostedLocalRegistration,
   fetchCurrentUser,
+  fetchOrganizationId,
   getPlatformUrl,
   readPlatformToken,
   savePlatformToken,
@@ -160,6 +168,33 @@ export async function login(): Promise<void> {
     const user = await fetchCurrentUser(token);
     savePlatformToken(token);
     console.log(`✅ Logged in as ${user.email}`);
+
+    // Register the local assistant with the platform (non-fatal).
+    // Mirrors the desktop app's LocalAssistantBootstrapService flow.
+    try {
+      const activeName = getActiveAssistant();
+      const entry = activeName
+        ? findAssistantByName(activeName)
+        : loadLatestAssistant();
+
+      // Skip managed ("vellum") assistants — they are handled by the platform.
+      if (entry && entry.cloud !== "vellum") {
+        const orgId = await fetchOrganizationId(token);
+        const clientInstallationId = computeDeviceId();
+        const registration = await ensureSelfHostedLocalRegistration(
+          token,
+          orgId,
+          clientInstallationId,
+          entry.assistantId,
+          "cli",
+        );
+        console.log(
+          `Registered assistant: ${registration.assistant.name} (${registration.assistant.id})`,
+        );
+      }
+    } catch {
+      // Non-fatal — login succeeded even if registration fails
+    }
   } catch (error) {
     console.error(
       `❌ Login failed: ${error instanceof Error ? error.message : error}`,
