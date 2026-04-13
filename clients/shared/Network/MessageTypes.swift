@@ -1098,6 +1098,30 @@ public struct ClawhubOriginMeta: Codable, Sendable, Equatable {
     public let reports: Int
     public let publishedAt: String?
     public let version: String?
+
+    /// Display label for the source row (e.g. "pskoett/self-improving-agent").
+    public var sourceLabel: String {
+        author.isEmpty ? slug : "\(author)/\(slug)"
+    }
+
+    /// URL to this skill's page on clawhub.ai.
+    /// Uses `author/slug` when author is known; falls back to the raw slug
+    /// when it already contains a "/" (installed skills may store `author/slug`
+    /// as the slug itself). Returns nil only when no valid path can be built.
+    public var hubURL: URL? {
+        let path: String
+        if !author.isEmpty {
+            path = "\(author)/\(slug)"
+        } else if slug.contains("/") {
+            path = slug
+        } else {
+            return nil
+        }
+        let encoded = path.split(separator: "/").map {
+            String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
+        }.joined(separator: "/")
+        return URL(string: "https://clawhub.ai/\(encoded)")
+    }
 }
 
 /// Origin-specific metadata for a skill sourced from Skills.sh.
@@ -1106,6 +1130,18 @@ public struct SkillsshOriginMeta: Codable, Sendable, Equatable {
     public let sourceRepo: String
     public let installs: Int
     public let audit: [String: PartnerAudit]?
+
+    /// URL to this skill's page on skills.sh.
+    public var hubURL: URL? {
+        guard !sourceRepo.isEmpty else { return nil }
+        let skillName = slug.split(separator: "/").last.map(String.init) ?? slug
+        // Encode each path segment separately to preserve the separator slash in sourceRepo.
+        let encodedPath = sourceRepo.split(separator: "/").map {
+            String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
+        }.joined(separator: "/")
+        let encodedSkillName = skillName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? skillName
+        return URL(string: "https://skills.sh/\(encodedPath)/\(encodedSkillName)")
+    }
 }
 
 /// Discriminated union over the `origin` field of a skill.
