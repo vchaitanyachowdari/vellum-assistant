@@ -7,6 +7,9 @@ private let log = Logger(subsystem: Bundle.appBundleIdentifier, category: "AuthS
 public final class AuthService {
     public static let shared = AuthService()
 
+    /// UserDefaults key for the connected organization ID.
+    public static let connectedOrganizationIdKey = "connectedOrganizationId"
+
     private init() {}
 
     private struct AuthRequestConfig {
@@ -193,7 +196,7 @@ public final class AuthService {
     @discardableResult
     public func resolveOrganizationId() async throws -> String {
         let orgs = try await getOrganizations()
-        let persistedOrgId = UserDefaults.standard.string(forKey: "connectedOrganizationId")
+        let persistedOrgId = UserDefaults.standard.string(forKey: Self.connectedOrganizationIdKey)
         if let persistedOrgId, orgs.contains(where: { $0.id == persistedOrgId }) {
             log.info("Validated persisted organization: \(persistedOrgId, privacy: .public)")
             return persistedOrgId
@@ -206,7 +209,7 @@ public final class AuthService {
             throw OrganizationResolutionError.noOrganizations
         case 1:
             let orgId = orgs[0].id
-            UserDefaults.standard.set(orgId, forKey: "connectedOrganizationId")
+            UserDefaults.standard.set(orgId, forKey: Self.connectedOrganizationIdKey)
             log.info("Resolved organization: \(orgId, privacy: .public)")
             return orgId
         default:
@@ -685,6 +688,61 @@ public final class AuthService {
             return try JSONDecoder().decode(ReprovisionSelfHostedLocalApiKeyResponse.self, from: data)
         } catch {
             throw PlatformAPIError.decodingError(error.localizedDescription)
+        }
+    }
+
+    /// Retire (deregister) a self-hosted local assistant from the platform.
+    ///
+    /// Calls `DELETE /v1/assistants/{platformAssistantId}/retire/` to remove the
+    /// platform-side registration created by `ensureSelfHostedLocalRegistration`.
+    public func retireSelfHostedLocalAssistant(
+        platformAssistantId: String,
+        organizationId: String
+    ) async throws {
+        let urlString = "\(VellumEnvironment.resolvedPlatformURL)/v1/assistants/\(platformAssistantId)/retire/"
+        guard let url = URL(string: urlString) else {
+            throw PlatformAPIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "DELETE"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        urlRequest.setValue(organizationId, forHTTPHeaderField: "Vellum-Organization-Id")
+        urlRequest.timeoutInterval = 15
+
+        if let token = await SessionTokenManager.getTokenAsync() {
+            urlRequest.setValue(token, forHTTPHeaderField: "X-Session-Token")
+        } else {
+            throw PlatformAPIError.authenticationRequired
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw PlatformAPIError.networkError(error.localizedDescription)
+        }
+
+        let httpResponse = response as? HTTPURLResponse
+        let statusCode = httpResponse?.statusCode ?? 0
+
+        log.debug("Platform request DELETE assistants/\(platformAssistantId, privacy: .public)/retire/ -> \(statusCode)")
+
+        if statusCode == 401 || statusCode == 403 {
+            throw PlatformAPIError.authenticationRequired
+        }
+
+        // 404 is acceptable — the registration may have already been removed.
+        if statusCode == 404 {
+            log.info("Platform assistant \(platformAssistantId, privacy: .public) not found — already deregistered")
+            return
+        }
+
+        guard (200..<300).contains(statusCode) else {
+            let detail = String(data: data, encoding: .utf8)
+            throw PlatformAPIError.serverError(statusCode: statusCode, detail: detail)
         }
     }
 

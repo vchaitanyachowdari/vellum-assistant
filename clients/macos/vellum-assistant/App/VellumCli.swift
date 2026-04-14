@@ -313,6 +313,11 @@ final class VellumCli: AssistantManagementClient {
         log.info("CLI retire completed successfully")
         log.info("[audit] CLI done: retire exit=0 duration=\(retireMs)ms")
 
+        // The CLI does not have access to credential storage, so platform
+        // deregistration must happen here in the macOS app layer, after the
+        // CLI retire succeeds but before lockfile/active-ID cleanup.
+        await deregisterFromPlatformIfNeeded(runtimeAssistantId: resolvedName)
+
         // The CLI already removed the lockfile entry on the success path.
         // Clear the active ID and find a replacement assistant.
         return await findReplacementAfterRetire(retiredId: resolvedName)

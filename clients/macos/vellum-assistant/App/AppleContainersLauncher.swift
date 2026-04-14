@@ -312,10 +312,13 @@ final class AppleContainersLauncher: AssistantManagementClient {
             try? FileManager.default.removeItem(atPath: sock)
         }
 
-        // 4. Remove the guardian token file.
+        // 4. Deregister from the platform.
+        await deregisterFromPlatformIfNeeded(runtimeAssistantId: resolvedName)
+
+        // 5. Remove the guardian token file.
         Self.removeGuardianToken(assistantId: resolvedName)
 
-        // 5. Remove the lockfile entry.
+        // 6. Remove the lockfile entry.
         Self.removeLockfileEntry(assistantId: resolvedName)
 
         log.info("Apple container '\(resolvedName, privacy: .public)' retired")
