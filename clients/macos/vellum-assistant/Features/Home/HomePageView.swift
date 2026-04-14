@@ -13,9 +13,13 @@ import VellumAssistantShared
 /// blank the UI between refreshes.
 struct HomePageView: View {
     @Bindable var store: HomeStore
+    @Bindable var feedStore: HomeFeedStore
     let onStartConversation: () -> Void
     let onPrimaryCTA: (Capability) -> Void
     let onShortcutCTA: (Capability) -> Void
+    /// Fired when a feed action resolves to a daemon-created conversation
+    /// — the receiver (usually `PanelCoordinator`) navigates into it.
+    let onFeedConversationOpened: (String) -> Void
 
     /// Cap the two-column layout so the right column doesn't sprawl on a
     /// 32-inch display. Beyond ~960pt the line lengths stop being readable
@@ -34,6 +38,7 @@ struct HomePageView: View {
         .background(VColor.surfaceBase)
         .task {
             await store.load()
+            await feedStore.load()
         }
     }
 
@@ -48,6 +53,13 @@ struct HomePageView: View {
 
                 VStack(alignment: .leading, spacing: VSpacing.xxl) {
                     HomeFactsSection(facts: state.facts)
+                    // `HomeFeedSection` self-gates on `items.isEmpty`, so when
+                    // no producer has written to the feed yet this slot
+                    // collapses and the layout is identical to pre-feed Home.
+                    HomeFeedSection(
+                        store: feedStore,
+                        onConversationOpened: onFeedConversationOpened
+                    )
                     HomeCapabilitiesSection(
                         capabilities: state.capabilities,
                         onPrimaryCTA: onPrimaryCTA,

@@ -1,6 +1,12 @@
 import SwiftUI
 import VellumAssistantShared
 import UniformTypeIdentifiers
+import os
+
+private let panelCoordinatorLog = Logger(
+    subsystem: Bundle.appBundleIdentifier,
+    category: "PanelCoordinator"
+)
 
 // MARK: - Panel Coordination Extension
 
@@ -152,6 +158,7 @@ extension MainWindowView {
         VPageContainer(title: "Home") {
             HomePageView(
                 store: homeStore,
+                feedStore: feedStore,
                 onStartConversation: {
                     startNewConversation()
                     onDismiss()
@@ -174,6 +181,22 @@ extension MainWindowView {
                     if let id = conversationManager.activeConversationId {
                         windowState.selection = .conversation(id)
                     }
+                },
+                onFeedConversationOpened: { conversationId in
+                    // Daemon already created the conversation in response to
+                    // `store.triggerAction`; the client just needs to navigate.
+                    // A non-UUID id here means the daemon returned something
+                    // the client contract does not allow — log loudly so the
+                    // regression is visible instead of silently dropping.
+                    guard let uuid = UUID(uuidString: conversationId) else {
+                        panelCoordinatorLog.error(
+                            "HomeFeed: daemon returned non-UUID conversationId \(conversationId, privacy: .public); cannot navigate"
+                        )
+                        windowState.showToast(message: "Couldn't open the conversation.", style: .error)
+                        return
+                    }
+                    onDismiss()
+                    windowState.selection = .conversation(uuid)
                 }
             )
             .onAppear {
