@@ -57,6 +57,41 @@ extension MainWindowView {
 
     var sidebarOuterMargin: CGFloat { 16 }
 
+    /// Small notification-red dot overlaid on the Intelligence sidebar row
+    /// whenever `HomeStore` has observed a background `relationshipStateUpdated`
+    /// event while the user was on some other surface. Hidden when:
+    ///
+    /// - The `home-tab` feature flag is off (Home page not live).
+    /// - `HomeStore.hasUnseenChanges` is false (nothing new, or user has seen it).
+    /// - The user is already sitting on the Intelligence panel (no point in
+    ///   nagging them — navigating to the Home sub-tab will clear the flag).
+    ///
+    /// Shared between the expanded and collapsed sidebar variants so both
+    /// states stay in lockstep.
+    @ViewBuilder
+    var intelligenceUnseenChangesDot: some View {
+        // Hide the dot only when the user is actively looking at the Home
+        // sub-tab (`isHomeTabVisible == true`). Being on a different
+        // Intelligence sub-tab (Identity, Skills, Workspace, etc.) does NOT
+        // count as "seen" — the user can be in the panel without ever opening
+        // Home. `IntelligencePanel` flips `isHomeTabVisible` via .onAppear /
+        // .onDisappear on the Home tab content, so this stays in sync.
+        //
+        // `home-tab` is a macos-scope flag, resolved via
+        // `MacOSClientFeatureFlagManager`, not the assistant-scope store.
+        if MacOSClientFeatureFlagManager.shared.isEnabled("home-tab")
+            && homeStore.hasUnseenChanges
+            && !homeStore.isHomeTabVisible {
+            Circle()
+                .fill(VColor.systemNegativeStrong)
+                .frame(width: 8, height: 8)
+                .offset(x: 4, y: -4)
+                .transition(.scale.combined(with: .opacity))
+                .allowsHitTesting(false)
+                .accessibilityLabel(Text("Unseen changes"))
+        }
+    }
+
     @ViewBuilder
     var sidebarView: some View {
         VStack(spacing: 0) {
@@ -371,6 +406,9 @@ extension MainWindowView {
             SidebarNavRow(icon: VIcon.brain.rawValue, label: cachedAssistantName, isActive: windowState.selection == .panel(.intelligence)) {
                 windowState.showPanel(.intelligence)
             }
+            .overlay(alignment: .topTrailing) {
+                intelligenceUnseenChangesDot
+            }
             SidebarNavRow(icon: VIcon.layoutGrid.rawValue, label: "Library", isActive: windowState.selection == .panel(.apps)) {
                 windowState.showPanel(.apps)
             }
@@ -503,6 +541,9 @@ extension MainWindowView {
 
             SidebarNavRow(icon: VIcon.brain.rawValue, label: cachedAssistantName, isActive: windowState.selection == .panel(.intelligence), isExpanded: false) {
                 windowState.showPanel(.intelligence)
+            }
+            .overlay(alignment: .topTrailing) {
+                intelligenceUnseenChangesDot
             }
             SidebarNavRow(icon: VIcon.layoutGrid.rawValue, label: "Library", isActive: windowState.selection == .panel(.apps), isExpanded: false) {
                 windowState.showPanel(.apps)
