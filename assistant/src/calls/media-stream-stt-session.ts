@@ -59,7 +59,7 @@ const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 10_000;
 // ---------------------------------------------------------------------------
 
 export interface MediaStreamSttSessionCallbacks {
-  /** Called when the turn detector transitions to active (first audio chunk). */
+  /** Called when the turn detector transitions to active (first speech-bearing chunk). */
   onSpeechStart?: () => void;
 
   /**
@@ -127,6 +127,9 @@ export class MediaStreamSttSession {
 
     this.turnDetector = new MediaTurnDetector(config.turnDetector, {
       onTurnStart: () => {
+        // Clear inter-turn silence that accumulated while idle so each
+        // transcription request contains only speech-relevant chunks.
+        this.currentTurnChunks = [];
         this.callbacks.onSpeechStart?.();
       },
       onTurnEnd: (reason, durationMs) => {
@@ -205,13 +208,17 @@ export class MediaStreamSttSession {
     // Only process inbound (caller) audio
     if (event.media.track !== "inbound") return;
 
-    this.currentTurnChunks.push(event.media.payload);
-
     // Compute speech activity from the audio payload using a lightweight
     // energy heuristic. mu-law encoded audio has a companded dynamic
     // range — silence sits near 0xFF/0x7F while speech has higher energy.
+    //
+    // The detector call runs BEFORE the push so that the onTurnStart
+    // callback can clear stale inter-turn silence from the buffer
+    // without also wiping the first speech chunk of the new turn.
     const hasSpeech = detectSpeechActivity(event.media.payload);
     this.turnDetector.onMediaChunk(hasSpeech);
+
+    this.currentTurnChunks.push(event.media.payload);
   }
 
   private handleStop(): void {
