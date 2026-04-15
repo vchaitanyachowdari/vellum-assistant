@@ -184,8 +184,7 @@ export class MeetAudioIngest {
   private stopped = false;
 
   constructor(deps: MeetAudioIngestDeps = {}) {
-    this.createTranscriber =
-      deps.createTranscriber ?? defaultCreateTranscriber;
+    this.createTranscriber = deps.createTranscriber ?? defaultCreateTranscriber;
     this.listen = deps.listen ?? defaultListen;
     this.botConnectTimeoutMs =
       deps.botConnectTimeoutMs ?? BOT_CONNECT_TIMEOUT_MS;
@@ -377,10 +376,7 @@ export class MeetAudioIngest {
       }
     }
 
-    log.info(
-      { meetingId: this.meetingId },
-      "MeetAudioIngest: stopped",
-    );
+    log.info({ meetingId: this.meetingId }, "MeetAudioIngest: stopped");
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -388,10 +384,7 @@ export class MeetAudioIngest {
   /**
    * Forward inbound bytes to the transcriber and log connection lifecycle.
    */
-  private wireConnection(
-    conn: UnixSocketConnection,
-    meetingId: string,
-  ): void {
+  private wireConnection(conn: UnixSocketConnection, meetingId: string): void {
     conn.onData((chunk) => {
       if (this.stopped) return;
       const transcriber = this.transcriber;
@@ -488,9 +481,7 @@ async function defaultCreateTranscriber(): Promise<StreamingTranscriber> {
 function defaultListen(socketPath: string): Promise<UnixSocketServer> {
   return new Promise<UnixSocketServer>((resolve, reject) => {
     let settled = false;
-    const connectionListeners: Array<
-      (conn: UnixSocketConnection) => void
-    > = [];
+    const connectionListeners: Array<(conn: UnixSocketConnection) => void> = [];
     const errorListeners: Array<(err: Error) => void> = [];
 
     const netServer: NetServer = netCreateServer((socket) => {
