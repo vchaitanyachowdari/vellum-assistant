@@ -40,7 +40,6 @@ EXPERIMENTAL_FILES=(
 # underlying code or tests until the file is green, then remove it here.
 KNOWN_BROKEN_FILES=(
   "connect.test.ts"
-  "credentials-cli.test.ts"
   "email-attachment.test.ts"
   "email-download.test.ts"
   "email-list.test.ts"
