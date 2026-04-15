@@ -43,7 +43,6 @@ KNOWN_BROKEN_FILES=(
   "byo-connection.test.ts"
   "callback-routes-list.test.ts"
   "connect.test.ts"
-  "contact-routes.test.ts"
   "conversation-tool-setup.test.ts"
   "credentials-cli.test.ts"
   "disconnect.test.ts"
