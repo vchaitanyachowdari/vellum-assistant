@@ -53,7 +53,6 @@ KNOWN_BROKEN_FILES=(
   "guard-tests.test.ts"
   "memory-item-routes.test.ts"
   "provider-adapters.test.ts"
-  "providers-delete.test.ts"
   "qdrant-manager.test.ts"
   "skill-feature-flags-integration.test.ts"
   "status.test.ts"
