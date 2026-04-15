@@ -2,7 +2,7 @@
  * Tests for initFeatureFlagOverrides() — the async gateway fetch that
  * pre-populates the feature flag cache before CLI program construction.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 
 import {
   clearFeatureFlagOverridesCache,
@@ -140,13 +140,65 @@ describe("initFeatureFlagOverrides", () => {
 
     await initFeatureFlagOverrides();
 
-    // Signing key should have been initialized during the fetch
-    expect(tokenService.isSigningKeyInitialized()).toBe(true);
+    // The signing key may or may not be initialized depending on whether
+    // loadOrCreateSigningKey() found/created a key on disk. Either way,
+    // the fetch should still have succeeded (loopback bypass).
 
-    // And the flag should be resolved correctly
+    // The flag should be resolved correctly
     const config = {} as any;
     expect(isAssistantFeatureFlagEnabled("expected-enabled", config)).toBe(
       true,
+    );
+  });
+
+  it("still fetches flags when signing key is completely unavailable", async () => {
+    // Simulate a CLI subprocess where the signing key env var is unset
+    // and resolveSigningKey() throws (e.g. read-only filesystem where
+    // loadOrCreateSigningKey cannot write a new key).
+    // The fetch should still proceed without the Authorization header
+    // because the gateway auto-authenticates loopback peers.
+    tokenService._resetSigningKeyForTesting();
+    delete process.env.ACTOR_TOKEN_SIGNING_KEY;
+
+    // Force resolveSigningKey to throw so the inner catch path is exercised
+    const spy = spyOn(tokenService, "resolveSigningKey").mockImplementation(
+      () => {
+        throw new Error("read-only filesystem");
+      },
+    );
+
+    mockFetch(
+      "/v1/feature-flags",
+      { method: "GET" },
+      {
+        body: {
+          flags: [
+            { key: "gated-feature", enabled: true },
+            { key: "disabled-feature", enabled: false },
+          ],
+        },
+        status: 200,
+      },
+    );
+
+    await initFeatureFlagOverrides();
+
+    spy.mockRestore();
+
+    // Fetch should have been called despite auth failure
+    const calls = getMockFetchCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0].path).toContain("/v1/feature-flags");
+
+    // Authorization header should be absent (inner catch swallowed the error)
+    const headers = calls[0].init.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
+
+    // Flags should be resolved correctly from the gateway response
+    const config = {} as any;
+    expect(isAssistantFeatureFlagEnabled("gated-feature", config)).toBe(true);
+    expect(isAssistantFeatureFlagEnabled("disabled-feature", config)).toBe(
+      false,
     );
   });
 
