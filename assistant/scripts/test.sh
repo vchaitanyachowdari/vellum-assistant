@@ -59,7 +59,6 @@ KNOWN_BROKEN_FILES=(
   "email-list.test.ts"
   "email-register.test.ts"
   "email-send.test.ts"
-  "email-status.test.ts"
   "email-unregister.test.ts"
   "qdrant-manager.test.ts"
   "skill-feature-flags-integration.test.ts"
