@@ -72,8 +72,18 @@ start_dockerd_if_containerized() {
     return 0
   fi
 
-  echo "[vellum-init] dockerd did not become ready within 30s; see ${DOCKERD_LOG}" >&2
-  exit 1
+  # Kill the stale dockerd from the last failed attempt before continuing.
+  if [ -n "${DOCKERD_PID:-}" ] && kill -0 "${DOCKERD_PID}" 2>/dev/null; then
+    kill "${DOCKERD_PID}" 2>/dev/null || true
+    wait "${DOCKERD_PID}" 2>/dev/null || true
+  fi
+
+  # Keep the assistant booting even when the inner Docker Engine is
+  # unavailable. Features that require nested containers (for example,
+  # Meet bot spawning) already fail lazily with a clear runtime error when
+  # they probe /var/run/docker.sock.
+  echo "[vellum-init] dockerd did not become ready within 30s; continuing without nested container support; see ${DOCKERD_LOG}" >&2
+  return 0
 }
 
 start_dockerd_if_containerized
