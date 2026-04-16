@@ -827,6 +827,14 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
         }
     }
 
+    public var isShowAllMode: Bool {
+        get { paginationState.isShowAllMode }
+        set {
+            paginationState.isShowAllMode = newValue
+            paginationState.recomputeVisibleMessages(from: messageManager.messages)
+        }
+    }
+
     public var isLoadingMoreMessages: Bool {
         get { paginationState.isLoadingMoreMessages }
         set { paginationState.isLoadingMoreMessages = newValue }
@@ -1027,6 +1035,7 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
         }
         // Reset pagination so the display window doesn't reference indices beyond the
         // newly shortened array. trimKeepRecent < messagePageSize is possible, so clamp.
+        isShowAllMode = false
         displayedMessageCount = Self.messagePageSize
     }
 
@@ -1044,6 +1053,7 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
                 msgs[i].stripHeavyContent()
             }
         }
+        isShowAllMode = false
         displayedMessageCount = Self.messagePageSize
         // Only mark history as unloaded if there's a conversation to reload from.
         // Conversations without a conversation ID (new, empty) have nothing to fetch —
@@ -1235,6 +1245,7 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
                     self.historyCursor = oldestRetained.timestamp.timeIntervalSince1970 * 1000
                 }
                 self.hasMoreHistory = true
+                self.isShowAllMode = false
                 self.displayedMessageCount = Self.messagePageSize
             }
         }
@@ -2112,13 +2123,15 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
             let hasModelCommand = applyHistoryResponseMarkers(to: &mergedMessages)
             self.messages = mergedMessages
             // Expand the display window by the number of messages prepended so
-            // the user sees them immediately. Use Int.max if no more pages exist.
+            // the user sees them immediately. Enter show-all mode when no more
+            // daemon pages exist so new incoming messages stay visible.
             if hasMore {
-                displayedMessageCount = displayedMessageCount == Int.max
-                    ? Int.max
-                    : displayedMessageCount + chatMessages.count
+                if !isShowAllMode {
+                    displayedMessageCount = displayedMessageCount + chatMessages.count
+                }
             } else {
-                displayedMessageCount = Int.max
+                isShowAllMode = true
+                displayedMessageCount = mergedMessages.count
             }
             self.paginationState.loadMoreTimeoutTask?.cancel()
             self.paginationState.loadMoreTimeoutTask = nil
@@ -2231,6 +2244,7 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
         self.isLoadingHistory = false
         self.isHistoryLoaded = true
         // Reset pagination so the view shows the most-recent page after history loads.
+        self.isShowAllMode = false
         self.displayedMessageCount = Self.messagePageSize
         // Surfaces are now included directly in the history response and populated above
         // Strip heavy data from old messages after a (potentially large) history load.
