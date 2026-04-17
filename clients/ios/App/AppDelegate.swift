@@ -7,6 +7,42 @@ import VellumAssistantShared
 
 private let log = Logger(subsystem: Bundle.appBundleIdentifier, category: "AppDelegate")
 
+extension Notification.Name {
+    /// Posted when the user taps a chat push notification's default action. The
+    /// `userInfo` dictionary carries the target conversation ID under
+    /// `iosPushNotificationConversationIdKey`. `ContentView` observes this to switch
+    /// to the Chats tab and select the conversation.
+    static let iosPushNotificationConversationTap = Notification.Name("iosPushNotificationConversationTap")
+}
+
+/// `userInfo` key carrying the conversation ID string for
+/// `.iosPushNotificationConversationTap`.
+let iosPushNotificationConversationIdKey = "conversationId"
+
+/// Durable one-slot latch for a pending push-notification navigation intent.
+///
+/// On a cold launch triggered by a notification tap, `userNotificationCenter(_:didReceive:)`
+/// can run before `ContentView.body` has been evaluated and before its
+/// `.onReceive(.iosPushNotificationConversationTap)` subscriber is attached. A plain
+/// `NotificationCenter.post` in that window is dropped. The delegate stores the
+/// conversation ID here before posting; `ContentView.task` consumes the latch on first
+/// appearance, and `.onReceive` clears it on the hot path so re-entry doesn't
+/// double-navigate.
+///
+/// Main-actor isolated because both the notification-center delegate callback and the
+/// SwiftUI consumer run on the main actor under Swift 6 strict concurrency.
+@MainActor
+enum PendingPushNavigation {
+    static var conversationId: String?
+
+    /// Return and clear the pending conversation ID, if any.
+    static func consume() -> String? {
+        let value = conversationId
+        conversationId = nil
+        return value
+    }
+}
+
 /// Resolve the conversation key from UserDefaults for host tool filtering.
 private func resolveConversationKey() -> String? {
     // Managed assistant uses assistantId as conversation key
@@ -322,13 +358,14 @@ extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let userInfo = response.notification.request.content.userInfo
+        let conversationId =
+            userInfo["conversationId"] as? String ??
+            userInfo["conversation_id"] as? String
+
         if response.actionIdentifier == "REPLY_ACTION",
            let textResponse = response as? UNTextInputNotificationResponse {
             let replyText = textResponse.userText
-            let conversationId =
-                response.notification.request.content.userInfo["conversationId"] as? String ??
-                response.notification.request.content.userInfo["conversation_id"] as? String
-
             Task { @MainActor in
                 // If not connected (e.g. background launch via notification reply with no scene
                 // foregrounded), attempt to connect before sending the reply.
@@ -352,6 +389,23 @@ extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
                 completionHandler()
             }
         } else {
+            // Default tap (UNNotificationDefaultActionIdentifier) and any future custom
+            // navigation actions: surface the conversation the notification is about.
+            // ContentView observes this notification and drives the Chats tab +
+            // IOSConversationStore selection.
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+               let conversationId {
+                // Latch the intent before posting. On a cold launch, this callback can
+                // run before ContentView's `.onReceive` subscriber is attached, which
+                // would drop the posted notification. `ContentView.task` reads and
+                // clears this on first appearance so the navigation still happens.
+                PendingPushNavigation.conversationId = conversationId
+                NotificationCenter.default.post(
+                    name: .iosPushNotificationConversationTap,
+                    object: nil,
+                    userInfo: [iosPushNotificationConversationIdKey: conversationId]
+                )
+            }
             completionHandler()
         }
     }
