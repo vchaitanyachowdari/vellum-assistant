@@ -335,6 +335,7 @@ export class MeetSpeakerResolver {
 
   private onSpeakerChange(event: SpeakerChangeEvent): void {
     const timestampMs = parseTimestamp(event.timestamp);
+    if (!Number.isFinite(timestampMs)) return;
     this.activeSpeaker = {
       speakerId: event.speakerId,
       speakerName: event.speakerName,
