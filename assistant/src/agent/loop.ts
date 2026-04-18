@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/node";
 
+import type { LLMCallSite } from "../config/schemas/llm.js";
 import { estimateToolsTokens } from "../context/token-estimator.js";
 import { truncateOversizedToolResults } from "../context/tool-result-truncation.js";
 import { getHookManager } from "../hooks/manager.js";
@@ -204,6 +205,7 @@ export class AgentLoop {
     signal?: AbortSignal,
     requestId?: string,
     onCheckpoint?: (checkpoint: CheckpointInfo) => CheckpointDecision,
+    callSite?: LLMCallSite,
   ): Promise<Message[]> {
     const history = [...messages];
     let toolUseTurns = 0;
@@ -235,25 +237,47 @@ export class AgentLoop {
           ? this.resolveSystemPrompt(history)
           : null;
         const turnSystemPrompt = resolved?.systemPrompt ?? this.systemPrompt;
-        const turnMaxTokens = resolved?.maxTokens ?? this.config.maxTokens;
         const turnModel = resolved?.model;
 
-        const providerConfig: Record<string, unknown> = {
-          max_tokens: turnMaxTokens,
-        };
+        // Field precedence (highest wins):
+        //   1. Per-turn explicit (`resolved.maxTokens` / `resolved.model`)
+        //   2. Call-site resolved values (filled by
+        //      `RetryProvider.normalizeSendMessageOptions` from
+        //      `resolveCallSiteConfig(callSite, llm)`)
+        //   3. Conversation defaults (`this.config.*`, sourced from
+        //      `llm.default`)
+        //
+        // When `callSite` is present we deliberately leave
+        // `max_tokens`/`thinking`/`effort`/`speed` *unset* in `providerConfig`
+        // so the normalizer can fill them from the call-site resolution. The
+        // normalizer only writes these fields when they're undefined; if we
+        // pre-set them from `this.config` here, every per-call-site override
+        // for these knobs is silently ignored.
+        //
+        // `toolChoice` and `cacheTtl` are not part of the call-site schema, so
+        // they always come from `this.config` regardless of `callSite`.
+        const providerConfig: Record<string, unknown> = {};
+
+        if (resolved?.maxTokens !== undefined) {
+          providerConfig.max_tokens = resolved.maxTokens;
+        } else if (!callSite) {
+          providerConfig.max_tokens = this.config.maxTokens;
+        }
+
         if (turnModel) {
           providerConfig.model = turnModel;
         }
-        if (this.config.thinking?.enabled) {
-          providerConfig.thinking = { type: "adaptive" };
-        }
 
-        if (this.config.effort) {
-          providerConfig.effort = this.config.effort;
-        }
-
-        if (this.config.speed && this.config.speed !== "standard") {
-          providerConfig.speed = this.config.speed;
+        if (!callSite) {
+          if (this.config.thinking?.enabled) {
+            providerConfig.thinking = { type: "adaptive" };
+          }
+          if (this.config.effort) {
+            providerConfig.effort = this.config.effort;
+          }
+          if (this.config.speed && this.config.speed !== "standard") {
+            providerConfig.speed = this.config.speed;
+          }
         }
 
         if (this.config.toolChoice) {
@@ -262,6 +286,17 @@ export class AgentLoop {
 
         if (this.config.cacheTtl) {
           providerConfig.cacheTtl = this.config.cacheTtl;
+        }
+
+        // Per-call LLM call-site identifier. Surfaces on the per-call
+        // `config.callSite` so `RetryProvider.normalizeSendMessageOptions`
+        // can route through `resolveCallSiteConfig` against
+        // `llm.callSites.<id>` (falling back to `llm.default` when absent).
+        // User-initiated conversation turns default to `mainAgent` in the
+        // agent loop's caller; other invocation contexts (heartbeat, filing,
+        // analyze, etc.) pass their own `callSite`.
+        if (callSite) {
+          providerConfig.callSite = callSite;
         }
 
         const preLlmResult = await getHookManager().trigger("pre-llm-call", {

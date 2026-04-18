@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { getConfig } from "../config/loader.js";
-import type { Speed } from "../config/schemas/inference.js";
+import type { LLMCallSite } from "../config/schemas/llm.js";
 import { bootstrapConversation } from "../memory/conversation-bootstrap.js";
 import { getLogger } from "../util/logger.js";
 import { getWorkspaceDir } from "../util/platform.js";
@@ -42,7 +42,7 @@ export interface FilingDeps {
   processMessage: (
     conversationId: string,
     content: string,
-    options?: { speed?: Speed },
+    options?: { callSite?: LLMCallSite },
   ) => Promise<{ messageId: string }>;
   onConversationCreated?: (info: {
     conversationId: string;
@@ -190,8 +190,6 @@ export class FilingService {
     log.info("Running filing job");
 
     try {
-      const config = getConfig().filing;
-
       const conversation = bootstrapConversation({
         conversationType: "background",
         source: "filing",
@@ -206,7 +204,7 @@ export class FilingService {
       });
 
       await this.deps.processMessage(conversation.id, FILING_PROMPT_TEMPLATE, {
-        speed: config.speed,
+        callSite: "filingAgent",
       });
 
       log.info({ conversationId: conversation.id }, "Filing job completed");

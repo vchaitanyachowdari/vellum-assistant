@@ -49,6 +49,7 @@ import {
 import { getOrCreateConversation } from "../memory/conversation-key-store.js";
 import { syncIdentityNameToPlatform } from "../platform/sync-identity.js";
 import { buildSystemPrompt } from "../prompts/system-prompt.js";
+import { CallSiteRoutingProvider } from "../providers/call-site-routing.js";
 import { RateLimitProvider } from "../providers/ratelimit.js";
 import { getProvider, initializeProviders } from "../providers/registry.js";
 import {
@@ -1038,7 +1039,19 @@ export class DaemonServer {
 
       const createPromise = (async () => {
         const config = getConfig();
-        let provider = getProvider(config.services.inference.provider);
+        let provider = getProvider(config.llm.default.provider);
+        // Per-call `options.config.callSite` can resolve to a provider name
+        // that differs from `llm.default.provider`. Wrap the default
+        // provider so the actual transport routes correctly per call,
+        // rather than only forwarding metadata to the default's HTTP
+        // client. See `providers/call-site-routing.ts`.
+        provider = new CallSiteRoutingProvider(provider, (name) => {
+          try {
+            return getProvider(name);
+          } catch {
+            return undefined;
+          }
+        });
         const { rateLimit } = config;
         if (rateLimit.maxRequestsPerMinute > 0) {
           provider = new RateLimitProvider(
@@ -1051,7 +1064,8 @@ export class DaemonServer {
 
         const systemPrompt =
           storedOptions?.systemPromptOverride ?? buildSystemPrompt();
-        const maxTokens = storedOptions?.maxResponseTokens ?? config.maxTokens;
+        const maxTokens =
+          storedOptions?.maxResponseTokens ?? config.llm.default.maxTokens;
 
         const memoryPolicy = this.deriveMemoryPolicy(conversationId);
         // Resolve the shared CES client (may still be initializing).
@@ -1070,7 +1084,6 @@ export class DaemonServer {
           sharedCesClient,
           storedOptions?.speed,
           undefined,
-          storedOptions?.modelIntent,
           storedOptions?.modelOverride,
         );
         newConversation.updateClient(sendToClient, true);
@@ -1402,6 +1415,7 @@ export class DaemonServer {
       .runAgentLoop(content, messageId, onEvent, {
         isInteractive: options?.isInteractive ?? false,
         isUserMessage: true,
+        ...(options?.callSite ? { callSite: options.callSite } : {}),
       })
       .finally(() => {
         if (
@@ -1442,9 +1456,9 @@ export class DaemonServer {
       messageCount: conversation.getMessages().length,
       inputTokens: conversation.usageStats.inputTokens,
       outputTokens: conversation.usageStats.outputTokens,
-      maxInputTokens: config.contextWindow.maxInputTokens,
-      model: config.services.inference.model,
-      provider: config.services.inference.provider,
+      maxInputTokens: config.llm.default.contextWindow.maxInputTokens,
+      model: config.llm.default.model,
+      provider: config.llm.default.provider,
       estimatedCost: conversation.usageStats.estimatedCost,
       userMessageInterface: serverInterfaceCtx?.userMessageInterface,
     };
@@ -1628,6 +1642,7 @@ export class DaemonServer {
       await conversation.runAgentLoop(resolvedContent, messageId, onEvent, {
         isInteractive: options?.isInteractive ?? false,
         isUserMessage: true,
+        ...(options?.callSite ? { callSite: options.callSite } : {}),
       });
     } finally {
       if (

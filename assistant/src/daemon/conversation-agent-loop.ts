@@ -24,6 +24,7 @@ import type {
 } from "../channels/types.js";
 import { isAssistantFeatureFlagEnabled } from "../config/assistant-feature-flags.js";
 import { getConfig } from "../config/loader.js";
+import type { LLMCallSite } from "../config/schemas/llm.js";
 import {
   derefToolResultReReads,
   postTurnTruncateToolResults,
@@ -356,6 +357,13 @@ export async function runAgentLoopImpl(
     isInteractive?: boolean;
     isUserMessage?: boolean;
     titleText?: string;
+    /**
+     * LLM call-site identifier threaded into the per-call provider config.
+     * Adapter callers (heartbeat, filing, scheduler, etc.) pass their own
+     * call-site id so the resolver picks `llm.callSites.<id>`. When unset,
+     * the agent loop defaults to `'mainAgent'` for user-initiated turns.
+     */
+    callSite?: LLMCallSite;
   },
 ): Promise<void> {
   if (!ctx.abortController) {
@@ -378,6 +386,13 @@ export async function runAgentLoopImpl(
     requestId: reqId,
   });
   let yieldedForHandoff = false;
+
+  // Default user-initiated turns to the `mainAgent` call site. Other
+  // invocation contexts (heartbeat, filing, analyze, etc.) pass their own
+  // `callSite`. The provider layer resolves provider/model/maxTokens via
+  // `resolveCallSiteConfig`, picking up any user overrides under
+  // `llm.callSites.mainAgent` (falling back to `llm.default` when absent).
+  const turnCallSite: LLMCallSite = options?.callSite ?? "mainAgent";
 
   // Capture the turn channel context *before* any awaits so a second
   // message from a different channel can't overwrite it mid-flight.
@@ -877,8 +892,8 @@ export async function runAgentLoopImpl(
     // and proactively invoke the reducer if already above budget. This avoids
     // a wasted provider round-trip that would just fail with context_too_large.
     const config = getConfig();
-    const overflowRecovery = config.contextWindow.overflowRecovery;
-    const providerMaxTokens = config.contextWindow.maxInputTokens;
+    const overflowRecovery = config.llm.default.contextWindow.overflowRecovery;
+    const providerMaxTokens = config.llm.default.contextWindow.maxInputTokens;
     // Widen safety margin for large conversations where estimation error
     // compounds across many messages with tool results.
     const baseSafetyMargin = overflowRecovery.safetyMarginRatio;
@@ -924,7 +939,7 @@ export async function runAgentLoopImpl(
           {
             providerName: ctx.provider.name,
             systemPrompt: ctx.systemPrompt,
-            contextWindow: config.contextWindow,
+            contextWindow: config.llm.default.contextWindow,
             targetTokens: preflightBudget,
             toolTokenBudget,
           },
@@ -1102,6 +1117,7 @@ export async function runAgentLoopImpl(
       abortController.signal,
       reqId,
       onCheckpoint,
+      turnCallSite,
     );
 
     // ── Proactive mid-loop compaction ───────────────────────────────
@@ -1215,6 +1231,7 @@ export async function runAgentLoopImpl(
         abortController.signal,
         reqId,
         onCheckpoint,
+        turnCallSite,
       );
     }
 
@@ -1257,6 +1274,7 @@ export async function runAgentLoopImpl(
         abortController.signal,
         reqId,
         onCheckpoint,
+        turnCallSite,
       );
 
       if (state.orderingErrorDetected) {
@@ -1355,7 +1373,7 @@ export async function runAgentLoopImpl(
           {
             providerName: ctx.provider.name,
             systemPrompt: ctx.systemPrompt,
-            contextWindow: config.contextWindow,
+            contextWindow: config.llm.default.contextWindow,
             targetTokens: correctedTarget,
             toolTokenBudget,
           },
@@ -1440,6 +1458,7 @@ export async function runAgentLoopImpl(
           abortController.signal,
           reqId,
           onCheckpoint,
+          turnCallSite,
         );
 
         // If the rerun still yields at checkpoint, the turn is still
@@ -1566,6 +1585,7 @@ export async function runAgentLoopImpl(
               abortController.signal,
               reqId,
               onCheckpoint,
+              turnCallSite,
             );
           } else {
             // User denied compression — emit a graceful assistant explanation
@@ -1689,6 +1709,7 @@ export async function runAgentLoopImpl(
             abortController.signal,
             reqId,
             onCheckpoint,
+            turnCallSite,
           );
         }
         // action === "fail_gracefully" falls through to the final error below
@@ -1863,7 +1884,7 @@ export async function runAgentLoopImpl(
       state.exchangeLlmCallCount,
       {
         tokens: state.lastCallInputTokens,
-        maxTokens: config.contextWindow.maxInputTokens,
+        maxTokens: config.llm.default.contextWindow.maxInputTokens,
       },
     );
 
