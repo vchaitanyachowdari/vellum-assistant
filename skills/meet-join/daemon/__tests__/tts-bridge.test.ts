@@ -772,12 +772,11 @@ function buildPcmWavBuffer(options: {
 
 function isFfmpegOnPath(): boolean {
   try {
-    const probe = realSpawn("ffmpeg", ["-version"], {
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    // Synchronously detect ENOENT by listening once and then killing.
-    // If spawn succeeded, ffmpeg exists — close and report true.
-    probe.kill("SIGKILL");
+    // Use execFileSync for the probe instead of spawn — Bun's spawn
+    // throws a synchronous error that leaks as an "unhandled error
+    // between tests" even inside try/catch at module scope.
+    const { execFileSync } = require("node:child_process");
+    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -794,9 +793,7 @@ describe("MeetTtsBridge resampling hot-path (real ffmpeg)", () => {
       // content doesn't matter; we only care about byte counts in/out.
       const inputSampleRateHz = 24_000;
       const durationSeconds = 0.5;
-      const inputSampleCount = Math.round(
-        inputSampleRateHz * durationSeconds,
-      );
+      const inputSampleCount = Math.round(inputSampleRateHz * durationSeconds);
       const pcm24k = new Int16Array(inputSampleCount); // all zeros = silence
       const wavPayload = buildPcmWavBuffer({
         sampleRateHz: inputSampleRateHz,
@@ -839,12 +836,8 @@ describe("MeetTtsBridge resampling hot-path (real ffmpeg)", () => {
       // boundary handling (libswresample may add/drop a small number
       // of samples around container edges).
       const tolerance = 0.1 * BOT_AUDIO_SAMPLE_RATE_HZ * 2; // 9600 bytes
-      expect(post.body.byteLength).toBeGreaterThan(
-        expectedBytes - tolerance,
-      );
-      expect(post.body.byteLength).toBeLessThan(
-        expectedBytes + tolerance,
-      );
+      expect(post.body.byteLength).toBeGreaterThan(expectedBytes - tolerance);
+      expect(post.body.byteLength).toBeLessThan(expectedBytes + tolerance);
 
       // Crucially: prove we did NOT forward the raw 24 kHz stream — if
       // resampling were broken, the body would be roughly equal to the
