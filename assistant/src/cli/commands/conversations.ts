@@ -35,11 +35,14 @@ import { deleteSchedule } from "../../schedule/schedule-store.js";
 import { timeAgo } from "../../util/time.js";
 import { initializeDb } from "../db.js";
 import { log } from "../logger.js";
+import { registerConversationsImportCommand } from "./conversations-import.js";
 
 export function registerConversationsCommand(program: Command): void {
   const conversations = program
     .command("conversations")
     .description("Manage conversations");
+
+  registerConversationsImportCommand(conversations);
 
   conversations.addHelpText(
     "after",

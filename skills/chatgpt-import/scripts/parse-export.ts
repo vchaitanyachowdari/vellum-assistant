@@ -1,28 +1,15 @@
+#!/usr/bin/env bun
+
+/**
+ * Parse a ChatGPT export ZIP and output the standard conversation import
+ * JSON format expected by `assistant conversations import`.
+ *
+ * Usage:
+ *   bun run scripts/parse-export.ts --file /path/to/chatgpt-export.zip
+ */
+
 import { existsSync, readFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
-
-import { eq } from "drizzle-orm";
-import { v4 as uuid } from "uuid";
-
-import { getConfig } from "../../../../config/loader.js";
-import {
-  addMessage,
-  createConversation,
-} from "../../../../memory/conversation-crud.js";
-import { getDb } from "../../../../memory/db.js";
-import { indexMessageNow } from "../../../../memory/indexer.js";
-import {
-  conversationKeys,
-  conversations,
-  messages as messagesTable,
-} from "../../../../memory/schema.js";
-import type {
-  ToolContext,
-  ToolExecutionResult,
-} from "../../../../tools/types.js";
-import { getLogger } from "../../../../util/logger.js";
-
-const log = getLogger("chatgpt-import");
 
 // -- ChatGPT export format types --
 
@@ -50,168 +37,48 @@ interface ChatGPTConversation {
   mapping: Record<string, ChatGPTNode>;
 }
 
-interface ImportedMessage {
+// -- Output types (matches `assistant conversations import` schema) --
+
+interface OutputMessage {
   role: string;
   content: Array<{ type: string; text: string }>;
   createdAt: number;
 }
 
-interface ImportedConversation {
-  sourceId: string;
+interface OutputConversation {
+  sourceKey: string;
   title: string;
   createdAt: number;
   updatedAt: number;
-  messages: ImportedMessage[];
+  messages: OutputMessage[];
 }
 
-// -- Tool entry point --
+// -- Argument parsing --
 
-export async function run(
-  input: Record<string, unknown>,
-  _context: ToolContext,
-): Promise<ToolExecutionResult> {
-  const filePath = input.file_path as string;
+function parseCliArgs(): { filePath: string } {
+  const args = process.argv.slice(2);
+  let filePath: string | null = null;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--file" && i + 1 < args.length) {
+      filePath = args[i + 1];
+      i++;
+    }
+  }
 
   if (!filePath) {
-    return { content: "Error: file_path is required", isError: true };
+    process.stderr.write(
+      "Usage: bun run scripts/parse-export.ts --file <path-to-zip>\n",
+    );
+    process.exit(1);
   }
 
-  if (!filePath.endsWith(".zip")) {
-    return {
-      content:
-        "Error: Only ZIP files are accepted. Please provide the ChatGPT export ZIP file.",
-      isError: true,
-    };
-  }
-
-  if (!existsSync(filePath)) {
-    return { content: `Error: File not found: ${filePath}`, isError: true };
-  }
-
-  let imported: ImportedConversation[];
-  try {
-    imported = parseChatGPTExport(filePath);
-  } catch (err) {
-    return {
-      content: `Error parsing export file: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-      isError: true,
-    };
-  }
-
-  if (imported.length === 0) {
-    return {
-      content: "No conversations found in the export file.",
-      isError: false,
-    };
-  }
-
-  const db = getDb();
-  let importedCount = 0;
-  let skippedCount = 0;
-  let messageCount = 0;
-
-  for (const conv of imported) {
-    const convKey = `chatgpt:${conv.sourceId}`;
-
-    const existing = db
-      .select()
-      .from(conversationKeys)
-      .where(eq(conversationKeys.conversationKey, convKey))
-      .get();
-
-    if (existing) {
-      skippedCount++;
-      continue;
-    }
-
-    const conversation = createConversation(conv.title);
-
-    // Skip indexing during insert so we can backfill original timestamps first
-    for (const msg of conv.messages) {
-      await addMessage(
-        conversation.id,
-        msg.role,
-        JSON.stringify(msg.content),
-        undefined,
-        { skipIndexing: true },
-      );
-    }
-
-    // Override timestamps to match ChatGPT originals
-    db.update(conversations)
-      .set({ createdAt: conv.createdAt, updatedAt: conv.updatedAt })
-      .where(eq(conversations.id, conversation.id))
-      .run();
-
-    // Update message timestamps to match ChatGPT originals
-    const dbMessages = db
-      .select({ id: messagesTable.id })
-      .from(messagesTable)
-      .where(eq(messagesTable.conversationId, conversation.id))
-      .orderBy(messagesTable.createdAt)
-      .all();
-
-    const memoryConfig = getConfig().memory;
-    for (let i = 0; i < dbMessages.length && i < conv.messages.length; i++) {
-      const originalTimestamp = conv.messages[i].createdAt;
-      db.update(messagesTable)
-        .set({ createdAt: originalTimestamp })
-        .where(eq(messagesTable.id, dbMessages[i].id))
-        .run();
-
-      // Index with the original ChatGPT timestamp so memory segments
-      // reflect actual message age, not import time
-      try {
-        await indexMessageNow(
-          {
-            messageId: dbMessages[i].id,
-            conversationId: conversation.id,
-            role: conv.messages[i].role,
-            content: JSON.stringify(conv.messages[i].content),
-            createdAt: originalTimestamp,
-          },
-          memoryConfig,
-        );
-      } catch (err) {
-        // Indexing failure is non-fatal - the message is already persisted,
-        // and failing here would abort the loop before conversationKeys is
-        // written, causing duplicate imports on retry.
-        log.warn(
-          "Failed to index imported message %s in conversation %s: %s",
-          dbMessages[i].id,
-          conversation.id,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
-
-    db.insert(conversationKeys)
-      .values({
-        id: uuid(),
-        conversationKey: convKey,
-        conversationId: conversation.id,
-        createdAt: Date.now(),
-      })
-      .run();
-
-    importedCount++;
-    messageCount += conv.messages.length;
-  }
-
-  const lines = [
-    `Imported ${importedCount} conversation(s) with ${messageCount} message(s).`,
-  ];
-  if (skippedCount > 0) {
-    lines.push(`Skipped ${skippedCount} already-imported conversation(s).`);
-  }
-  return { content: lines.join("\n"), isError: false };
+  return { filePath };
 }
 
-// -- Parser --
+// -- ChatGPT conversation parser --
 
-function parseChatGPTExport(zipPath: string): ImportedConversation[] {
+function parseChatGPTExport(zipPath: string): OutputConversation[] {
   const jsonContent = extractConversationsJsonFromZip(zipPath);
 
   const raw = JSON.parse(jsonContent);
@@ -219,11 +86,11 @@ function parseChatGPTExport(zipPath: string): ImportedConversation[] {
     throw new Error("Expected conversations.json to contain a JSON array");
   }
 
-  const results: ImportedConversation[] = [];
+  const results: OutputConversation[] = [];
   for (const conv of raw as ChatGPTConversation[]) {
-    const imported = parseConversation(conv);
-    if (imported) {
-      results.push(imported);
+    const parsed = parseConversation(conv);
+    if (parsed) {
+      results.push(parsed);
     }
   }
   return results;
@@ -231,11 +98,11 @@ function parseChatGPTExport(zipPath: string): ImportedConversation[] {
 
 function parseConversation(
   conv: ChatGPTConversation,
-): ImportedConversation | null {
+): OutputConversation | null {
   const { mapping, current_node } = conv;
   if (!mapping || !current_node || !mapping[current_node]) return null;
 
-  // Walk from current_node to root via parent pointers, then reverse for chronological order
+  // Walk from current_node to root via parent pointers, then reverse
   const nodeIds: string[] = [];
   let nodeId: string | null = current_node;
   while (nodeId) {
@@ -244,7 +111,7 @@ function parseConversation(
   }
   nodeIds.reverse();
 
-  const messages: ImportedMessage[] = [];
+  const messages: OutputMessage[] = [];
   for (const id of nodeIds) {
     const node = mapping[id];
     if (!node?.message) continue;
@@ -267,8 +134,10 @@ function parseConversation(
 
   if (messages.length === 0) return null;
 
+  const sourceId = conv.id ?? `${conv.title}-${conv.create_time}`;
+
   return {
-    sourceId: conv.id ?? `${conv.title}-${conv.create_time}`,
+    sourceKey: `chatgpt:${sourceId}`,
     title: conv.title || "Untitled",
     createdAt: Math.round(conv.create_time * 1000),
     updatedAt: Math.round(conv.update_time * 1000),
@@ -376,3 +245,35 @@ function extractLocalFile(
     throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
   }
 }
+
+// -- Main --
+
+function main() {
+  const { filePath } = parseCliArgs();
+
+  if (!filePath.endsWith(".zip")) {
+    process.stderr.write(
+      "Error: Only ZIP files are accepted. Please provide the ChatGPT export ZIP file.\n",
+    );
+    process.exit(1);
+  }
+
+  if (!existsSync(filePath)) {
+    process.stderr.write(`Error: File not found: ${filePath}\n`);
+    process.exit(1);
+  }
+
+  let conversations: OutputConversation[];
+  try {
+    conversations = parseChatGPTExport(filePath);
+  } catch (err) {
+    process.stderr.write(
+      `Error parsing export file: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  }
+
+  process.stdout.write(JSON.stringify({ conversations }) + "\n");
+}
+
+main();
