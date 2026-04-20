@@ -289,19 +289,31 @@ export async function reprovisionAssistantApiKey(
 // Credential reading from running assistant via gateway
 // ---------------------------------------------------------------------------
 
+export interface GatewayCredentialResult {
+  /** The credential value, if found. */
+  value: string | null;
+  /** True when the gateway/daemon was unreachable (network error, timeout, etc.). */
+  unreachable: boolean;
+}
+
 /**
  * Read an existing credential from the assistant's secret store via the
  * gateway-proxied `POST /v1/secrets/read` endpoint (with `reveal: true`).
  *
- * Returns the credential value if found, or `null` if the credential is
- * missing or the assistant is unreachable. Never throws — failures are
- * treated as "not found" so the caller can fall through to reprovisioning.
+ * Returns a result distinguishing "key not found" (`value: null,
+ * unreachable: false`) from "gateway unreachable" (`value: null,
+ * unreachable: true`). Callers should only reprovision when the gateway
+ * is reachable but the key is genuinely missing — reprovisioning while
+ * the gateway is down would revoke the old key server-side without being
+ * able to inject the replacement.
+ *
+ * Never throws.
  */
 export async function readGatewayCredential(
   gatewayUrl: string,
   name: string,
   bearerToken?: string,
-): Promise<string | null> {
+): Promise<GatewayCredentialResult> {
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -318,12 +330,29 @@ export async function readGatewayCredential(
       signal: AbortSignal.timeout(10_000),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // 5xx means the gateway/daemon backend is down — treat as unreachable
+      // so callers don't revoke a potentially valid key.
+      return { value: null, unreachable: response.status >= 500 };
+    }
 
-    const json = (await response.json()) as { found: boolean; value?: string };
-    return json.found && json.value ? json.value : null;
+    const json = (await response.json()) as {
+      found: boolean;
+      value?: string;
+      unreachable?: boolean;
+    };
+    // The daemon's /v1/secrets/read returns `unreachable: true` when the
+    // credential backend (CES) can't be reached. Respect that signal.
+    if (json.unreachable) {
+      return { value: null, unreachable: true };
+    }
+    return {
+      value: json.found && json.value ? json.value : null,
+      unreachable: false,
+    };
   } catch {
-    return null;
+    // Network error, timeout, or gateway down
+    return { value: null, unreachable: true };
   }
 }
 
