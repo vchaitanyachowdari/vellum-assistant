@@ -25,6 +25,7 @@ import {
   getProtectedDir,
   getWorkspaceHooksDir,
 } from "../util/platform.js";
+import { BashRiskClassifier } from "./bash-risk-classifier.js";
 import {
   buildShellAllowlistOptions,
   buildShellCommandCandidates,
@@ -692,6 +693,18 @@ export async function classifyRisk(
       // LRU refresh
       riskCache.delete(cacheKey);
       riskCache.set(cacheKey, cached);
+
+      // Phase 1 observe-only: fire comparison logging even on cache hits
+      // so analytics aren't biased toward cold paths.
+      if (toolName === "bash" || toolName === "host_bash") {
+        const command = ((input.command as string) ?? "").trim();
+        if (command) {
+          BashRiskClassifier.classifyAndLog(command, toolName, cached).catch(
+            () => {},
+          );
+        }
+      }
+
       return cached;
     }
   }
@@ -721,6 +734,19 @@ export async function classifyRisk(
       if (oldest !== undefined) riskCache.delete(oldest);
     }
     riskCache.set(cacheKey, result);
+  }
+
+  // ── Parallel risk classifier (Phase 1: observe-only) ──────────────────────
+  // Run the new data-driven classifier alongside the existing logic.
+  // The result is logged for comparison but does NOT affect the decision.
+  // This will become the primary classifier in Phase 2.
+  if (toolName === "bash" || toolName === "host_bash") {
+    const command = ((input.command as string) ?? "").trim();
+    if (command) {
+      BashRiskClassifier.classifyAndLog(command, toolName, result).catch(
+        () => {},
+      );
+    }
   }
 
   return result;
