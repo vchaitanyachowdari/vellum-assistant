@@ -17,7 +17,17 @@ import {
   synthesizeText,
   TtsSynthesisError,
 } from "../../tts/synthesize-text.js";
+import type { TtsUseCase } from "../../tts/types.js";
 import { log } from "../logger.js";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const VALID_USE_CASES: readonly TtsUseCase[] = [
+  "message-playback",
+  "phone-call",
+];
 
 // ---------------------------------------------------------------------------
 // MIME type → file extension mapping
@@ -79,6 +89,16 @@ Examples:
       "--output <path>",
       "Path to write the audio file (defaults to system temp dir with auto-generated name)",
     )
+    .option(
+      "--voice <id>",
+      "Provider-specific voice identifier (ElevenLabs voiceId, Fish Audio referenceId, etc.) — overrides configured default",
+    )
+    .option(
+      "--use-case <case>",
+      "Synthesis use case: 'message-playback' (default, higher quality) or 'phone-call' (lower latency)",
+      "message-playback",
+    )
+    .option("--json", "Output structured JSON instead of plain file path")
     .argument(
       "[text...]",
       "Text to synthesize (joined with spaces; alternative to --text or stdin)",
@@ -98,17 +118,45 @@ Options:
                         returned MIME type (mp3 for ElevenLabs, wav for
                         Deepgram/Fish Audio in WAV mode). Parent directories
                         are created as needed.
+  --voice <id>          Provider-specific voice identifier that overrides the
+                        configured default. Format depends on the provider
+                        (e.g. an ElevenLabs voiceId or a Fish Audio referenceId).
+  --use-case <case>     Synthesis use case — 'message-playback' (default,
+                        higher quality) or 'phone-call' (lower latency).
+  --json                Output a single-line JSON object on stdout instead of
+                        the plain file path. Errors are also emitted as JSON.
 
 Examples:
   $ assistant tts synthesize --text "hello world"
   $ assistant tts synthesize "spoken sentence" --output /tmp/out.mp3
-  $ echo "hello" | assistant tts synthesize`,
+  $ echo "hello" | assistant tts synthesize
+  $ assistant tts synthesize --text "hi" --voice <voice-id>
+  $ assistant tts synthesize --text "hi" --use-case phone-call
+  $ assistant tts synthesize --text "hi" --json`,
     )
     .action(
       async (
         positionalParts: string[],
-        opts: { text?: string; output?: string },
+        opts: {
+          text?: string;
+          output?: string;
+          voice?: string;
+          useCase: string;
+          json?: boolean;
+        },
       ) => {
+        const jsonOutput = opts.json ?? false;
+
+        const emitError = (msg: string): void => {
+          if (jsonOutput) {
+            process.stdout.write(
+              JSON.stringify({ ok: false, error: msg }) + "\n",
+            );
+          } else {
+            log.error(msg);
+          }
+        };
+
         // Resolve effective text from --text, positional args, or stdin.
         let messageText =
           opts.text ??
@@ -121,12 +169,22 @@ Examples:
           }
         }
         if (!messageText) {
-          log.error(
+          emitError(
             "No text provided. Pass --text, a positional argument, or pipe via stdin.",
           );
           process.exitCode = 1;
           return;
         }
+
+        // Validate --use-case
+        if (!VALID_USE_CASES.includes(opts.useCase as TtsUseCase)) {
+          emitError(
+            `Invalid --use-case: '${opts.useCase}'. Must be one of: ${VALID_USE_CASES.join(", ")}.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const useCase = opts.useCase as TtsUseCase;
 
         // Providers must be registered in the CLI process since the daemon is
         // a separate process and each process has its own registry.
@@ -135,7 +193,8 @@ Examples:
         try {
           const result = await synthesizeText({
             text: messageText,
-            useCase: "message-playback",
+            useCase,
+            voiceId: opts.voice,
           });
 
           const filePath =
@@ -153,13 +212,25 @@ Examples:
           }
 
           writeFileSync(filePath, result.audio);
-          process.stdout.write(filePath + "\n");
+
+          if (jsonOutput) {
+            process.stdout.write(
+              JSON.stringify({
+                ok: true,
+                path: filePath,
+                contentType: result.contentType,
+                sizeBytes: result.audio.length,
+              }) + "\n",
+            );
+          } else {
+            process.stdout.write(filePath + "\n");
+          }
         } catch (err) {
           if (
             err instanceof TtsSynthesisError &&
             err.code === "TTS_PROVIDER_NOT_CONFIGURED"
           ) {
-            log.error(
+            emitError(
               "No TTS provider configured or registered. Run 'assistant config set services.tts.provider <provider>' to select one (e.g. elevenlabs, fish-audio, deepgram), then 'assistant keys set <provider>' to add the API key.",
             );
             process.exitCode = 1;
@@ -167,7 +238,7 @@ Examples:
           }
 
           const msg = err instanceof Error ? err.message : String(err);
-          log.error(`TTS synthesis failed: ${msg}`);
+          emitError(`TTS synthesis failed: ${msg}`);
           process.exitCode = 1;
         }
       },
