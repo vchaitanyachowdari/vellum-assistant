@@ -74,6 +74,8 @@ function makeDeps(
   return {
     getConversationById: () => undefined,
     isPlaygroundEnabled: () => true,
+    listConversationsByTitlePrefix: () => [],
+    deleteConversationById: () => false,
     ...overrides,
   };
 }

@@ -9,6 +9,8 @@ function makeDeps(enabled: boolean): PlaygroundRouteDeps {
   return {
     getConversationById: (_id: string): Conversation | undefined => undefined,
     isPlaygroundEnabled: () => enabled,
+    listConversationsByTitlePrefix: () => [],
+    deleteConversationById: () => false,
   };
 }
 
