@@ -159,8 +159,10 @@ export interface ContextWindowCompactOptions {
   conversationOriginChannel?: string;
   /**
    * Override the target input token budget used for keep-boundary
-   * projected-fit checks. Allows the caller to demand a stricter fit
-   * than the normal `config.targetInputTokens` during forced recovery.
+   * projected-fit checks. Clamped to no looser than `config.targetInputTokens`
+   * — i.e. the override may only demand a *stricter* fit. Passing a looser
+   * value has no effect. Intended for forced recovery paths that need a
+   * tighter target than the default.
    */
   targetInputTokensOverride?: number;
   /**
@@ -654,8 +656,10 @@ export class ContextWindowManager {
       Math.max(0, Math.floor(opts?.minKeepRecentUserTurns ?? defaultTurns)),
       userTurnStarts.length,
     );
-    const targetTokens =
-      opts?.targetInputTokensOverride ?? this.targetInputTokens;
+    const targetTokens = Math.min(
+      opts?.targetInputTokensOverride ?? this.targetInputTokens,
+      this.targetInputTokens,
+    );
 
     // Binary search for the maximum keepTurns whose projected tokens fit
     // within the budget. Token count is monotonically non-decreasing with
