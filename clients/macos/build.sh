@@ -1337,9 +1337,17 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 PLIST
 
 # Always compile asset catalog (fast, ensures AppIcon changes are picked up)
+# AppIcon.icon is a Xcode-26 Icon Composer bundle — actool reads it alongside
+# the xcassets and emits both the layered Liquid Glass iconstack for macOS Tahoe
+# and backward-compatible raster fallbacks for macOS 15 into Assets.car.
 XCASSETS="$SCRIPT_DIR/vellum-assistant/Resources/Assets.xcassets"
+APP_ICON="$SCRIPT_DIR/vellum-assistant/Resources/AppIcon.icon"
 if [ -d "$XCASSETS" ]; then
-    xcrun actool "$XCASSETS" \
+    ACTOOL_INPUTS=("$XCASSETS")
+    if [ -d "$APP_ICON" ]; then
+        ACTOOL_INPUTS+=("$APP_ICON")
+    fi
+    xcrun actool "${ACTOOL_INPUTS[@]}" \
         --compile "$RESOURCES_DIR" \
         --platform macosx \
         --minimum-deployment-target 14.0 \
