@@ -7,7 +7,6 @@ struct ContentView: View {
     @Bindable var authManager: AuthManager
     @State private var connectPhase: ConnectPhase = .initial
     @State private var selectedTab: Tab = .chats
-    @State private var navigateToConnect = false
     /// Single conversation store shared between the Chats tab and the Developer section's
     /// diagnostics. Keeping one store prevents the dual-store data-loss race where two
     /// independent stores each overwrite the other's UserDefaults writes in standalone mode.
@@ -115,8 +114,9 @@ struct ContentView: View {
     }
 
     private func navigateToConnectSettings() {
+        // Connection status lives inline in the Settings tab via
+        // `ConnectionInfoSection`, so switching tabs is sufficient.
         selectedTab = .settings
-        navigateToConnect = true
     }
 
     private func navigateToNewConversation() {
@@ -234,7 +234,7 @@ struct ContentView: View {
                     Label { Text("Chats") } icon: { VIconView(.messageSquare, size: 12) }
                 }
 
-            SettingsView(authManager: authManager, navigateToConnect: $navigateToConnect, conversationStore: conversationStore)
+            SettingsView(authManager: authManager, conversationStore: conversationStore)
                 .environmentObject(clientProvider)
                 .tag(Tab.settings)
                 .tabItem {
