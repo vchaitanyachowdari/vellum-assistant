@@ -59,8 +59,6 @@ struct MainWindowView: View {
     @AppStorage("sidebarExpanded") var sidebarExpanded: Bool = true
     @AppStorage("sidebarToggleShortcut") private var sidebarToggleShortcut: String = "cmd+\\"
     @AppStorage("homeShortcut") private var homeShortcut: String = "cmd+shift+h"
-    @State var sidebarContentHeight: CGFloat = 0
-    @State var sidebarFrameHeight: CGFloat = 0
     @AppStorage("themePreference") private var themePreference: String = "system"
     @State private var systemIsDark: Bool = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
     let sidebarExpandedWidth: CGFloat = 240
@@ -86,8 +84,6 @@ struct MainWindowView: View {
     @State var showConversationSwitcher = false
     @State var showEarnCreditsModal = false
     @State var conversationSwitcherTriggerFrame: CGRect = .zero
-    @State var groupToDelete: ConversationGroup?
-    @State var archiveAllPending: ArchiveAllTarget?
 
     /// Cached assistant display name, seeded from the static identity cache on init
     /// and refreshed when the daemon emits an identity change event.
@@ -97,7 +93,7 @@ struct MainWindowView: View {
     /// Whether the "coming alive" overlay is currently showing.
     @State private var showComingAlive: Bool
     /// Whether the daemon-loading skeleton overlay is currently showing.
-    @State var showDaemonLoading: Bool
+    @State var showAssistantLoading: Bool
     /// Whether the assistant loading has timed out (assistant unreachable).
     @State var assistantLoadingTimedOut = false
     /// Whether the main window is in native macOS fullscreen (traffic lights hidden).
@@ -142,7 +138,7 @@ struct MainWindowView: View {
         self._showComingAlive = State(initialValue: onSendWakeUp != nil)
         // Show skeleton loading only for normal launches (not post-onboarding where
         // ComingAliveOverlay handles the transition).
-        self._showDaemonLoading = State(initialValue: onSendWakeUp == nil)
+        self._showAssistantLoading = State(initialValue: onSendWakeUp == nil)
         // Eagerly construct the Home store so it's ready the moment the user
         // toggles the `home-tab` flag on — even if the panel is opened
         // without an app relaunch.
@@ -435,7 +431,7 @@ struct MainWindowView: View {
     /// Assistant loading overlay extracted to reduce type-checker pressure on `coreLayoutView`.
     @ViewBuilder
     private var assistantLoadingOverlayIfNeeded: some View {
-        if showDaemonLoading && !isSettingsOpen {
+        if showAssistantLoading && !isSettingsOpen {
             AssistantLoadingOverlayContent(
                 timedOut: $assistantLoadingTimedOut,
                 onRetry: { rewakeAssistant() },
