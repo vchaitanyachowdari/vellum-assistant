@@ -28,6 +28,7 @@ import type {
   UserRule,
 } from "./risk-types.js";
 import { cachedParse } from "./shell-identity.js";
+import type { AllowlistOption } from "./types.js";
 
 const log = getLogger("bash-risk-classifier");
 
@@ -623,10 +624,19 @@ export function generateScopeOptions(
     options.push({ pattern, label });
   }
 
-  // For multi-segment commands (pipelines), use the full command as exact match
-  // and individual segment programs for broader options
+  // For multi-segment commands (pipelines, &&, etc.), use the full command as
+  // exact match and individual segment programs for broader options.
+  // Reconstruct using actual operators from the parsed segments (not hardcoded " | ").
   if (parsed.segments.length > 1) {
-    const fullCommand = parsed.segments.map((s) => s.command).join(" | ");
+    const parts: string[] = [];
+    for (let i = 0; i < parsed.segments.length; i++) {
+      const seg = parsed.segments[i];
+      if (i > 0 && seg.operator) {
+        parts.push(seg.operator);
+      }
+      parts.push(seg.command);
+    }
+    const fullCommand = parts.join(" ");
     addOption(`^${escapeRegex(fullCommand)}$`, fullCommand);
     // Add command-level wildcards for each unique program
     const programs = new Set(parsed.segments.map((s) => s.program));
@@ -653,14 +663,35 @@ export function generateScopeOptions(
     return options;
   }
 
-  // Separate args into flags and positionals
-  const flags: string[] = [];
-  const positionals: string[] = [];
-  for (const arg of seg.args) {
-    if (arg.startsWith("-")) {
-      flags.push(arg);
-    } else {
-      positionals.push(arg);
+  // Separate args into flags and positionals.
+  // When the command has an argSchema, use parseArgs for accurate flag/positional
+  // separation (correctly handles value-consuming flags like `find -name "*.ts"`).
+  // Otherwise, fall back to the naive `startsWith("-")` heuristic.
+  let flags: string[];
+  let positionals: string[];
+
+  if (spec?.argSchema) {
+    const parsedArgs = parseArgs(seg.args, spec.argSchema);
+    // Convert the flags Map to a flat string array: for value-consuming flags,
+    // include both the flag and its value as separate entries; for boolean flags,
+    // include just the flag.
+    flags = [];
+    for (const [flagName, flagValue] of parsedArgs.flags) {
+      flags.push(flagName);
+      if (typeof flagValue === "string") {
+        flags.push(flagValue);
+      }
+    }
+    positionals = parsedArgs.positionals;
+  } else {
+    flags = [];
+    positionals = [];
+    for (const arg of seg.args) {
+      if (arg.startsWith("-")) {
+        flags.push(arg);
+      } else {
+        positionals.push(arg);
+      }
     }
   }
 
@@ -674,12 +705,19 @@ export function generateScopeOptions(
   }
 
   // 2. Wildcard positionals right-to-left
-  if (positionals.length > 1) {
-    for (let drop = 1; drop < positionals.length; drop++) {
-      const kept = positionals.slice(0, positionals.length - drop);
-      const parts = [programName, ...flags, ...kept].filter(Boolean);
+  // When a subcommand is detected, exclude it from the positionals that get
+  // wildcarded — it's placed explicitly before flags in the label.
+  const wildcardPositionals = subcommand ? positionals.slice(1) : positionals;
+  if (wildcardPositionals.length > 1) {
+    for (let drop = 1; drop < wildcardPositionals.length; drop++) {
+      const kept = wildcardPositionals.slice(
+        0,
+        wildcardPositionals.length - drop,
+      );
+      const sub = subcommand ? [subcommand] : [];
+      const parts = [programName, ...sub, ...flags, ...kept].filter(Boolean);
       const pattern = `^${parts.map(escapeRegex).join("\\s+")}\\s+.*$`;
-      const label = [programName, ...flags, ...kept, "*"].join(" ");
+      const label = [programName, ...sub, ...flags, ...kept, "*"].join(" ");
       addOption(pattern, label);
     }
   }
@@ -712,6 +750,82 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ── Scope → Allowlist conversion ─────────────────────────────────────────────
+
+/**
+ * Extract stable tokens from a scope option label: program and subcommand
+ * words, skipping flags (starting with `-`) and wildcards (`*`).
+ * Returns an `action:` prefixed pattern that matches the action key
+ * candidates produced by `buildCommandCandidates()`.
+ */
+function labelToActionPattern(label: string): string {
+  const tokens = label
+    .split(/\s+/)
+    .filter((t) => !t.startsWith("-") && t !== "*");
+  return `action:${tokens.join(" ")}`;
+}
+
+/**
+ * Convert classifier-produced `ScopeOption[]` to `AllowlistOption[]` format.
+ *
+ * Patterns must be glob-compatible (not regex) because trust rules use
+ * Minimatch for matching against command candidates produced by
+ * `buildCommandCandidates()`. The format:
+ * - First option (exact match): raw command string
+ * - Intermediate options: `action:<program> <subcommand>` patterns that match
+ *   action key candidates (labels reorder args so can't be used as globs directly)
+ * - Command-level wildcards: `action:<program>` matching the broadest action key
+ *
+ * Deduplicates by pattern to avoid redundant options when multiple scope levels
+ * collapse to the same action key.
+ */
+export function scopeOptionsToAllowlistOptions(
+  scopeOptions: ScopeOption[],
+  _parsed: ParsedCommand,
+): AllowlistOption[] {
+  if (scopeOptions.length === 0) return [];
+
+  const results: AllowlistOption[] = [];
+  const seenPatterns = new Set<string>();
+
+  for (let i = 0; i < scopeOptions.length; i++) {
+    const opt = scopeOptions[i];
+    let description: string;
+    let pattern: string;
+
+    if (i === 0) {
+      // Exact match: raw command string (matches the raw candidate)
+      description = "This exact command";
+      pattern = opt.label;
+    } else if (
+      opt.label.endsWith(" *") &&
+      !opt.label.slice(0, -2).includes(" ")
+    ) {
+      // Command-level wildcard (label is "<program> *"): use action: prefix
+      // to match action key candidates from buildCommandCandidates()
+      const prog = opt.label.slice(0, -2);
+      description = `Any ${prog} command`;
+      pattern = `action:${prog}`;
+    } else {
+      // Intermediate wildcard: use action:<tokens> pattern to match action key
+      // candidates. We can't use the label as a glob directly because the scope
+      // ladder reorders args (flags before positionals), but command candidates
+      // preserve user arg order.
+      const actionPattern = labelToActionPattern(opt.label);
+      description = "Commands matching this pattern";
+      pattern = actionPattern;
+    }
+
+    // Deduplicate: skip options that produce the same pattern as a prior one
+    if (seenPatterns.has(pattern)) continue;
+    seenPatterns.add(pattern);
+
+    results.push({ label: opt.label, description, pattern });
+  }
+
+  return results;
+}
+
 // ── Main classifier ──────────────────────────────────────────────────────────
 
 /**
@@ -742,6 +856,7 @@ export class BashRiskClassifier implements RiskClassifier<BashClassifierInput> {
         reason: "Empty command",
         scopeOptions: [],
         matchType: "registry",
+        allowlistOptions: [],
       };
     }
 
@@ -801,12 +916,17 @@ export class BashRiskClassifier implements RiskClassifier<BashClassifierInput> {
     }
 
     const scopeOptions = generateScopeOptions(parsed, this.registry);
+    const allowlistOptions = scopeOptionsToAllowlistOptions(
+      scopeOptions,
+      parsed,
+    );
 
     const assessment: RiskAssessment = {
       riskLevel: maxRiskLevel,
       reason: maxReason,
       scopeOptions,
       matchType,
+      allowlistOptions,
     };
 
     // Risk assessment analytics

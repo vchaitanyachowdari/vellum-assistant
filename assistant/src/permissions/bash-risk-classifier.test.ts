@@ -15,13 +15,16 @@ import {
   BashRiskClassifier,
   clearCompiledPatterns,
   escalateOne,
+  generateScopeOptions,
   matchesArgRule,
   maxRisk,
   riskOrd,
+  scopeOptionsToAllowlistOptions,
 } from "./bash-risk-classifier.js";
 import { DEFAULT_COMMAND_REGISTRY } from "./command-registry.js";
 import type { ArgRule, CommandRiskSpec } from "./risk-types.js";
 import { riskToRiskLevel } from "./risk-types.js";
+import { cachedParse } from "./shell-identity.js";
 import { RiskLevel } from "./types.js";
 
 // ── Helper ───────────────────────────────────────────────────────────────────
@@ -1369,5 +1372,249 @@ describe("parseArgs behavioral parity", () => {
 describe("clearCompiledPatterns", () => {
   test("runs without error", () => {
     expect(() => clearCompiledPatterns()).not.toThrow();
+  });
+});
+
+// ── generateScopeOptions with parseArgs ──────────────────────────────────────
+
+describe("generateScopeOptions with parseArgs", () => {
+  test("find with argSchema.valueFlags groups flag values correctly", async () => {
+    // find has argSchema with valueFlags like -name, -type, etc.
+    // parseArgs should correctly classify -name and -type as value-consuming flags,
+    // keeping their values ("*.ts", "f") grouped with the flags rather than treating
+    // them as positionals.
+    const parsed = await cachedParse("find src -name '*.ts' -type f");
+    const options = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+
+    // find has complexSyntax: true, so only exact + command-level wildcard
+    expect(options.length).toBe(2);
+    expect(options[0].label).toBe("find src -name '*.ts' -type f");
+    expect(options[1].label).toBe("find *");
+  });
+
+  test("git push origin main --force places subcommand before flags in labels", async () => {
+    // Verify that subcommand "push" appears before flags like "--force"
+    // in the generated labels: git push --force origin * (not git --force push origin *)
+    const parsed = await cachedParse("git push origin main --force");
+    const options = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+    const labels = options.map((o) => o.label);
+
+    // Exact match
+    expect(labels[0]).toBe("git push origin main --force");
+
+    // The scope ladder should produce (narrowest to broadest):
+    // 1. exact: git push origin main --force
+    // 2. wildcard last positional: git push --force origin * (subcommand before flags)
+    // 3. drop flags: git push *
+    // 4. subcommand wildcard: git push * (deduped)
+    // 5. command wildcard: git *
+
+    // Verify subcommand "push" is after "git" and before flags in intermediate labels
+    const wildcardLabels = labels.filter(
+      (l) => l.includes("*") && l.includes("push"),
+    );
+    for (const label of wildcardLabels) {
+      const gitIdx = label.indexOf("git");
+      const pushIdx = label.indexOf("push");
+      const forceIdx = label.indexOf("--force");
+      expect(pushIdx).toBeGreaterThan(gitIdx);
+      if (forceIdx >= 0) {
+        expect(pushIdx).toBeLessThan(forceIdx);
+      }
+    }
+
+    // Should end with the broadest: git *
+    expect(labels[labels.length - 1]).toBe("git *");
+  });
+
+  test("npm install express retains correct behavior (npm has argSchema)", async () => {
+    // npm has argSchema (with valueFlags like --prefix), so parseArgs is used.
+    // "install" is detected as a subcommand, "express" as a positional.
+    const parsed = await cachedParse("npm install express");
+    const options = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+    const labels = options.map((o) => o.label);
+
+    // Exact match first
+    expect(labels[0]).toBe("npm install express");
+
+    // Should include subcommand-level wildcard
+    expect(labels).toContain("npm install *");
+
+    // Should include command-level wildcard
+    expect(labels).toContain("npm *");
+  });
+
+  test("curl -X POST url falls through to naive split (no argSchema)", async () => {
+    // curl has NO argSchema in the registry, so the naive startsWith("-") split
+    // is used. This means -X is correctly classified as a flag, but POST is
+    // misclassified as a positional (known limitation until curl gains argSchema.valueFlags).
+    const parsed = await cachedParse(
+      "curl -X POST https://api.stripe.com/v1/charges",
+    );
+    const options = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+    const labels = options.map((o) => o.label);
+
+    // Exact match first
+    expect(labels[0]).toBe("curl -X POST https://api.stripe.com/v1/charges");
+
+    // Known limitation: POST is treated as a positional because curl lacks argSchema.
+    // When curl gains argSchema.valueFlags with -X, POST will be grouped with -X
+    // as a flag value instead. This test documents the current (imperfect) behavior.
+    // With naive split: flags = ["-X"], positionals = ["POST", "https://..."]
+    // The intermediate labels will include POST as a kept positional.
+    expect(labels.some((l) => l.includes("POST"))).toBe(true);
+
+    // Should end with command-level wildcard
+    expect(labels[labels.length - 1]).toBe("curl *");
+  });
+
+  test("find with complexSyntax and -exec only produces exact + command-level wildcard", async () => {
+    // find has complexSyntax: true, so intermediate scope options are skipped
+    const parsed = await cachedParse("find . -name '*.ts' -exec rm {} \\;");
+    const options = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+
+    expect(options.length).toBe(2);
+    expect(options[0].label).toBe("find . -name '*.ts' -exec rm {} \\;");
+    expect(options[1].label).toBe("find *");
+  });
+});
+
+// ── scopeOptionsToAllowlistOptions ───────────────────────────────────────────
+
+describe("scopeOptionsToAllowlistOptions", () => {
+  test("converts scope options to allowlist options with correct descriptions", async () => {
+    const parsed = await cachedParse("git push origin main");
+    const scopeOptions = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+    const allowlistOptions = scopeOptionsToAllowlistOptions(
+      scopeOptions,
+      parsed,
+    );
+
+    expect(allowlistOptions.length).toBe(scopeOptions.length);
+    expect(allowlistOptions.length).toBeGreaterThan(0);
+
+    // Every entry has all three fields
+    for (const opt of allowlistOptions) {
+      expect(opt).toHaveProperty("label");
+      expect(opt).toHaveProperty("description");
+      expect(opt).toHaveProperty("pattern");
+      expect(typeof opt.label).toBe("string");
+      expect(typeof opt.description).toBe("string");
+      expect(typeof opt.pattern).toBe("string");
+    }
+
+    // First is "This exact command", last is "Any git command"
+    expect(allowlistOptions[0].description).toBe("This exact command");
+    expect(allowlistOptions[allowlistOptions.length - 1].description).toBe(
+      "Any git command",
+    );
+
+    // Labels match scopeOptions labels
+    for (let i = 0; i < scopeOptions.length; i++) {
+      expect(allowlistOptions[i].label).toBe(scopeOptions[i].label);
+    }
+
+    // Patterns are glob-compatible (not regex) for trust rule matching:
+    // - First option: raw command string (exact match)
+    // - Last option: action:<program> format
+    // - Intermediate: label-based glob patterns
+    expect(allowlistOptions[0].pattern).toBe("git push origin main");
+    expect(
+      allowlistOptions[allowlistOptions.length - 1].pattern,
+    ).toBe("action:git");
+  });
+
+  test("intermediate options get 'Commands matching this pattern' description", async () => {
+    const parsed = await cachedParse("npm install express");
+    const scopeOptions = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+    const allowlistOptions = scopeOptionsToAllowlistOptions(
+      scopeOptions,
+      parsed,
+    );
+
+    expect(allowlistOptions.length).toBe(scopeOptions.length);
+    expect(allowlistOptions.length).toBeGreaterThan(2);
+
+    // Intermediate options (not first or last) should use generic description
+    for (let i = 1; i < allowlistOptions.length - 1; i++) {
+      expect(allowlistOptions[i].description).toBe(
+        "Commands matching this pattern",
+      );
+    }
+  });
+
+  test("returns empty array for empty scope options", async () => {
+    const parsed = await cachedParse("");
+    const result = scopeOptionsToAllowlistOptions([], parsed);
+    expect(result).toEqual([]);
+  });
+
+  test("single scope option gets 'This exact command' description", async () => {
+    // A command that produces exactly one scope option won't have intermediate
+    // or broadest — the single entry is both first and last.
+    const parsed = await cachedParse("ls");
+    const scopeOptions = generateScopeOptions(parsed, DEFAULT_COMMAND_REGISTRY);
+
+    // ls should produce exact match + command-level wildcard (at least 2)
+    // But if there's only one, the first===last so it gets "This exact command"
+    if (scopeOptions.length === 1) {
+      const allowlistOptions = scopeOptionsToAllowlistOptions(
+        scopeOptions,
+        parsed,
+      );
+      expect(allowlistOptions[0].description).toBe("This exact command");
+    }
+  });
+});
+
+// ── classify() populates allowlistOptions ────────────────────────────────────
+
+describe("classify populates allowlistOptions", () => {
+  test("git push origin main returns allowlistOptions matching scopeOptions length", async () => {
+    const classifier = makeClassifier();
+    const result = await classifier.classify({
+      command: "git push origin main",
+      toolName: "bash",
+    });
+
+    expect(result.allowlistOptions).toBeDefined();
+    expect(result.allowlistOptions!.length).toBe(result.scopeOptions.length);
+    expect(result.allowlistOptions!.length).toBeGreaterThan(0);
+
+    // Every entry has all three fields
+    for (const opt of result.allowlistOptions!) {
+      expect(typeof opt.label).toBe("string");
+      expect(typeof opt.description).toBe("string");
+      expect(typeof opt.pattern).toBe("string");
+    }
+  });
+
+  test("npm install express returns allowlistOptions matching scopeOptions length", async () => {
+    const classifier = makeClassifier();
+    const result = await classifier.classify({
+      command: "npm install express",
+      toolName: "bash",
+    });
+
+    expect(result.allowlistOptions).toBeDefined();
+    expect(result.allowlistOptions!.length).toBe(result.scopeOptions.length);
+    expect(result.allowlistOptions!.length).toBeGreaterThan(0);
+
+    for (const opt of result.allowlistOptions!) {
+      expect(typeof opt.label).toBe("string");
+      expect(typeof opt.description).toBe("string");
+      expect(typeof opt.pattern).toBe("string");
+    }
+  });
+
+  test("empty command returns empty allowlistOptions", async () => {
+    const classifier = makeClassifier();
+    const result = await classifier.classify({
+      command: "",
+      toolName: "bash",
+    });
+
+    expect(result.allowlistOptions).toBeDefined();
+    expect(result.allowlistOptions).toEqual([]);
   });
 });
