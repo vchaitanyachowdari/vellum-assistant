@@ -639,6 +639,7 @@ struct AssistantProgressView: View {
                 if let confirmation = toolCall.pendingConfirmation {
                     ToolConfirmationBubble(
                         confirmation: confirmation,
+                        isV3: MacOSClientFeatureFlagManager.shared.isEnabled("permission-controls-v3"),
                         isKeyboardActive: confirmation.requestId == activeConfirmationRequestId,
                         onAllow: { onConfirmationAllow?(confirmation.requestId) },
                         onDeny: { onConfirmationDeny?(confirmation.requestId) },
@@ -732,6 +733,14 @@ private struct StepDetailRow: View {
     /// Human-friendly label for skill_execute rows (e.g. "Using my frontend design skill").
     var skillLabel: String?
     var onRehydrate: (() -> Void)?
+
+    /// Drives the Rule Editor Modal sheet presentation. Set to a tool call
+    /// when the user taps a risk badge in the expanded view.
+    @State private var ruleEditorToolCall: ToolCallData?
+
+    /// Shared across all StepDetailRow instances — TrustRuleClient is a stateless
+    /// HTTP client, so a single static instance avoids re-creation on every view rebuild.
+    private static let trustRuleClient: TrustRuleClientProtocol = TrustRuleClient()
 
     private static let coloredOutputCache: NSCache<NSString, StepDetailAttributedStringCacheEntry> = {
         let cache = NSCache<NSString, StepDetailAttributedStringCacheEntry>()
@@ -830,6 +839,14 @@ private struct StepDetailRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
 
+                    // Risk badge (expanded view only, gated on permission-controls-v3)
+                    if let risk = toolCall.riskLevel,
+                       MacOSClientFeatureFlagManager.shared.isEnabled("permission-controls-v3") {
+                        RiskBadgeView(riskLevel: risk) {
+                            ruleEditorToolCall = toolCall
+                        }
+                    }
+
                     Spacer()
 
                     // Permission badge + duration + chevron (completed only)
@@ -875,6 +892,59 @@ private struct StepDetailRow: View {
                 onRehydrate?()
             }
         }
+        .sheet(item: $ruleEditorToolCall) { tc in
+            RuleEditorModal(
+                toolName: tc.toolName,
+                displayName: tc.friendlyName,
+                command: tc.inputSummary,
+                currentRiskLevel: tc.riskLevel ?? "medium",
+                riskReason: tc.riskReason ?? "",
+                scopeOptions: Self.scopeOptions(from: tc),
+                workingDir: Self.workingDir(from: tc),
+                onSave: { rule in
+                    Task {
+                        try? await Self.trustRuleClient.addTrustRule(
+                            toolName: rule.toolName,
+                            pattern: rule.pattern,
+                            scope: rule.scope,
+                            decision: "allow",
+                            executionTarget: nil
+                        )
+                    }
+                },
+                onDismiss: { ruleEditorToolCall = nil }
+            )
+        }
+    }
+
+    // MARK: - Scope Options
+
+    /// Constructs the scope option items from the tool call's risk scope options.
+    /// Falls back to a single "This exact command" option when none are provided.
+    private static func scopeOptions(from toolCall: ToolCallData) -> [ScopeOptionItem] {
+        guard let options = toolCall.riskScopeOptions, !options.isEmpty else {
+            return [
+                ScopeOptionItem(
+                    label: toolCall.inputSummary,
+                    description: "This exact command",
+                    pattern: toolCall.inputSummary
+                )
+            ]
+        }
+        return options.map { option in
+            ScopeOptionItem(
+                label: option.label,
+                description: option.pattern,
+                pattern: option.pattern
+            )
+        }
+    }
+
+    /// Extracts the working directory for the rule editor modal.
+    /// Uses the persisted `workingDir` from the tool call (set when the confirmation
+    /// arrived), falling back to home directory for auto-approved tools.
+    private static func workingDir(from toolCall: ToolCallData) -> String {
+        toolCall.workingDir ?? NSHomeDirectory()
     }
 
     // MARK: - Detail Content
