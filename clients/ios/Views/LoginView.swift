@@ -16,9 +16,17 @@ struct LoginView: View {
             VColor.surfaceOverlay.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer()
+                // Vertical rhythm tuned to Figma Light 169 proportions:
+                //   icon top   ≈ 30% of screen height
+                //   welcome    ≈ 51%
+                //   button     ≈ 70%
+                //   footer     ≈ 82%
+                // Approach: capped Spacer at top + fixed gaps between
+                // elements + capped Spacer at bottom. The caps bias content
+                // toward the center-low region matching Figma rather than
+                // spreading it across full available height.
+                Spacer().frame(maxHeight: 240)
 
-                // App icon with soft radial glow — matches Figma Light 169 onboarding screen
                 ZStack {
                     Circle()
                         .fill(
@@ -29,13 +37,17 @@ struct LoginView: View {
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: 100
+                                endRadius: 80
                             )
                         )
-                        .frame(width: 208, height: 208)
+                        .frame(width: 160, height: 160)
 
                     VellumAppIconView()
                 }
+                // Limit the icon block's layout height to the icon itself;
+                // the 160pt radial glow bleeds visually but doesn't inflate
+                // VStack sizing.
+                .frame(height: 88)
 
                 VStack(spacing: VSpacing.lg) {
                     Text("Welcome to Vellum")
@@ -48,18 +60,16 @@ struct LoginView: View {
                         .foregroundStyle(VColor.contentSecondary)
                         .multilineTextAlignment(.center)
                 }
-                .padding(.top, VSpacing.xxxl)
+                .padding(.top, 96)
                 .padding(.horizontal, VSpacing.lg)
-
-                Spacer()
 
                 if let error = authManager.errorMessage {
                     Text(error)
                         .font(VFont.labelDefault)
                         .foregroundStyle(VColor.systemNegativeStrong)
                         .multilineTextAlignment(.center)
+                        .padding(.top, VSpacing.xxxl)
                         .padding(.horizontal, VSpacing.xl)
-                        .padding(.bottom, VSpacing.sm)
                 }
 
                 VStack(spacing: VSpacing.sm) {
@@ -80,7 +90,7 @@ struct LoginView: View {
                                 ProgressView()
                                     .tint(VColor.contentInset)
                             } else {
-                                Text(isReplay ? "Continue" : "Log In")
+                                Text("Log In")
                                     .font(VFont.bodyLargeEmphasised)
                                     .foregroundStyle(VColor.contentInset)
                             }
@@ -88,18 +98,20 @@ struct LoginView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
                         .background(VColor.primaryBase)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: VRadius.window))
                     }
                     .buttonStyle(.plain)
                     .disabled(authManager.isSubmitting && !isReplay)
                 }
+                .padding(.top, authManager.errorMessage == nil ? 60 : VSpacing.sm)
                 .padding(.horizontal, VSpacing.lg)
 
                 Text("2026 Vellum Inc.")
                     .font(VFont.labelDefault)
                     .foregroundStyle(VColor.contentDisabled)
-                    .padding(.top, VSpacing.xl)
-                    .padding(.bottom, VSpacing.xxl)
+                    .padding(.top, VSpacing.xxxl)
+
+                Spacer().frame(maxHeight: 120)
             }
         }
     }
@@ -112,7 +124,7 @@ struct LoginView: View {
 private struct VellumAppIconView: View {
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 24)
+            RoundedRectangle(cornerRadius: VRadius.xxl)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -129,10 +141,10 @@ private struct VellumAppIconView: View {
 
             VellumVShape()
                 .fill(.white)
-                // Insets from Figma: ~25% top/bottom, ~24% left/right within 115pt icon
-                .frame(width: 59, height: 61)
+                // V shape sits at ~51% of icon width / ~53% of icon height.
+                .frame(width: 45, height: 47)
         }
-        .frame(width: 115, height: 115)
+        .frame(width: 88, height: 88)
     }
 }
 

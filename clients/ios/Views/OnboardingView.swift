@@ -23,37 +23,51 @@ struct OnboardingView: View {
     @State private var managedBootstrapError: String?
 
     var body: some View {
-        ZStack {
-            if isBootstrappingManaged {
-                managedBootstrapView
-                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
-            } else {
-                switch currentStep {
-                case .login:
-                    LoginView(
-                        authManager: authManager,
-                        isReplay: isReplay,
-                        onContinue: {
-                            if isReplay {
-                                // Skip bootstrap in replay — the user is already
-                                // authenticated and we must not mutate state.
-                                currentStep = .ready
-                            } else {
-                                Task { await performManagedBootstrap() }
-                            }
-                        }
-                    )
-                    .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
-                case .ready:
-                    ReadyStep(isCompleted: $isCompleted)
+        // The strip is the last child of a root VStack and the VStack ignores
+        // the bottom safe area, so the image's bottom edge sits at the
+        // physical screen bottom and bleeds under the home indicator.
+        // Earlier attempts using .safeAreaInset + .ignoresSafeArea on the art
+        // failed because .aspectRatio(.fit) centers the rendered image inside
+        // any extended frame — the VStack-last-child pattern is the reliable
+        // one here.
+        VStack(spacing: 0) {
+            ZStack {
+                if isBootstrappingManaged {
+                    managedBootstrapView
                         .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                } else {
+                    switch currentStep {
+                    case .login:
+                        LoginView(
+                            authManager: authManager,
+                            isReplay: isReplay,
+                            onContinue: {
+                                if isReplay {
+                                    // Skip bootstrap in replay — the user is already
+                                    // authenticated and we must not mutate state.
+                                    currentStep = .ready
+                                } else {
+                                    Task { await performManagedBootstrap() }
+                                }
+                            }
+                        )
+                        .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                    case .ready:
+                        ReadyStep(isCompleted: $isCompleted, isReplay: isReplay)
+                            .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            OnboardingBottomStrip()
         }
+        .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .topLeading) {
-            // Scope the cancel affordance to an overlay so the ZStack's default
-            // center alignment is preserved for ReadyStep and managedBootstrapView
-            // (bare VStacks that would otherwise render top-leading).
+            // Scope the cancel affordance to an overlay so the step ZStack's
+            // default center alignment is preserved for ReadyStep and
+            // managedBootstrapView (bare VStacks that would otherwise render
+            // top-leading).
             if isReplay {
                 Button("Cancel") {
                     isCompleted = true
@@ -145,6 +159,10 @@ struct OnboardingView: View {
 
 struct ReadyStep: View {
     @Binding var isCompleted: Bool
+    /// When true, the step was reached via the developer replay tool rather
+    /// than a real login; a muted indicator is shown so it is obvious this
+    /// is a dev-tool shortcut and not a fresh onboarding completion.
+    var isReplay: Bool = false
 
     var body: some View {
         VStack(spacing: VSpacing.xl) {
@@ -163,6 +181,13 @@ struct ReadyStep: View {
                 isCompleted = true
             }
             .buttonStyle(.borderedProminent)
+
+            if isReplay {
+                Text("(Developer replay — login was skipped)")
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentDisabled)
+                    .multilineTextAlignment(.center)
+            }
 
             Spacer()
         }
