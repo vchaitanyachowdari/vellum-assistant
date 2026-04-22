@@ -111,6 +111,7 @@ import {
   migrateNormalizeUserFileByPrincipal,
   migrateNotificationDeliveryThreadDecision,
   migrateOAuthAppsClientSecretPath,
+  migrateOAuthProvidersAvailableScopes,
   migrateOAuthProvidersBehaviorColumns,
   migrateOAuthProvidersDisplayMetadata,
   migrateOAuthProvidersFeatureFlag,
@@ -378,6 +379,7 @@ export function initializeDb(): void {
     migrateConversationsArchivedAt,
     migrateStripPlaceholderSentinelsFromMessages,
     migrateOAuthProvidersManagedServiceIsPaid,
+    migrateOAuthProvidersAvailableScopes,
   ];
 
   // Run each migration step, catching and logging individual failures so one

@@ -1,3 +1,4 @@
+import type { AvailableScopes } from "./connect-types.js";
 import { seedProviders } from "./oauth-store.js";
 
 /**
@@ -15,12 +16,10 @@ import { seedProviders } from "./oauth-store.js";
  * and display metadata (displayLabel,
  * description, dashboardUrl, clientIdPlaceholder, requiresClientSecret,
  * logoUrl)
- * are overwritten on subsequent startups — user-customizable
- * fields (scopePolicy) are only
- * written on initial insert and preserved across restarts.
- * defaultScopes are also overwritten on subsequent startups so that
- * upstream scope additions (e.g. new Gmail API scopes) propagate to
- * existing installations.
+ * are overwritten on subsequent startups.
+ * defaultScopes and availableScopes are also overwritten on subsequent
+ * startups so that upstream scope additions (e.g. new Gmail API scopes)
+ * propagate to existing installations.
  */
 export const PROVIDER_SEED_DATA: Record<
   string,
@@ -40,11 +39,7 @@ export const PROVIDER_SEED_DATA: Record<
     revokeBodyTemplate?: Record<string, string>;
     baseUrl?: string;
     defaultScopes: string[];
-    scopePolicy: {
-      allowAdditionalScopes: boolean;
-      allowedOptionalScopes: string[];
-      forbiddenScopes: string[];
-    };
+    availableScopes?: AvailableScopes;
     scopeSeparator?: string;
     authorizeParams?: Record<string, string>;
     managedServiceConfigKey?: string;
@@ -96,14 +91,8 @@ export const PROVIDER_SEED_DATA: Record<
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/contacts.readonly",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: true,
-      allowedOptionalScopes: [
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/drive.file",
-      ],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://developers.google.com/identity/protocols/oauth2/scopes",
     authorizeParams: { access_type: "offline", prompt: "consent" },
     loopbackPort: 17321,
     managedServiceConfigKey: "google-oauth",
@@ -161,11 +150,6 @@ export const PROVIDER_SEED_DATA: Record<
       "search:read",
       "reactions:write",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     authorizeParams: {
       user_scope:
         "channels:read,channels:history,groups:read,groups:history,im:read,im:history,im:write,mpim:read,mpim:history,users:read,chat:write,search:read,reactions:write",
@@ -199,11 +183,6 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/notion",
     defaultScopes: [],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     authorizeParams: { owner: "user" },
     tokenEndpointAuthMethod: "client_secret_basic",
     tokenExchangeBodyFormat: "json",
@@ -242,11 +221,8 @@ export const PROVIDER_SEED_DATA: Record<
       "bookmark.read",
       "offline.access",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://developer.x.com/en/docs/authentication/oauth-2-0/authorization-code",
     tokenEndpointAuthMethod: "client_secret_basic",
     loopbackPort: 17335,
     managedServiceConfigKey: "twitter-oauth",
@@ -283,16 +259,8 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/github",
     defaultScopes: ["repo", "read:user", "notifications"],
-    scopePolicy: {
-      allowAdditionalScopes: true,
-      allowedOptionalScopes: [
-        "read:org",
-        "write:discussion",
-        "gist",
-        "project",
-      ],
-      forbiddenScopes: ["delete_repo", "admin:org"],
-    },
+    availableScopes:
+      "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps",
     managedServiceConfigKey: "github-oauth",
     loopbackPort: 17332,
     injectionTemplates: [
@@ -324,11 +292,6 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/linear",
     defaultScopes: ["read", "write", "issues:create"],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     scopeSeparator: ",",
     authorizeParams: { prompt: "consent" },
     loopbackPort: 17324,
@@ -373,11 +336,8 @@ export const PROVIDER_SEED_DATA: Record<
       "user-library-read",
       "user-library-modify",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://developer.spotify.com/documentation/web-api/concepts/scopes",
     tokenEndpointAuthMethod: "client_secret_basic",
     loopbackPort: 17333,
     injectionTemplates: [
@@ -405,11 +365,6 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/todoist",
     defaultScopes: ["data:read_write"],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: ["data:delete"],
-    },
     loopbackPort: 17325,
     injectionTemplates: [
       {
@@ -444,11 +399,8 @@ export const PROVIDER_SEED_DATA: Record<
       "guilds.members.read",
       "messages.read",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: ["bot"],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://discord.com/developers/docs/topics/oauth2#shared-resources-oauth2-scopes",
     loopbackPort: 17326,
     injectionTemplates: [
       {
@@ -481,11 +433,6 @@ export const PROVIDER_SEED_DATA: Record<
       "files.content.write",
       "sharing.read",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     authorizeParams: { token_access_type: "offline" },
     loopbackPort: 17327,
     injectionTemplates: [
@@ -520,11 +467,6 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/asana",
     defaultScopes: ["default"],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     loopbackPort: 17328,
     injectionTemplates: [
       {
@@ -555,11 +497,6 @@ export const PROVIDER_SEED_DATA: Record<
       "data.records:write",
       "schema.bases:read",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     tokenEndpointAuthMethod: "client_secret_basic",
     loopbackPort: 17329,
     injectionTemplates: [
@@ -593,14 +530,8 @@ export const PROVIDER_SEED_DATA: Record<
       "crm.objects.deals.write",
       "crm.objects.companies.read",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: true,
-      allowedOptionalScopes: [
-        "crm.objects.companies.write",
-        "crm.objects.owners.read",
-      ],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://developers.hubspot.com/docs/guides/apps/authentication/scopes",
     loopbackPort: 17330,
     injectionTemplates: [
       {
@@ -627,11 +558,6 @@ export const PROVIDER_SEED_DATA: Record<
     clientIdPlaceholder: null,
     logoUrl: "https://cdn.simpleicons.org/figma",
     defaultScopes: ["files:read", "file_comments:write"],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
     tokenEndpointAuthMethod: "client_secret_basic",
     loopbackPort: 17331,
     injectionTemplates: [
@@ -673,11 +599,8 @@ export const PROVIDER_SEED_DATA: Record<
       "Calendars.ReadWrite",
       "MailboxSettings.ReadWrite",
     ],
-    scopePolicy: {
-      allowAdditionalScopes: true,
-      allowedOptionalScopes: ["Contacts.Read", "Files.Read", "Tasks.ReadWrite"],
-      forbiddenScopes: [],
-    },
+    availableScopes:
+      "https://learn.microsoft.com/en-us/graph/permissions-reference",
     authorizeParams: { prompt: "consent" },
     tokenEndpointAuthMethod: "client_secret_post",
     loopbackPort: 17334,
@@ -711,11 +634,6 @@ export const PROVIDER_SEED_DATA: Record<
     requiresClientSecret: false,
     logoUrl: "https://cdn.simpleicons.org/slack",
     defaultScopes: [],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
   },
 
   telegram: {
@@ -730,11 +648,6 @@ export const PROVIDER_SEED_DATA: Record<
     requiresClientSecret: false,
     logoUrl: "https://cdn.simpleicons.org/telegram",
     defaultScopes: [],
-    scopePolicy: {
-      allowAdditionalScopes: false,
-      allowedOptionalScopes: [],
-      forbiddenScopes: [],
-    },
   },
 };
 
