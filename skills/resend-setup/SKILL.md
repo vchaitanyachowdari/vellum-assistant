@@ -50,14 +50,42 @@ Run this with `network_mode: "proxied"` and the resend credential so the Authori
 
 Use `hi@<domain>` as the default sender address (consistent with Vellum's native email convention). Remember the domain for future sends.
 
-### Webhook Secret (for receiving)
+### Webhook Setup (for receiving)
 
-If the user also wants to **receive** emails via Resend, they need to configure a webhook in their Resend dashboard:
+If the user also wants to **receive** emails via Resend, you need to get a webhook URL and register it with Resend.
 
-- **URL:** `https://<assistant-ingress>/webhooks/resend`
-- **Event:** `email.received`
+#### Getting the webhook URL
 
-Then store the webhook signing secret:
+Check the `IS_PLATFORM` environment variable to determine the approach:
+
+- **If `IS_PLATFORM=true`** (managed assistant): Register a platform callback route:
+
+  ```bash
+  assistant platform callback-routes register --path webhooks/resend --type resend --json
+  ```
+
+  This returns JSON with a `callbackUrl` field — use that as the webhook URL.
+
+- **If `IS_PLATFORM` is not set** (self-hosted): Use a tunnel like ngrok to expose the gateway's `/webhooks/resend` endpoint. The public URL from the tunnel is the webhook URL.
+
+#### Registering the webhook with Resend
+
+Create the webhook in Resend via their API using the webhook URL from above:
+
+```bash
+curl -X POST https://api.resend.com/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "<webhook URL>",
+    "events": ["email.received"]
+  }'
+```
+
+Use `network_mode: "proxied"` with the resend credential so the Authorization header is injected automatically.
+
+#### Storing the webhook signing secret
+
+Store the signing secret so the gateway can verify inbound webhooks:
 
 ```
 credential_store:

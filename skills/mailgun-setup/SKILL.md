@@ -47,13 +47,43 @@ The response contains an `items` array of domain objects with `name` and `state`
 
 Use `hi@<domain>` as the default sender address (consistent with Vellum's native email convention). Remember the domain for future sends.
 
-### Webhook Signing Key (for receiving)
+### Webhook Setup (for receiving)
 
-If the user also wants to **receive** emails via Mailgun, they need to set up a Mailgun inbound route with a `forward()` action pointing to:
+If the user also wants to **receive** emails via Mailgun, you need to get a webhook URL and create an inbound route in Mailgun.
 
-- **URL:** `https://<assistant-ingress>/webhooks/mailgun`
+#### Getting the webhook URL
 
-Then store the webhook signing key:
+Check the `IS_PLATFORM` environment variable to determine the approach:
+
+- **If `IS_PLATFORM=true`** (managed assistant): Register a platform callback route:
+
+  ```bash
+  assistant platform callback-routes register --path webhooks/mailgun --type mailgun --json
+  ```
+
+  This returns JSON with a `callbackUrl` field — use that as the webhook URL.
+
+- **If `IS_PLATFORM` is not set** (self-hosted): Use a tunnel like ngrok to expose the gateway's `/webhooks/mailgun` endpoint. The public URL from the tunnel is the webhook URL.
+
+#### Creating the inbound route in Mailgun
+
+Create an inbound route via the Mailgun API using the webhook URL from above:
+
+```bash
+curl -s --user "api:$MAILGUN_API_KEY" \
+  https://api.mailgun.net/v3/routes \
+  -F priority=0 \
+  -F description="Forward inbound email to assistant" \
+  -F expression="match_recipient('.*@DOMAIN')" \
+  -F action="forward('<webhook URL>')" \
+  -F action="stop()"
+```
+
+Replace `DOMAIN` with the user's Mailgun receiving domain. Retrieve the API key from the vault at runtime (do not hardcode it). For EU-region accounts, use `https://api.eu.mailgun.net/v3/routes` instead.
+
+#### Storing the webhook signing key
+
+Store the signing key so the gateway can verify inbound webhooks:
 
 ```
 credential_store:
