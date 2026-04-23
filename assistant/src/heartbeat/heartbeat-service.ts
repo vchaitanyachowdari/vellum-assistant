@@ -398,11 +398,12 @@ export class HeartbeatService {
 
       log.info({ conversationId: conversation.id }, "Heartbeat completed");
 
+      const today = new Date().toISOString().split("T")[0];
       void emitFeedEvent({
         source: "assistant",
         title: "Heartbeat",
         summary: "Heartbeat check completed.",
-        dedupKey: `heartbeat:ok:${new Date().toISOString().split("T")[0]}`,
+        dedupKey: `heartbeat:ok:${today}`,
         priority: 30,
       }).catch((err) => {
         log.warn(
@@ -422,11 +423,12 @@ export class HeartbeatService {
         log.error({ alertErr }, "Failed to broadcast heartbeat alert");
       }
 
+      const today = new Date().toISOString().split("T")[0];
       void emitFeedEvent({
         source: "assistant",
         title: "Heartbeat",
         summary: "Heartbeat check failed. Check logs for details.",
-        dedupKey: `heartbeat:fail:${new Date().toISOString().split("T")[0]}`,
+        dedupKey: `heartbeat:fail:${today}`,
         priority: 55,
         urgency: "medium",
       }).catch(() => {});
