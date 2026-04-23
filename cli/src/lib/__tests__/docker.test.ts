@@ -32,9 +32,27 @@ function buildAssistantArgs(
 }
 
 describe("serviceDockerRunArgs — assistant", () => {
-  test("runs privileged so the inner dockerd can manage cgroups/iptables/overlayfs", () => {
+  test("grants the minimum capability set needed for DinD (SYS_ADMIN + NET_ADMIN) rather than --privileged", () => {
     const args = buildAssistantArgs();
-    expect(args).toContain("--privileged");
+    expect(args).not.toContain("--privileged");
+    // --cap-add SYS_ADMIN and --cap-add NET_ADMIN are each passed as two
+    // adjacent args: "--cap-add" followed by the capability name.
+    const sysAdminIdx = args.indexOf("SYS_ADMIN");
+    expect(sysAdminIdx).toBeGreaterThan(0);
+    expect(args[sysAdminIdx - 1]).toBe("--cap-add");
+    const netAdminIdx = args.indexOf("NET_ADMIN");
+    expect(netAdminIdx).toBeGreaterThan(0);
+    expect(args[netAdminIdx - 1]).toBe("--cap-add");
+  });
+
+  test("disables the default seccomp and AppArmor profiles so the inner dockerd can mount overlayfs and run pivot_root", () => {
+    const args = buildAssistantArgs();
+    const seccompIdx = args.indexOf("seccomp=unconfined");
+    expect(seccompIdx).toBeGreaterThan(0);
+    expect(args[seccompIdx - 1]).toBe("--security-opt");
+    const apparmorIdx = args.indexOf("apparmor=unconfined");
+    expect(apparmorIdx).toBeGreaterThan(0);
+    expect(args[apparmorIdx - 1]).toBe("--security-opt");
   });
 
   test("mounts a dedicated named volume at /var/lib/docker for the inner dockerd data store", () => {
