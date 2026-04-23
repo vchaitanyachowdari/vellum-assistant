@@ -280,6 +280,38 @@ public final class AuthService {
         return try decodeAssistantResult(response)
     }
 
+    /// Tell the platform this is the user's active assistant. Updates
+    /// `membership.active_assistant` so ID-less flows (e.g. `GET
+    /// /v1/assistants/active/`) resolve to the right assistant.
+    ///
+    /// `performPlatformRequest` only throws on URL/network/missing-token
+    /// failures — it returns 4xx/5xx in the `PlatformResponse`. Callers
+    /// are expected to check `statusCode` explicitly, and we do that here
+    /// so non-2xx responses surface to the caller's `catch` block.
+    public func activateAssistant(id: String, organizationId: String) async throws {
+        let response = try await performPlatformRequest(
+            path: "v1/assistants/\(id)/activate/",
+            method: "POST",
+            organizationId: organizationId
+        )
+
+        if response.statusCode == 401 || response.statusCode == 403 {
+            // Collapsed like the other POSTs on this service (self-hosted
+            // registration, reprovision, retire). The platform's activate
+            // endpoint uses an ownership-filtered queryset — non-owned IDs
+            // come back as 404, so 403 here means session/token/org-access
+            // is bad, not a per-resource permission error.
+            throw PlatformAPIError.authenticationRequired
+        }
+        if response.statusCode == 404 {
+            throw PlatformAPIError.notFound
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            let detail = String(data: response.data, encoding: .utf8)
+            throw PlatformAPIError.serverError(statusCode: response.statusCode, detail: detail)
+        }
+    }
+
     /// List managed assistants visible to the caller in the given organization.
     ///
     /// The backend already scopes the response to platform (cloud-hosted)
