@@ -287,8 +287,26 @@ public struct VSelectableTextView: NSViewRepresentable {
         return size
     }
 
+    /// Tears down coordinator state when SwiftUI releases the NSTextView.
+    ///
+    /// Must not mutate `textView.textStorage`. Any edit on the text storage
+    /// (e.g. `setAttributedString(_:)`) posts an `NSTextStorage` notification
+    /// that AppKit processes synchronously: layout invalidation →
+    /// `setSelectedRanges:affinity:stillSelecting:` → an accessibility post
+    /// that formats `NSTextView.description` via `__CFStringAppendFormatCore`.
+    /// Batched teardown (e.g. a full chat message list replaced on
+    /// conversation switch) multiplies the per-view cost into a main-thread
+    /// hang.
+    ///
+    /// The TextKit stack does not need an explicit reset: ARC releases
+    /// `NSTextView` → `NSTextContainer` → `NSLayoutManager` → `NSTextStorage`
+    /// when this returns. `coordinator.reset()` releases the coordinator's
+    /// retained attributed strings and cancels any queued async apply.
+    ///
+    /// Reference: [`NSViewRepresentable.dismantleNSView`](https://developer.apple.com/documentation/swiftui/nsviewrepresentable/dismantlensview(_:coordinator:))
+    /// — Apple scopes this hook to observer removal and external-state
+    /// cleanup, not view-content mutation.
     public static func dismantleNSView(_ textView: NSTextView, coordinator: Coordinator) {
-        textView.textStorage?.setAttributedString(NSAttributedString())
         coordinator.reset()
     }
 
