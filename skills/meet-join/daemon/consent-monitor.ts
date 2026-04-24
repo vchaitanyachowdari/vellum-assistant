@@ -774,7 +774,9 @@ function createDefaultLlmAsk(host: SkillHost): ObjectionLLMAsk {
       return { objected: false, reason: "" };
     }
 
-    const controller = host.providers.llm.createTimeout(CONSENT_LLM_TIMEOUT_MS);
+    const { signal, cleanup } = host.providers.llm.createTimeout(
+      CONSENT_LLM_TIMEOUT_MS,
+    );
     try {
       const response = await provider.sendMessage(
         [host.providers.llm.userMessage(prompt)],
@@ -786,7 +788,7 @@ function createDefaultLlmAsk(host: SkillHost): ObjectionLLMAsk {
             max_tokens: CONSENT_LLM_MAX_TOKENS,
             tool_choice: { type: "tool" as const, name: OBJECTION_TOOL.name },
           },
-          signal: controller.signal,
+          signal,
         },
       );
       const tool = host.providers.llm.extractToolUse(response) as {
@@ -799,7 +801,7 @@ function createDefaultLlmAsk(host: SkillHost): ObjectionLLMAsk {
         reason: typeof input.reason === "string" ? input.reason : "",
       };
     } finally {
-      controller.abort();
+      cleanup();
     }
   };
 }
