@@ -118,6 +118,60 @@ export const conversationThresholdOverrides = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Actor tokens (auth — gateway-owned)
+// ---------------------------------------------------------------------------
+
+export const actorTokenRecords = sqliteTable(
+  "actor_token_records",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    guardianPrincipalId: text("guardian_principal_id").notNull(),
+    hashedDeviceId: text("hashed_device_id").notNull(),
+    platform: text("platform").notNull(),
+    status: text("status").notNull().default("active"),
+    issuedAt: integer("issued_at").notNull(),
+    expiresAt: integer("expires_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_actor_tokens_active_device")
+      .on(table.guardianPrincipalId, table.hashedDeviceId)
+      .where(sql`status = 'active'`),
+    index("idx_actor_tokens_hash")
+      .on(table.tokenHash)
+      .where(sql`status = 'active'`),
+  ],
+);
+
+export const actorRefreshTokenRecords = sqliteTable(
+  "actor_refresh_token_records",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    familyId: text("family_id").notNull(),
+    guardianPrincipalId: text("guardian_principal_id").notNull(),
+    hashedDeviceId: text("hashed_device_id").notNull(),
+    platform: text("platform").notNull(),
+    status: text("status").notNull().default("active"),
+    issuedAt: integer("issued_at").notNull(),
+    absoluteExpiresAt: integer("absolute_expires_at").notNull(),
+    inactivityExpiresAt: integer("inactivity_expires_at").notNull(),
+    lastUsedAt: integer("last_used_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_refresh_tokens_hash").on(table.tokenHash),
+    uniqueIndex("idx_refresh_tokens_active_device")
+      .on(table.guardianPrincipalId, table.hashedDeviceId)
+      .where(sql`status = 'active'`),
+    index("idx_refresh_tokens_family").on(table.familyId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Trust rules (v3)
 // ---------------------------------------------------------------------------
 
