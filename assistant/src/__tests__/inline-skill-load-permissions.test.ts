@@ -57,12 +57,21 @@ mock.module("../config/loader.js", () => ({
   setNestedValue: () => {},
 }));
 
-import { createGatewayClientMock } from "./helpers/gateway-classify-mock.js";
-mock.module("../ipc/gateway-client.js", () => createGatewayClientMock());
+import {
+  installIpcMock,
+  mockIpcResponse,
+} from "./helpers/gateway-classify-mock.js";
+installIpcMock();
+mockIpcResponse("classify_risk", {
+  risk: "low",
+  reason: "skill_load",
+  matchType: "unknown",
+});
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
 import { check, generateAllowlistOptions } from "../permissions/checker.js";
+import { clearRiskCache } from "../permissions/checker.js";
 import { addRule, clearCache } from "../permissions/trust-store.js";
 import { computeSkillVersionHash } from "../skills/version-hash.js";
 
@@ -105,6 +114,7 @@ function writeDynamicSkill(
 
 describe("inline-command skill_load permissions", () => {
   beforeEach(() => {
+    clearRiskCache();
     clearCache();
     testConfig.permissions = { mode: "workspace" };
     testConfig.skills = { load: { extraDirs: [] } };

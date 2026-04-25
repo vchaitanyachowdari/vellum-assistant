@@ -39,10 +39,22 @@ mock.module("../config/loader.js", () => ({
   setNestedValue: () => {},
 }));
 
-import { createGatewayClientMock } from "./helpers/gateway-classify-mock.js";
-mock.module("../ipc/gateway-client.js", () => createGatewayClientMock());
+// Mock IPC transport — only the Unix socket layer is faked.
+import {
+  installIpcMock,
+  mockIpcResponse,
+} from "./helpers/gateway-classify-mock.js";
+installIpcMock();
 
-import { check, classifyRisk } from "../permissions/checker.js";
+// The warmup classifyRisk("bash", { command: "echo warmup" }) call needs a
+// valid response so the WASM parser initializes without throwing.
+mockIpcResponse("classify_risk", {
+  risk: "low",
+  reason: "echo",
+  matchType: "shell",
+});
+
+import { check, classifyRisk, clearRiskCache } from "../permissions/checker.js";
 import {
   addRule,
   clearCache,
@@ -152,6 +164,7 @@ describe("ephemeral-permissions", () => {
 
   describe("findHighestPriorityRule with ephemeral rules", () => {
     beforeEach(() => {
+      clearRiskCache();
       clearCache();
     });
 
@@ -251,6 +264,7 @@ describe("ephemeral-permissions", () => {
 
   describe("check() with ephemeral rules", () => {
     beforeEach(() => {
+      clearRiskCache();
       clearCache();
       testConfig.permissions.mode = "workspace";
     });
@@ -297,7 +311,12 @@ describe("ephemeral-permissions", () => {
         ephemeralRules,
       };
 
-      // sudo is high-risk
+      // sudo is high-risk — override the default low-risk mock response
+      mockIpcResponse("classify_risk", {
+        risk: "high",
+        reason: "sudo",
+        matchType: "shell",
+      });
       const result = await check(
         "bash",
         { command: "sudo rm -rf /" },
@@ -316,6 +335,7 @@ describe("ephemeral-permissions", () => {
 
   describe("canonical shape and scope fallback semantics", () => {
     beforeEach(() => {
+      clearRiskCache();
       clearCache();
     });
 
@@ -401,6 +421,12 @@ describe("ephemeral-permissions", () => {
 
   describe("workspace mode interactions", () => {
     beforeEach(() => {
+      mockIpcResponse("classify_risk", {
+        risk: "low",
+        reason: "test fixture",
+        matchType: "shell",
+      });
+      clearRiskCache();
       clearCache();
       testConfig.permissions.mode = "workspace";
     });
