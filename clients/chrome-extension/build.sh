@@ -103,6 +103,16 @@ jq --arg v "$EXT_VERSION" '.version = $v' "$DIST_DIR/manifest.json" > "$DIST_DIR
   && mv "$DIST_DIR/manifest.json.tmp" "$DIST_DIR/manifest.json"
 echo "  Extension version: $EXT_VERSION"
 
+# Stamp environment-specific name into the dist manifest so unpacked
+# extensions are distinguishable (e.g. "Vellum Assistant Local").
+case "$VELLUM_ENV" in
+  production) EXT_NAME="Vellum Assistant" ;;
+  *)          EXT_NAME="Vellum Assistant $(echo "$VELLUM_ENV" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" ;;
+esac
+jq --arg n "$EXT_NAME" '.name = $n' "$DIST_DIR/manifest.json" > "$DIST_DIR/manifest.json.tmp" \
+  && mv "$DIST_DIR/manifest.json.tmp" "$DIST_DIR/manifest.json"
+echo "  Extension name: $EXT_NAME"
+
 cp "$SCRIPT_DIR/popup/popup.html" "$DIST_DIR/popup/popup.html"
 
 # Copy icons if they exist, otherwise create placeholder PNGs
