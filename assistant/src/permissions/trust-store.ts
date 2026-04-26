@@ -1256,7 +1256,7 @@ function getGatewayTrustStore(): GatewayTrustStoreAdapter {
  *
  * When `IS_CONTAINERIZED=false`, returns the file-based implementation.
  */
-export function getTrustStore(): TrustStoreBackend {
+function getTrustStore(): TrustStoreBackend {
   if (getIsContainerized()) {
     return getGatewayTrustStore();
   }
