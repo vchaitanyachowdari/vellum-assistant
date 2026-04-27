@@ -143,7 +143,6 @@ import {
   type ConversationManagementDeps,
   conversationManagementRouteDefinitions,
 } from "./routes/conversation-management-routes.js";
-import { conversationQueryRouteDefinitions } from "./routes/conversation-query-routes.js";
 import { conversationRouteDefinitions } from "./routes/conversation-routes.js";
 import { RouteError } from "./routes/errors.js";
 import { eventsRouteDefinitions } from "./routes/events-routes.js";
@@ -295,7 +294,6 @@ export class RuntimeHttpServer {
   private sweepInProgress = false;
   private sendMessageDeps?: SendMessageDeps;
   private conversationManagementDeps?: RuntimeHttpServerOptions["conversationManagementDeps"];
-  private getModelSetContext?: RuntimeHttpServerOptions["getModelSetContext"];
   private getCesClient?: RuntimeHttpServerOptions["getCesClient"];
   private onProviderCredentialsChanged?: RuntimeHttpServerOptions["onProviderCredentialsChanged"];
   private readonly liveVoiceSessionManager: LiveVoiceSessionManager;
@@ -313,7 +311,6 @@ export class RuntimeHttpServer {
     this.interfacesDir = options.interfacesDir ?? null;
     this.sendMessageDeps = options.sendMessageDeps;
     this.conversationManagementDeps = options.conversationManagementDeps;
-    this.getModelSetContext = options.getModelSetContext;
     this.getCesClient = options.getCesClient;
     this.onProviderCredentialsChanged = options.onProviderCredentialsChanged;
     this.liveVoiceSessionManager = new LiveVoiceSessionManager({
@@ -1755,9 +1752,6 @@ export class RuntimeHttpServer {
             }
           : undefined,
       ),
-      ...conversationQueryRouteDefinitions({
-        getModelSetContext: this.getModelSetContext,
-      }),
       // Conversation list and seen signal — kept inline because they
       // depend on multiple cross-cutting stores that aren't grouped
       // into a single domain module.
