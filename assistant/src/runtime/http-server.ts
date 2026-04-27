@@ -157,7 +157,6 @@ import { ROUTES } from "./routes/index.js";
 import { migrationRouteDefinitions } from "./routes/migration-routes.js";
 import { playgroundRouteDefinitions } from "./routes/playground/index.js";
 import { scheduleHttpOnlyRouteDefinitions } from "./routes/schedule-routes.js";
-import { secretRouteDefinitions } from "./routes/secret-routes.js";
 import { userRouteDefinitions } from "./routes/user-routes.js";
 import { workspaceHttpOnlyRouteDefinitions } from "./routes/workspace-routes.js";
 import { setAnalysisDeps } from "./services/analyze-deps-singleton.js";
@@ -293,8 +292,7 @@ export class RuntimeHttpServer {
   private sweepInProgress = false;
   private sendMessageDeps?: SendMessageDeps;
   private conversationManagementDeps?: RuntimeHttpServerOptions["conversationManagementDeps"];
-  private getCesClient?: RuntimeHttpServerOptions["getCesClient"];
-  private onProviderCredentialsChanged?: RuntimeHttpServerOptions["onProviderCredentialsChanged"];
+
   private readonly liveVoiceSessionManager: LiveVoiceSessionManager;
   private router: HttpRouter;
 
@@ -310,8 +308,6 @@ export class RuntimeHttpServer {
     this.interfacesDir = options.interfacesDir ?? null;
     this.sendMessageDeps = options.sendMessageDeps;
     this.conversationManagementDeps = options.conversationManagementDeps;
-    this.getCesClient = options.getCesClient;
-    this.onProviderCredentialsChanged = options.onProviderCredentialsChanged;
     this.liveVoiceSessionManager = new LiveVoiceSessionManager({
       createSession: (context) => createLiveVoiceSession(context),
     });
@@ -1735,10 +1731,6 @@ export class RuntimeHttpServer {
 
     return [
       ...routeDefinitionsToHTTPRoutes(ROUTES),
-      ...secretRouteDefinitions({
-        getCesClient: this.getCesClient,
-        onProviderCredentialsChanged: this.onProviderCredentialsChanged,
-      }),
       ...workspaceHttpOnlyRouteDefinitions(),
       ...scheduleHttpOnlyRouteDefinitions({
         sendMessageDeps: this.sendMessageDeps,

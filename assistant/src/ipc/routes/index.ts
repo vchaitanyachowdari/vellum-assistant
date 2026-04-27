@@ -1,7 +1,6 @@
 import { ROUTES } from "../../runtime/routes/index.js";
 import type { IpcRoute } from "../assistant-server.js";
 import { routeDefinitionsToIpcRoutes } from "./route-adapter.js";
-import { secretsRoutes } from "./secrets.js";
 import { suggestTrustRuleRoute } from "./suggest-trust-rule.js";
 import { taskTemplateRoutes } from "./task.js";
 import { taskQueueRoutes } from "./task-queue.js";
@@ -13,14 +12,9 @@ import { wipeConversationRoute } from "./wipe-conversation.js";
 /** All built-in CLI IPC routes. */
 export const cliIpcRoutes: IpcRoute[] = [
   ...trustRuleRoutes,
-
-
-
-  ...secretsRoutes,
   suggestTrustRuleRoute,
   uiRequestRoute,
   wipeConversationRoute,
-
 
   ...taskTemplateRoutes,
   ...taskQueueRoutes,
