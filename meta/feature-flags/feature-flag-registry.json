@@ -274,14 +274,6 @@
       "defaultEnabled": false
     },
     {
-      "id": "permission-controls-v2",
-      "scope": "assistant",
-      "key": "permission-controls-v2",
-      "label": "Permission Controls V2",
-      "description": "Replace risk-level permission system with two independent controls: 'Ask before acting' (LLM behavior toggle) and 'Host access' (system-enforced gate)",
-      "defaultEnabled": false
-    },
-    {
       "id": "apple-container",
       "scope": "macos",
       "key": "apple-container",
@@ -368,14 +360,6 @@
       "label": "Message Height Cache",
       "description": "Swap the transcript's LazyVStack for a plain VStack so scrollContentHeight is the true sum of row heights (no LazyVStack estimator drift). Row frames are not pinned — the earlier frame-pinning approach was removed because it caused overlap when rows grew past their first measurement (streaming, expanding thinking blocks). Tradeoff: eager layout — every row measures up-front, which can stall for many seconds to minutes on very long conversations.",
       "defaultEnabled": true
-    },
-    {
-      "id": "permission-controls-v3",
-      "scope": "assistant",
-      "key": "permission-controls-v3",
-      "label": "Permission Controls v3",
-      "description": "Enables permission controls v3: gateway-backed auto-approve thresholds, risk badges on tool results, simplified Allow/Deny permission prompt, and rule editor modal.",
-      "defaultEnabled": false
     },
     {
       "id": "compaction-playground",

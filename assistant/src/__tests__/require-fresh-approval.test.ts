@@ -2,12 +2,11 @@
  * Tests for the requireFreshApproval context flag.
  *
  * Verifies that manage_secure_command_tool cannot bypass the interactive
- * approval prompt through any of the four shortcut paths:
+ * approval prompt through any of the following shortcut paths:
  *
- * 1. Temporary override (allow_10m / allow_conversation) auto-approve
- * 2. Persistent decisions ("Always Allow" rule creation)
- * 3. Grant-consumed short-circuit (pre-existing scoped grant)
- * 4. Non-interactive guardian auto-approve
+ * 1. Persistent decisions ("Always Allow" rule creation)
+ * 2. Grant-consumed short-circuit (pre-existing scoped grant)
+ * 3. Non-interactive guardian auto-approve
  */
 
 import {
@@ -104,6 +103,7 @@ mock.module("../permissions/checker.js", () => ({
   ],
   generateScopeOptions: () =>
     scopeOptionsOverride ?? [{ label: "/tmp", scope: "/tmp" }],
+  getCachedAssessment: () => undefined,
 }));
 
 mock.module("../memory/tool-usage-store.js", () => ({
@@ -139,11 +139,6 @@ mock.module("../tools/terminal/sandbox.js", () => ({
 }));
 
 import { PermissionPrompter } from "../permissions/prompter.js";
-import {
-  clearAll as clearAllOverrides,
-  setConversationMode,
-  setTimedMode,
-} from "../runtime/conversation-approval-overrides.js";
 import { ToolExecutor } from "../tools/executor.js";
 import type { ToolContext as TC } from "../tools/types.js";
 
@@ -180,12 +175,9 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     checkResultOverride = undefined;
     scopeOptionsOverride = undefined;
     riskOverride = "high";
-    clearAllOverrides();
   });
 
-  afterEach(() => {
-    clearAllOverrides();
-  });
+  afterEach(() => {});
 
   test("manage_secure_command_tool is denied in non-interactive guardian sessions", async () => {
     // check() returns "prompt" (which normally triggers guardian auto-approve
@@ -237,7 +229,7 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     const result = await executor.execute(
       "bash",
       { command: "echo hello" },
-      makeContext({ isInteractive: false, trustClass: "guardian" }),
+      makeContext({ isInteractive: false, trustClass: "guardian", requireFreshApproval: true }),
     );
 
     expect(result.isError).toBe(true);
@@ -289,7 +281,7 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
     const result = await executor.execute(
       "gmail_send_draft",
       { draft_id: "draft-123", confidence: 0.99 },
-      makeContext({ isInteractive: false, trustClass: "guardian" }),
+      makeContext({ isInteractive: false, trustClass: "guardian", requireFreshApproval: true }),
     );
 
     expect(result.isError).toBe(true);
@@ -315,116 +307,6 @@ describe("requireFreshApproval: non-interactive guardian denial", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bypass 1: Temporary override auto-approve
-// ---------------------------------------------------------------------------
-
-describe("requireFreshApproval: temporary override bypass", () => {
-  beforeEach(() => {
-    fakeToolResult = { content: "ok", isError: false };
-    checkResultOverride = undefined;
-    scopeOptionsOverride = undefined;
-    riskOverride = "high";
-    clearAllOverrides();
-  });
-
-  afterEach(() => {
-    clearAllOverrides();
-  });
-
-  test("manage_secure_command_tool is not auto-approved by conversation-scoped override", async () => {
-    // Activate a conversation-scoped temporary override
-    setConversationMode("conversation-1");
-
-    // check() returns allow, which forcePromptSideEffects promotes to prompt.
-    // The temporary override would normally auto-approve, but
-    // requireFreshApproval should block that.
-    checkResultOverride = { decision: "allow", reason: "Matched trust rule" };
-
-    let promptCalled = false;
-    const trackingPrompter = {
-      prompt: async () => {
-        promptCalled = true;
-        return { decision: "allow" as const };
-      },
-      resolveConfirmation: () => {},
-      updateSender: () => {},
-      dispose: () => {},
-    } as unknown as PermissionPrompter;
-
-    const executor = new ToolExecutor(trackingPrompter);
-    const result = await executor.execute(
-      "manage_secure_command_tool",
-      { action: "register", toolName: "test-tool" },
-      makeContext({ trustClass: "guardian" }),
-    );
-
-    // The tool must have been prompted (not auto-approved via override)
-    expect(promptCalled).toBe(true);
-    expect(result.isError).toBe(false);
-  });
-
-  test("manage_secure_command_tool is not auto-approved by timed (10m) override", async () => {
-    // Activate a 10-minute temporary override
-    setTimedMode("conversation-1");
-
-    checkResultOverride = { decision: "allow", reason: "Matched trust rule" };
-
-    let promptCalled = false;
-    const trackingPrompter = {
-      prompt: async () => {
-        promptCalled = true;
-        return { decision: "allow" as const };
-      },
-      resolveConfirmation: () => {},
-      updateSender: () => {},
-      dispose: () => {},
-    } as unknown as PermissionPrompter;
-
-    const executor = new ToolExecutor(trackingPrompter);
-    const result = await executor.execute(
-      "manage_secure_command_tool",
-      { action: "register", toolName: "test-tool" },
-      makeContext({ trustClass: "guardian" }),
-    );
-
-    // Must prompt — temporary override must not bypass requireFreshApproval
-    expect(promptCalled).toBe(true);
-    expect(result.isError).toBe(false);
-  });
-
-  test("regular tools ARE auto-approved by temporary override", async () => {
-    // Verify normal tools still get the auto-approve shortcut
-    setConversationMode("conversation-1");
-    checkResultOverride = {
-      decision: "prompt",
-      reason: "Needs approval",
-    };
-
-    let promptCalled = false;
-    const trackingPrompter = {
-      prompt: async () => {
-        promptCalled = true;
-        return { decision: "allow" as const };
-      },
-      resolveConfirmation: () => {},
-      updateSender: () => {},
-      dispose: () => {},
-    } as unknown as PermissionPrompter;
-
-    const executor = new ToolExecutor(trackingPrompter);
-    const result = await executor.execute(
-      "bash",
-      { command: "echo hello" },
-      makeContext({ trustClass: "guardian" }),
-    );
-
-    // Regular tool should be auto-approved without prompting
-    expect(promptCalled).toBe(false);
-    expect(result.isError).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Bypass 2: Persistent decisions (Always Allow)
 // ---------------------------------------------------------------------------
 
@@ -434,11 +316,11 @@ describe("requireFreshApproval: persistent decisions disabled", () => {
     checkResultOverride = undefined;
     scopeOptionsOverride = undefined;
     riskOverride = "high";
-    clearAllOverrides();
+
   });
 
   afterEach(() => {
-    clearAllOverrides();
+
   });
 
   test("manage_secure_command_tool prompt does not offer persistent decisions", async () => {
@@ -489,40 +371,7 @@ describe("requireFreshApproval: persistent decisions disabled", () => {
     expect(promptEvent!.persistentDecisionsAllowed).toBe(false);
   });
 
-  test("regular tools still offer persistent decisions", async () => {
-    checkResultOverride = {
-      decision: "prompt",
-      reason: "Needs approval",
-    };
 
-    let persistentDecisionsPassedToPrompter: boolean | undefined;
-
-    const inspectingPrompter = {
-      prompt: async (
-        _toolName: string,
-        _input: Record<string, unknown>,
-        _riskLevel: string,
-        _allowlistOptions: unknown[],
-        _scopeOptions: unknown[],
-        _previewDiff: unknown,
-        _conversationId: string,
-        _executionTarget: string,
-        persistentDecisionsAllowed: boolean,
-      ) => {
-        persistentDecisionsPassedToPrompter = persistentDecisionsAllowed;
-        return { decision: "allow" as const };
-      },
-      resolveConfirmation: () => {},
-      updateSender: () => {},
-      dispose: () => {},
-    } as unknown as PermissionPrompter;
-
-    const executor = new ToolExecutor(inspectingPrompter);
-    await executor.execute("bash", { command: "echo hello" }, makeContext());
-
-    // Regular tools should have persistentDecisions allowed
-    expect(persistentDecisionsPassedToPrompter).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -535,11 +384,11 @@ describe("requireFreshApproval: grant-consumed does not skip permission check", 
     checkResultOverride = undefined;
     scopeOptionsOverride = undefined;
     riskOverride = "high";
-    clearAllOverrides();
+
   });
 
   afterEach(() => {
-    clearAllOverrides();
+
   });
 
   test("manage_secure_command_tool is prompted even when executor sets requireFreshApproval and grantConsumed would normally short-circuit", async () => {
@@ -590,11 +439,11 @@ describe("requireFreshApproval: context flag propagation", () => {
     checkResultOverride = undefined;
     scopeOptionsOverride = undefined;
     riskOverride = "high";
-    clearAllOverrides();
+
   });
 
   afterEach(() => {
-    clearAllOverrides();
+
   });
 
   test("manage_secure_command_tool sets both forcePromptSideEffects and requireFreshApproval", async () => {

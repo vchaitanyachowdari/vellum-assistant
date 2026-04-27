@@ -51,7 +51,6 @@ import {
 import { ConversationGraphMemory } from "../memory/graph/conversation-graph-memory.js";
 import { PermissionPrompter } from "../permissions/prompter.js";
 import { SecretPrompter } from "../permissions/secret-prompter.js";
-import { patternMatchesCandidate } from "../permissions/trust-store.js";
 import type { UserDecision } from "../permissions/types.js";
 import {
   isConversationHostAccessDecision,
@@ -64,9 +63,7 @@ import type { Message } from "../providers/types.js";
 import type { Provider } from "../providers/types.js";
 import type { TrustClass } from "../runtime/actor-trust-resolver.js";
 import type { AuthContext } from "../runtime/auth/types.js";
-import { clearMode } from "../runtime/conversation-approval-overrides.js";
 import type { InteractiveUiResult } from "../runtime/interactive-ui.js";
-import type { ConfirmationDetails } from "../runtime/pending-interactions.js";
 import * as pendingInteractions from "../runtime/pending-interactions.js";
 import { ToolExecutor } from "../tools/executor.js";
 import type { ToolLifecycleEvent } from "../tools/types.js";
@@ -821,7 +818,6 @@ export class Conversation {
   }
 
   dispose(): void {
-    clearMode(this.conversationId);
     // Cancel all pending standalone surfaces so callers get a clean
     // cancellation instead of hanging forever. Emit dismiss notifications
     // to the client so surfaces don't remain visually active if the client
@@ -992,15 +988,11 @@ export class Conversation {
       decisionContext,
     );
 
-    // Mode activation (setTimedMode / setConversationMode) is intentionally NOT
-    // done here. It is handled in permission-checker.ts where the
-    // guardian trust-class and conversation context are available.
-
     // Emit authoritative confirmation state and activity transition centrally
     // so ALL callers (HTTP handlers, /v1/confirm, channel bridges) get
     // consistent events without duplicating emission logic.
     const resolvedState =
-      effectiveDecision === "deny" || effectiveDecision === "always_deny"
+      effectiveDecision === "deny"
         ? ("denied" as const)
         : ("approved" as const);
     this.emitConfirmationStateChanged({
@@ -1056,22 +1048,23 @@ export class Conversation {
    * After resolving one confirmation, auto-resolve other pending
    * confirmations in the same conversation that match the decision.
    *
-   * - allow_10m / allow_conversation → approve ALL pending in conversation
-   * - always_allow → approve pattern-matching pending
-   * - always_deny → deny pattern-matching pending
-   * - allow / deny (one-time) → no cascading
+   * Currently only host-access enable prompts cascade: when the first
+   * host-access enable is approved, sibling host prompts resolve immediately.
+   * Simple allow / deny decisions do not cascade.
+   */
+  /**
+   * When host access is approved, cascade to sibling host-access prompts
+   * in the same conversation so the user isn't asked multiple times.
    */
   private cascadePendingApprovals(
     primaryRequestId: string,
     decision: UserDecision,
-    selectedPattern?: string,
+    _selectedPattern?: string,
     hostAccessEnablePrompt = false,
   ): void {
-    // Single-action decisions don't cascade
-    if (decision === "allow" || decision === "deny") {
-      if (!hostAccessEnablePrompt || decision !== "allow") {
-        return;
-      }
+    // Only host-access approvals cascade — all other decisions are one-shot.
+    if (!hostAccessEnablePrompt || decision !== "allow") {
+      return;
     }
 
     const pendingRequestIds = this.prompter.getPendingRequestIds();
@@ -1086,9 +1079,8 @@ export class Conversation {
       if (interaction.kind !== "confirmation") continue;
 
       if (
-        hostAccessEnablePrompt &&
-        (this.prompter.isHostAccessEnablePrompt(candidateId) ||
-          isConversationHostAccessEnablePrompt(interaction.confirmationDetails))
+        this.prompter.isHostAccessEnablePrompt(candidateId) ||
+        isConversationHostAccessEnablePrompt(interaction.confirmationDetails)
       ) {
         // Enabling computer access is conversation-scoped, so sibling host
         // prompts should resolve immediately once the first approval lands.
@@ -1104,77 +1096,8 @@ export class Conversation {
             causedByRequestId: primaryRequestId,
           },
         );
-        continue;
       }
-
-      const cascadeResult = this.shouldCascade(
-        decision,
-        selectedPattern,
-        interaction.confirmationDetails,
-      );
-      if (!cascadeResult) continue;
-
-      // Consume from pending-interactions tracker
-      pendingInteractions.resolve(candidateId);
-
-      // Resolve via handleConfirmationResponse which emits events and
-      // syncs canonical status. Use simple "allow"/"deny" so the
-      // permission-checker won't save duplicate rules or re-activate
-      // temporary modes. Recursion terminates because allow/deny exit
-      // cascadePendingApprovals early.
-      this.handleConfirmationResponse(
-        candidateId,
-        cascadeResult.allow ? "allow" : "deny",
-        undefined,
-        undefined,
-        undefined,
-        {
-          source: "system",
-          causedByRequestId: primaryRequestId,
-        },
-      );
     }
-  }
-
-  /**
-   * Determine whether a pending confirmation should be auto-resolved
-   * based on the cascading decision and pattern.
-   */
-  private shouldCascade(
-    decision: UserDecision,
-    selectedPattern: string | undefined,
-    details?: ConfirmationDetails,
-  ): { allow: boolean } | null {
-    // Temporary overrides apply to the entire conversation
-    if (decision === "allow_10m" || decision === "allow_conversation") {
-      return { allow: true };
-    }
-
-    // Persistent allow: cascade if the pattern matches any allowlist candidate.
-    // "always_allow" must NOT cascade to high-risk pending confirmations.
-    if (decision === "always_allow" && selectedPattern && details) {
-      if (details.riskLevel === "high") {
-        return null;
-      }
-      for (const option of details.allowlistOptions) {
-        if (patternMatchesCandidate(selectedPattern, option.pattern)) {
-          return { allow: true };
-        }
-      }
-      return null;
-    }
-
-    // Persistent deny: cascade denial if the pattern matches
-    if (decision === "always_deny" && selectedPattern && details) {
-      for (const option of details.allowlistOptions) {
-        if (patternMatchesCandidate(selectedPattern, option.pattern)) {
-          return { allow: false };
-        }
-      }
-      return null;
-    }
-
-    return null;
   }
 
   handleSecretResponse(

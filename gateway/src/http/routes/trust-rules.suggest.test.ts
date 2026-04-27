@@ -1,9 +1,8 @@
 /**
- * Tests for POST /v1/trust-rules-v3/suggest handler.
+ * Tests for POST /v1/trust-rules/suggest handler.
  *
  * Uses bun:test mock.module to stub ipcSuggestTrustRule, and initializes
  * a real in-memory SQLite DB (via initGatewayDb) for threshold reads.
- * The `permission-controls-v3` feature flag is toggled via writeFeatureFlag.
  */
 
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
@@ -28,15 +27,12 @@ mock.module("../../ipc/assistant-client.js", () => ({
 }));
 
 // Import after mocks are registered
-const { createTrustRuleV3SuggestHandler } = await import(
-  "./trust-rules-v3.js"
+const { createTrustRulesSuggestHandler } = await import(
+  "./trust-rules.js"
 );
 
 import { initGatewayDb, resetGatewayDb } from "../../db/connection.js";
-import {
-  writeFeatureFlag,
-  clearFeatureFlagStoreCache,
-} from "../../feature-flag-store.js";
+import { clearFeatureFlagStoreCache } from "../../feature-flag-store.js";
 import { getGatewayDb } from "../../db/connection.js";
 import { autoApproveThresholds } from "../../db/schema.js";
 
@@ -52,9 +48,6 @@ beforeEach(async () => {
   // Clear persisted threshold rows so each test starts from a clean state.
   // resetGatewayDb() closes the connection but the SQLite file retains data.
   getGatewayDb().delete(autoApproveThresholds).run();
-
-  // Enable the feature flag for all tests by default
-  writeFeatureFlag("permission-controls-v3", true);
 
   // Reset mock state
   ipcSuggestTrustRuleMock.mockReset();
@@ -93,7 +86,7 @@ const VALID_BODY = {
 };
 
 function jsonRequest(body?: unknown): Request {
-  return new Request("http://localhost/v1/trust-rules-v3/suggest", {
+  return new Request("http://localhost/v1/trust-rules/suggest", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -104,21 +97,10 @@ function jsonRequest(body?: unknown): Request {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("POST /v1/trust-rules-v3/suggest", () => {
-  test("returns 403 when permission-controls-v3 flag is off", async () => {
-    writeFeatureFlag("permission-controls-v3", false);
-
-    const handler = createTrustRuleV3SuggestHandler();
-    const res = await handler(jsonRequest(VALID_BODY));
-
-    expect(res.status).toBe(403);
-    const data = (await res.json()) as { error: string };
-    expect(data.error).toBe("Feature not enabled");
-  });
-
+describe("POST /v1/trust-rules/suggest", () => {
   test("returns 400 when body is not valid JSON", async () => {
-    const handler = createTrustRuleV3SuggestHandler();
-    const req = new Request("http://localhost/v1/trust-rules-v3/suggest", {
+    const handler = createTrustRulesSuggestHandler();
+    const req = new Request("http://localhost/v1/trust-rules/suggest", {
       method: "POST",
       body: "not json {{{{",
     });
@@ -130,7 +112,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
   });
 
   test("returns 400 when intent field is missing", async () => {
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     const { intent: _omitted, ...bodyWithoutIntent } = VALID_BODY;
     const res = await handler(jsonRequest(bodyWithoutIntent));
 
@@ -141,7 +123,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
   });
 
   test("returns 400 when intent value is invalid", async () => {
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     const res = await handler(
       jsonRequest({ ...VALID_BODY, intent: "approve_forever" }),
     );
@@ -152,7 +134,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
   });
 
   test("returns 400 when required string fields are missing", async () => {
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
 
     // Missing tool
     const res1 = await handler(
@@ -172,7 +154,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
       throw new Error("assistant is unreachable");
     });
 
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     const res = await handler(jsonRequest(VALID_BODY));
 
     expect(res.status).toBe(503);
@@ -194,7 +176,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
       Promise.resolve(mockSuggestion),
     );
 
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     const res = await handler(jsonRequest(VALID_BODY));
 
     expect(res.status).toBe(200);
@@ -213,7 +195,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
       })
       .run();
 
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     await handler(jsonRequest(VALID_BODY));
 
     expect(ipcSuggestTrustRuleMock).toHaveBeenCalledTimes(1);
@@ -225,7 +207,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
 
   test("currentThreshold defaults to 'low' when no threshold row in DB", async () => {
     // No row inserted — DB is fresh from beforeEach
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     await handler(jsonRequest(VALID_BODY));
 
     expect(ipcSuggestTrustRuleMock).toHaveBeenCalledTimes(1);
@@ -243,7 +225,7 @@ describe("POST /v1/trust-rules-v3/suggest", () => {
       ],
     };
 
-    const handler = createTrustRuleV3SuggestHandler();
+    const handler = createTrustRulesSuggestHandler();
     const res = await handler(jsonRequest(bodyWithDirScope));
 
     expect(res.status).toBe(200);

@@ -688,12 +688,8 @@ extension MainWindowView {
             let isVoiceModeEnabled = assistantFeatureFlagStore.isEnabled(
                 "voice-mode"
             )
-            let showsConversationHostAccessControl = assistantFeatureFlagStore.isEnabled(
-                "permission-controls-v2"
-            )
-            let showThresholdPicker = assistantFeatureFlagStore.isEnabled(
-                "permission-controls-v3"
-            )
+            let showsConversationHostAccessControl = true
+            let showThresholdPicker = true
             ActiveChatViewWrapper(
                 viewModel: viewModel,
                 windowState: windowState,

@@ -5,15 +5,11 @@ import {
   getCanonicalGuardianRequest,
   updateCanonicalGuardianRequest,
 } from "../memory/canonical-guardian-store.js";
-import {
-  isConversationHostAccessEnabled,
-  isPermissionControlsV2Enabled,
-} from "../permissions/v2-consent-policy.js";
+import { isConversationHostAccessEnabled } from "../permissions/v2-consent-policy.js";
 import { isUntrustedTrustClass } from "../runtime/actor-trust-resolver.js";
 import { createOrReuseToolGrantRequest } from "../runtime/tool-grant-request-helper.js";
 import { redactSecrets } from "../security/secret-scanner.js";
 import { computeToolApprovalDigest } from "../security/tool-approval-digest.js";
-import { getTaskRunRules } from "../tasks/ephemeral-permissions.js";
 import { getLogger } from "../util/logger.js";
 import { getAllTools, getTool } from "./registry.js";
 import { isSideEffectTool } from "./side-effects.js";
@@ -225,8 +221,6 @@ export class ToolApprovalHandler {
     startTime: number,
     emitLifecycleEvent: (event: ToolLifecycleEvent) => void,
   ): Promise<PreExecutionGateResult> {
-    const v2Enabled = isPermissionControlsV2Enabled();
-
     // Bail out immediately if the session was aborted before this tool started.
     if (context.signal?.aborted) {
       const durationMs = Date.now() - startTime;
@@ -304,7 +298,6 @@ export class ToolApprovalHandler {
     );
 
     if (
-      v2Enabled &&
       context.trustClass === "trusted_contact" &&
       guardianApprovalRequired &&
       executionTarget === "host" &&
@@ -334,7 +327,7 @@ export class ToolApprovalHandler {
     if (
       isUntrustedTrustClass(context.trustClass) &&
       guardianApprovalRequired &&
-      !(v2Enabled && context.trustClass === "trusted_contact")
+      context.trustClass !== "trusted_contact"
     ) {
       const inputDigest = computeToolApprovalDigest(name, input);
       needsGrantConsumption = true;
@@ -372,33 +365,6 @@ export class ToolApprovalHandler {
         errorCategory: "tool_failure",
       });
       return { allowed: false, result: { content: msg, isError: true } };
-    }
-
-    // Belt-and-suspenders guard for task runs: only preflight-approved tools
-    // may execute. This catches cases where ephemeral rules might not cover
-    // a tool, ensuring unapproved calls fail deterministically instead of
-    // falling through to the interactive prompter.
-    if (context.taskRunId) {
-      const taskRules = getTaskRunRules(context.taskRunId);
-      const approvedToolNames = new Set(taskRules.map((r) => r.tool));
-      if (approvedToolNames.size > 0 && !approvedToolNames.has(name)) {
-        const msg = `Tool '${name}' was not approved in the task's preflight. Add it to required tools and re-approve.`;
-        const durationMs = Date.now() - startTime;
-        emitLifecycleEvent({
-          type: "permission_denied",
-          toolName: name,
-          executionTarget,
-          input,
-          workingDir: context.workingDir,
-          conversationId: context.conversationId,
-          requestId: context.requestId,
-          riskLevel,
-          decision: "deny",
-          reason: msg,
-          durationMs,
-        });
-        return { allowed: false, result: { content: msg, isError: true } };
-      }
     }
 
     // Resolve the tool from the registry

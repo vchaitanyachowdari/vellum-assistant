@@ -12,14 +12,11 @@ import { z } from "zod";
 
 import { emitFeedEvent } from "../../home/emit-feed-event.js";
 import { getConversationByKey } from "../../memory/conversation-key-store.js";
-import { addRule } from "../../permissions/trust-store.js";
 import type { UserDecision } from "../../permissions/types.js";
 import {
   isConversationHostAccessDecision,
   isConversationHostAccessEnablePrompt,
-  isPermissionControlsV2Enabled,
 } from "../../permissions/v2-consent-policy.js";
-import { getTool } from "../../tools/registry.js";
 import { getLogger } from "../../util/logger.js";
 import { requireBoundGuardian } from "../auth/require-bound-guardian.js";
 import type { AuthContext } from "../auth/types.js";
@@ -29,34 +26,14 @@ import * as pendingInteractions from "../pending-interactions.js";
 
 const log = getLogger("approval-routes");
 
-function canonicalizeV2ConfirmDecision(params: {
+function canonicalizeConfirmDecision(params: {
   decision: string;
   interaction: NonNullable<ReturnType<typeof pendingInteractions.get>>;
 }): UserDecision | null {
-  const { decision, interaction } = params;
+  const { decision } = params;
   if (decision === "allow" || decision === "deny") {
     return decision;
   }
-
-  const details = interaction.confirmationDetails;
-  if (!details || isConversationHostAccessEnablePrompt(details)) {
-    return null;
-  }
-
-  if (
-    (decision === "allow_10m" || decision === "allow_conversation") &&
-    details.temporaryOptionsAvailable?.includes(decision)
-  ) {
-    return "allow";
-  }
-
-  if (
-    (decision === "always_allow" || decision === "always_deny") &&
-    details.persistentDecisionsAllowed
-  ) {
-    return decision === "always_deny" ? "deny" : "allow";
-  }
-
   return null;
 }
 
@@ -64,7 +41,7 @@ function canonicalizeV2ConfirmDecision(params: {
  * POST /v1/confirm — resolve a pending confirmation by requestId.
  * Requires AuthContext with guardian-bound actor.
  */
-async function handleConfirm(
+export async function handleConfirm(
   req: Request,
   authContext: AuthContext,
 ): Promise<Response> {
@@ -79,10 +56,7 @@ async function handleConfirm(
   };
 
   const { requestId, selectedPattern, selectedScope } = body;
-  // Normalize legacy decision: older clients may still send
-  // "always_allow_high_risk" for high-risk prompts.
-  const decision =
-    body.decision === "always_allow_high_risk" ? "always_allow" : body.decision;
+  const decision = body.decision;
 
   if (!requestId || typeof requestId !== "string") {
     return httpError("BAD_REQUEST", "requestId is required", 400);
@@ -101,31 +75,15 @@ async function handleConfirm(
     );
   }
 
-  const v2Enabled = isPermissionControlsV2Enabled();
-  const effectiveDecision = v2Enabled
-    ? typeof decision === "string"
-      ? canonicalizeV2ConfirmDecision({ decision, interaction: peeked })
-      : null
-    : decision;
-  const validConfirmDecisions = [
-    "allow",
-    "allow_10m",
-    "allow_conversation",
-    "deny",
-    "always_allow",
-    "always_deny",
-  ];
-  if (
-    (v2Enabled && effectiveDecision == null) ||
-    (!v2Enabled &&
-      (typeof decision !== "string" ||
-        !validConfirmDecisions.includes(decision)))
-  ) {
+  const effectiveDecision =
+    typeof decision === "string"
+      ? canonicalizeConfirmDecision({ decision, interaction: peeked })
+      : null;
+
+  if (effectiveDecision == null) {
     return httpError(
       "BAD_REQUEST",
-      v2Enabled
-        ? "decision must resolve to allow or deny under permission-controls-v2"
-        : `decision must be one of: ${validConfirmDecisions.join(", ")}`,
+      "decision must resolve to allow or deny",
       400,
     );
   }
@@ -140,62 +98,6 @@ async function handleConfirm(
       "Conversation host-access prompts only accept allow or deny",
       403,
     );
-  }
-
-  if (v2Enabled && (selectedPattern || selectedScope)) {
-    return httpError(
-      "FORBIDDEN",
-      "Scoped or persistent approval selections are not supported under permission-controls-v2",
-      403,
-    );
-  }
-
-  // For decisions that persist trust rules, validate that selectedPattern
-  // and selectedScope are among the options the server actually offered.
-  // This prevents a crafted request from injecting overly-broad rules.
-  const persistsRule =
-    decision === "always_allow" || decision === "always_deny";
-  if (persistsRule && (selectedPattern || selectedScope)) {
-    const confirmation = peeked.confirmationDetails;
-    if (!confirmation) {
-      return httpError(
-        "CONFLICT",
-        "No confirmation details available for this request",
-        409,
-      );
-    }
-
-    if (selectedPattern) {
-      const validPatterns = (confirmation.allowlistOptions ?? []).map(
-        (o) => o.pattern,
-      );
-      if (!validPatterns.includes(selectedPattern)) {
-        return httpError(
-          "FORBIDDEN",
-          "selectedPattern does not match any server-provided allowlist option",
-          403,
-        );
-      }
-    }
-
-    if (selectedScope) {
-      const validScopes = (confirmation.scopeOptions ?? []).map((o) => o.scope);
-      if (validScopes.length === 0) {
-        if (selectedScope !== "everywhere") {
-          return httpError(
-            "FORBIDDEN",
-            'non-scoped tools only accept scope "everywhere"',
-            403,
-          );
-        }
-      } else if (!validScopes.includes(selectedScope)) {
-        return httpError(
-          "FORBIDDEN",
-          "selectedScope does not match any server-provided scope option",
-          403,
-        );
-      }
-    }
   }
 
   // Validation passed — consume the pending interaction.
@@ -252,7 +154,7 @@ async function handleConfirm(
  * POST /v1/secret — resolve a pending secret request by requestId.
  * Requires AuthContext with guardian-bound actor.
  */
-async function handleSecret(
+export async function handleSecret(
   req: Request,
   authContext: AuthContext,
 ): Promise<Response> {
@@ -301,134 +203,6 @@ async function handleSecret(
 }
 
 /**
- * POST /v1/trust-rules — add a trust rule for a pending confirmation.
- * Requires AuthContext with guardian-bound actor.
- *
- * Does NOT resolve the confirmation itself (the client still needs to
- * POST /v1/confirm to approve/deny). Validates the pattern and scope
- * against the server-provided allowlist options from the original
- * confirmation_request.
- */
-async function handleTrustRule(
-  req: Request,
-  authContext: AuthContext,
-): Promise<Response> {
-  const authError = requireBoundGuardian(authContext);
-  if (authError) return authError;
-
-  if (isPermissionControlsV2Enabled()) {
-    return httpError(
-      "FORBIDDEN",
-      "Persistent trust rules are not supported under permission-controls-v2",
-      403,
-    );
-  }
-
-  const body = (await req.json()) as {
-    requestId?: string;
-    pattern?: string;
-    scope?: string;
-    decision?: string;
-  };
-
-  const { requestId, pattern, scope, decision } = body;
-
-  if (!requestId || typeof requestId !== "string") {
-    return httpError("BAD_REQUEST", "requestId is required", 400);
-  }
-
-  if (!pattern || typeof pattern !== "string") {
-    return httpError("BAD_REQUEST", "pattern is required", 400);
-  }
-
-  if (!scope || typeof scope !== "string") {
-    return httpError("BAD_REQUEST", "scope is required", 400);
-  }
-
-  if (decision !== "allow" && decision !== "deny") {
-    return httpError("BAD_REQUEST", 'decision must be "allow" or "deny"', 400);
-  }
-
-  // Look up without removing — trust rule doesn't resolve the confirmation
-  const interaction = pendingInteractions.get(requestId);
-  if (!interaction) {
-    return httpError(
-      "NOT_FOUND",
-      "No pending interaction found for this requestId",
-      404,
-    );
-  }
-
-  if (!interaction.confirmationDetails) {
-    return httpError(
-      "CONFLICT",
-      "No confirmation details available for this request",
-      409,
-    );
-  }
-
-  const confirmation = interaction.confirmationDetails;
-
-  if (confirmation.persistentDecisionsAllowed === false) {
-    return httpError(
-      "FORBIDDEN",
-      "Persistent trust rules are not allowed for this tool invocation",
-      403,
-    );
-  }
-
-  // Validate pattern against server-provided allowlist options
-  const validPatterns = (confirmation.allowlistOptions ?? []).map(
-    (o) => o.pattern,
-  );
-  if (!validPatterns.includes(pattern)) {
-    return httpError(
-      "FORBIDDEN",
-      "pattern does not match any server-provided allowlist option",
-      403,
-    );
-  }
-
-  // Validate scope against server-provided scope options.
-  // Non-scoped tools have empty scopeOptions — only "everywhere" is valid for them.
-  const validScopes = (confirmation.scopeOptions ?? []).map((o) => o.scope);
-  if (validScopes.length === 0) {
-    if (scope !== "everywhere") {
-      return httpError(
-        "FORBIDDEN",
-        'non-scoped tools only accept scope "everywhere"',
-        403,
-      );
-    }
-  } else if (!validScopes.includes(scope)) {
-    return httpError(
-      "FORBIDDEN",
-      "scope does not match any server-provided scope option",
-      403,
-    );
-  }
-
-  try {
-    const tool = getTool(confirmation.toolName);
-    const executionTarget =
-      tool?.origin === "skill" ? confirmation.executionTarget : undefined;
-
-    // Canonicalization is handled inside addRule — no need to pre-parse here.
-    await addRule(confirmation.toolName, pattern, scope, decision, undefined, {
-      ...(executionTarget != null ? { executionTarget } : {}),
-    });
-    log.info(
-      { tool: confirmation.toolName, pattern, scope, decision, requestId },
-      "Trust rule added via HTTP (bound to pending confirmation)",
-    );
-    return Response.json({ accepted: true });
-  } catch (err) {
-    log.error({ err }, "Failed to add trust rule");
-    return httpError("INTERNAL_ERROR", "Failed to add trust rule", 500);
-  }
-}
-
-/**
  * GET /v1/pending-interactions?conversationKey=...
  * Requires AuthContext (already verified upstream by JWT middleware).
  *
@@ -436,7 +210,7 @@ async function handleTrustRule(
  * polling-based clients (like the CLI) to discover approval requests
  * without SSE.
  */
-function handleListPendingInteractions(
+export function handleListPendingInteractions(
   url: URL,
   _authContext: AuthContext,
 ): Response {
@@ -490,8 +264,6 @@ function handleListPendingInteractions(
           scopeOptions: confirmation.confirmationDetails?.scopeOptions,
           persistentDecisionsAllowed:
             confirmation.confirmationDetails?.persistentDecisionsAllowed,
-          temporaryOptionsAvailable:
-            confirmation.confirmationDetails?.temporaryOptionsAvailable,
           acpToolKind: confirmation.confirmationDetails?.acpToolKind,
           acpOptions: confirmation.confirmationDetails?.acpOptions,
         }
@@ -520,9 +292,7 @@ export function approvalRouteDefinitions(): RouteDefinition[] {
         requestId: z.string().describe("Pending interaction request ID"),
         decision: z
           .string()
-          .describe(
-            "One of: allow, allow_10m, allow_conversation, deny, always_allow, always_deny",
-          ),
+          .describe("One of: allow, deny"),
         selectedPattern: z
           .string()
           .describe("Allowlist pattern for persistent decisions")
@@ -555,25 +325,6 @@ export function approvalRouteDefinitions(): RouteDefinition[] {
         accepted: z.boolean(),
       }),
       handler: async ({ req, authContext }) => handleSecret(req, authContext),
-    },
-    {
-      endpoint: "trust-rules",
-      method: "POST",
-      summary: "Add a trust rule for a pending confirmation",
-      description:
-        "Add a trust rule bound to a pending confirmation without resolving it.",
-      tags: ["approvals"],
-      requestBody: z.object({
-        requestId: z.string().describe("Pending confirmation request ID"),
-        pattern: z.string().describe("Allowlist pattern"),
-        scope: z.string().describe("Scope for the rule"),
-        decision: z.string().describe("allow or deny"),
-      }),
-      responseBody: z.object({
-        accepted: z.boolean(),
-      }),
-      handler: async ({ req, authContext }) =>
-        handleTrustRule(req, authContext),
     },
     {
       endpoint: "pending-interactions",

@@ -24,15 +24,12 @@ import {
   isNotificationSourceChannel,
   type NotificationSourceChannel,
 } from "../notifications/signal.js";
-import { addRule } from "../permissions/trust-store.js";
 import type { UserDecision } from "../permissions/types.js";
-import { isPermissionControlsV2Enabled } from "../permissions/v2-consent-policy.js";
 import { DAEMON_INTERNAL_ASSISTANT_ID } from "../runtime/assistant-scope.js";
 import type { ApprovalAction } from "../runtime/channel-approval-types.js";
 import { createOutboundSession } from "../runtime/channel-verification-service.js";
 import { deliverChannelReply } from "../runtime/gateway-client.js";
 import * as pendingInteractions from "../runtime/pending-interactions.js";
-import { getTool } from "../tools/registry.js";
 import { TC_GRANT_WAIT_MAX_MS } from "../tools/tool-approval-handler.js";
 import { getLogger } from "../util/logger.js";
 
@@ -75,7 +72,7 @@ export interface ActorContext {
 }
 
 /** The decision being applied. */
-interface ResolverDecision {
+export interface ResolverDecision {
   /** The effective action after any downgrade (e.g. approve_always -> approve_once). */
   action: ApprovalAction;
   /** Optional user-supplied text (e.g. answer text for pending questions). */
@@ -90,6 +87,8 @@ export interface ChannelDeliveryContext {
   guardianChatId: string;
   /** Assistant ID for attribution. */
   assistantId: string;
+  /** Optional bearer token for authenticated delivery. */
+  bearerToken?: string;
 }
 
 /** Emission context threaded from callers to handleConfirmationResponse. */
@@ -100,7 +99,7 @@ export interface ResolverEmissionContext {
 }
 
 /** Context passed to each resolver after CAS resolution succeeds. */
-interface ResolverContext {
+export interface ResolverContext {
   /** The canonical request record (already resolved to its terminal status). */
   request: CanonicalGuardianRequest;
   /** The decision being applied. */
@@ -114,7 +113,7 @@ interface ResolverContext {
 }
 
 /** Discriminated result from a resolver. */
-type ResolverResult =
+export type ResolverResult =
   | {
       ok: true;
       applied: true;
@@ -135,7 +134,7 @@ function resolveDeliverCallbackUrlForChannel(channel: string): string | null {
 }
 
 /** Interface that kind-specific resolvers implement. */
-interface GuardianRequestResolver {
+export interface GuardianRequestResolver {
   /** The request kind this resolver handles (matches canonical_guardian_requests.kind). */
   kind: string;
   /** Execute kind-specific side effects after CAS resolution. */
@@ -187,36 +186,6 @@ const pendingInteractionResolver: GuardianRequestResolver = {
       return { ok: false, reason: "pending_interaction_not_found" };
     }
 
-    // Handle approve_always: persist a trust rule when the confirmation
-    // explicitly allows persistence and provides explicit options.
-    if (
-      !isPermissionControlsV2Enabled() &&
-      (decision.action === "approve_always" ||
-        decision.action === "approve_once")
-    ) {
-      const details = interaction.confirmationDetails;
-      if (
-        decision.action === "approve_always" &&
-        details &&
-        details.persistentDecisionsAllowed !== false &&
-        details.allowlistOptions?.length
-      ) {
-        const pattern = details.allowlistOptions[0].pattern;
-        // Non-scoped tools (web_fetch, network_request, etc.) have empty
-        // scopeOptions — default to 'everywhere' so approve_always still
-        // persists a trust rule instead of silently degrading to one-time.
-        const scope = details.scopeOptions?.length
-          ? details.scopeOptions[0].scope
-          : "everywhere";
-        const tool = getTool(details.toolName);
-        const executionTarget =
-          tool?.origin === "skill" ? details.executionTarget : undefined;
-        await addRule(details.toolName, pattern, scope, "allow", 100, {
-          executionTarget,
-        });
-      }
-    }
-
     // Resolve the interaction: remove from tracker and get the session.
     const resolved = pendingInteractions.resolve(request.id);
     if (!resolved) {
@@ -232,28 +201,8 @@ const pendingInteractionResolver: GuardianRequestResolver = {
     }
 
     // Map action to the permission system's UserDecision type and notify session.
-    // Mirrors mapApprovalActionToUserDecision from channel-approvals.ts so
-    // temporal modes (approve_10m, approve_conversation) reach the session with
-    // the correct UserDecision instead of collapsing to plain "allow".
-    let userDecision: UserDecision;
-    if (isPermissionControlsV2Enabled()) {
-      userDecision = decision.action === "reject" ? "deny" : "allow";
-    } else {
-      switch (decision.action) {
-        case "reject":
-          userDecision = "deny";
-          break;
-        case "approve_10m":
-          userDecision = "allow_10m";
-          break;
-        case "approve_conversation":
-          userDecision = "allow_conversation";
-          break;
-        default:
-          userDecision = "allow";
-          break;
-      }
-    }
+    const userDecision: UserDecision =
+      decision.action === "reject" ? "deny" : "allow";
     resolved.conversation!.handleConfirmationResponse(
       request.id,
       userDecision,
@@ -1033,7 +982,7 @@ const toolGrantRequestResolver: GuardianRequestResolver = {
 const resolverRegistry = new Map<string, GuardianRequestResolver>();
 
 /** Register a resolver for a given request kind. */
-function registerResolver(resolver: GuardianRequestResolver): void {
+export function registerResolver(resolver: GuardianRequestResolver): void {
   resolverRegistry.set(resolver.kind, resolver);
 }
 

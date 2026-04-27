@@ -7,8 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./http-delivery": "./src/http-delivery.ts",
-    "./ipc-client": "./src/ipc-client.ts",
-    "./trust-rules": "./src/trust-rules.ts"
+    "./ipc-client": "./src/ipc-client.ts"
   },
   "scripts": {
     "typecheck": "bunx tsc --noEmit",

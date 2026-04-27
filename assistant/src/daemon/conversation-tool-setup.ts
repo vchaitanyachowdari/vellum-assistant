@@ -15,23 +15,10 @@ import { isHttpAuthDisabled } from "../config/env.js";
 import { getIsPlatform } from "../config/env-registry.js";
 import type { CesClient } from "../credential-execution/client.js";
 import { getBindingByConversation } from "../memory/external-conversation-store.js";
-import {
-  generateAllowlistOptions,
-  generateScopeOptions,
-  normalizeWebFetchUrl,
-} from "../permissions/checker.js";
 import type { PermissionPrompter } from "../permissions/prompter.js";
 import type { SecretPrompter } from "../permissions/secret-prompter.js";
-import {
-  addRule,
-  findHighestPriorityRule,
-} from "../permissions/trust-store.js";
-import { isAllowDecision } from "../permissions/types.js";
-import { isPermissionControlsV2Enabled } from "../permissions/v2-consent-policy.js";
-import type { TurnContext } from "../plugins/types.js";
 import type { Message, ToolDefinition } from "../providers/types.js";
 import type { TrustClass } from "../runtime/actor-trust-resolver.js";
-import { getTaskRunRules } from "../tasks/ephemeral-permissions.js";
 import { coreAppProxyTools } from "../tools/apps/definitions.js";
 import { registerConversationSender } from "../tools/browser/browser-screencast.js";
 import type { ToolExecutor } from "../tools/executor.js";
@@ -63,10 +50,6 @@ import {
   isDoordashCommand,
   markDoordashStepInProgress,
 } from "./doordash-steps.js";
-import type { HostBashProxy } from "./host-bash-proxy.js";
-import type { HostBrowserProxy } from "./host-browser-proxy.js";
-import type { HostFileProxy } from "./host-file-proxy.js";
-import type { HostTransferProxy } from "./host-transfer-proxy.js";
 import type { ServerMessage, UiSurfaceShow } from "./message-protocol.js";
 import { runPostExecutionSideEffects } from "./tool-side-effects.js";
 
@@ -117,13 +100,13 @@ export interface ToolSetupContext extends SurfaceConversationContext {
   /** Voice/call session ID, if the conversation originates from a call. Propagated into ToolContext for scoped grant consumption. */
   callSessionId?: string;
   /** Optional proxy for delegating host_bash execution to a connected client. */
-  hostBashProxy?: HostBashProxy;
+  hostBashProxy?: import("./host-bash-proxy.js").HostBashProxy;
   /** Optional proxy for delegating CDP commands to a connected client (managed/cloud-hosted mode). */
-  hostBrowserProxy?: HostBrowserProxy;
+  hostBrowserProxy?: import("./host-browser-proxy.js").HostBrowserProxy;
   /** Optional proxy for delegating host_file_read/write/edit execution to a connected client. */
-  hostFileProxy?: HostFileProxy;
+  hostFileProxy?: import("./host-file-proxy.js").HostFileProxy;
   /** Optional proxy for delegating bidirectional file transfers between sandbox and host. */
-  hostTransferProxy?: HostTransferProxy;
+  hostTransferProxy?: import("./host-transfer-proxy.js").HostTransferProxy;
   /** CES RPC client for credential execution operations. Injected when CES tools are enabled and the CES process is available. */
   cesClient?: CesClient;
   /** The interface ID of the connected client driving the current turn (e.g. "macos", "chrome-extension"). Propagated into ToolContext for browser backend selection. */
@@ -136,7 +119,9 @@ export interface ToolSetupContext extends SurfaceConversationContext {
    * `hostBrowserRegistryRouted` (boolean) so the CDP factory can distinguish
    * SSE-backed proxies from extension-backed proxies.
    */
-  hostBrowserSenderOverride?: (msg: ServerMessage) => void;
+  hostBrowserSenderOverride?: (
+    msg: import("./message-protocol.js").ServerMessage,
+  ) => void;
   /** Turn-scoped flag: true when any tool call in the current turn received explicit user approval via interactive prompt. Cleared at turn end. */
   approvedViaPromptThisTurn?: boolean;
   /**
@@ -183,7 +168,7 @@ export function createToolExecutor(
   input: Record<string, unknown>,
   onOutput?: (chunk: string) => void,
   toolUseId?: string,
-  turnContext?: TurnContext,
+  turnContext?: import("../plugins/types.js").TurnContext,
 ) => Promise<ToolExecutionResult> {
   // Register the conversation's sendToClient for browser screencast surface messages
   registerConversationSender(ctx.conversationId, (msg) =>
@@ -195,20 +180,11 @@ export function createToolExecutor(
     input: Record<string, unknown>,
     onOutput?: (chunk: string) => void,
     toolUseId?: string,
-    turnContext?: TurnContext,
+    turnContext?: import("../plugins/types.js").TurnContext,
   ) => {
     if (isDoordashCommand(name, input)) {
       markDoordashStepInProgress(ctx, input);
     }
-
-    // Unwrap skill_execute dispatch so downstream context (notably
-    // batchAuthorizedByTask) is keyed on the tool that will actually run.
-    // Task rules in required_tools contain underlying tool names (e.g.
-    // "gmail_archive"), never the outer "skill_execute" dispatcher.
-    const effectiveToolName =
-      name === "skill_execute" && typeof input.tool === "string" && input.tool
-        ? input.tool
-        : name;
 
     // Build the context object shared by both the skill_execute interception
     // path and the regular executor path.
@@ -224,17 +200,7 @@ export function createToolExecutor(
       triggeredBySurfaceAction:
         ctx.surfaceActionRequestIds?.has(ctx.currentRequestId ?? "") ?? false,
       approvedViaPrompt: ctx.approvedViaPromptThisTurn || undefined,
-      // A task without required_tools entries (e.g. ad-hoc tasks created with
-      // omitted/empty required_tools, or legacy rows where it was never
-      // populated) correctly gets no batch authorization — that's the
-      // intended stricter contract this check enforces, not a regression to
-      // paper over. Batch tools gate themselves via this flag; callers that
-      // never declared the tool shouldn't get blanket authorization.
-      batchAuthorizedByTask:
-        ctx.taskRunId != null &&
-        getTaskRunRules(ctx.taskRunId).some(
-          (r) => r.tool === effectiveToolName,
-        ),
+      batchAuthorizedByTask: false,
       requesterExternalUserId: ctx.trustContext?.requesterExternalUserId,
       requesterChatId: ctx.trustContext?.requesterChatId,
       requesterIdentifier: ctx.trustContext?.requesterIdentifier,
@@ -380,143 +346,13 @@ export function createToolExecutor(
  * user confirmation before proceeding.
  */
 export function createProxyApprovalCallback(
-  prompter: PermissionPrompter,
-  ctx: ToolSetupContext,
+  _prompter: PermissionPrompter,
+  _ctx: ToolSetupContext,
 ): ProxyApprovalCallback {
-  return async (request: ProxyApprovalRequest): Promise<boolean> => {
-    const { decision } = request;
-    const { hostname, port, path } = decision.target;
-
-    // Use the standard network_request tool name so trust rules align with
-    // the checker's URL-based candidate generation and allowlist options.
-    const toolName = "network_request";
-    const { scheme } = decision.target;
-    const url = `${scheme}://${hostname}${port ? ":" + port : ""}${path}`;
-
-    if (isPermissionControlsV2Enabled()) {
-      // Under v2 we suppress deterministic network approval cards entirely.
-      // Proxied asks should follow the same non-host auto-allow contract as
-      // regular network_request invocations instead of turning into hard blocks.
-      return true;
-    }
-
-    const input: Record<string, unknown> = {
-      url,
-      scheme,
-    };
-    if (request.method) {
-      input.method = request.method;
-    }
-    if (request.requestHeaders && Object.keys(request.requestHeaders).length) {
-      input.request_headers = request.requestHeaders;
-    }
-    input.reason =
-      decision.kind === "ask_missing_credential"
-        ? "A known credential template matches this host, but no credential is bound to this session. Approving will forward the request as-is — the assistant won't inject a credential, but any caller-supplied auth headers will still be sent."
-        : "This host isn't covered by any known credential template. Approving will forward the request as-is, including any caller-supplied auth headers.";
-    if (decision.kind === "ask_missing_credential") {
-      input.known_credential_patterns = decision.matchingPatterns;
-    }
-    if (!request.method) {
-      input.connection_detail_available = "no";
-    }
-
-    const riskLevel: string = "medium";
-
-    // Check trust store before prompting — build candidates that mirror
-    // buildCommandCandidates() in checker.ts for network_request.
-    const candidates: string[] = [`${toolName}:${url}`];
-    const normalized = normalizeWebFetchUrl(url);
-    if (normalized) {
-      candidates.push(`${toolName}:${normalized.href}`);
-      candidates.push(`${toolName}:${normalized.origin}/*`);
-    }
-    candidates.push(`${toolName}:*`);
-    // Deduplicate
-    const uniqueCandidates = [...new Set(candidates)];
-
-    const existingRule = findHighestPriorityRule(
-      toolName,
-      uniqueCandidates,
-      ctx.workingDir,
-    );
-    if (existingRule && existingRule.decision !== "ask") {
-      if (existingRule.decision === "deny") return false;
-      return true;
-    }
-
-    // Use the checker's built-in allowlist generation for network_request
-    const allowlistOptions = await generateAllowlistOptions("network_request", {
-      url,
-    });
-
-    const scopeOptions = generateScopeOptions(ctx.workingDir);
-
-    // Non-interactive conversations have no client to prompt — fast-deny to avoid
-    // blocking for the full permission timeout before auto-denying.
-    if (ctx.hasNoClient) {
-      return false;
-    }
-
-    // Proxied network requests require per-invocation approval and must
-    // not be auto-approved by temporary overrides (allow_10m / allow_conversation).
-    // Unlike regular tool invocations, these represent outbound network
-    // actions that should always receive explicit confirmation.
-
-    const response = await prompter.prompt(
-      toolName,
-      input,
-      riskLevel,
-      allowlistOptions,
-      scopeOptions,
-      undefined,
-      ctx.conversationId,
-    );
-
-    // Persist trust rule if the user chose "always allow" or "always deny"
-    if (
-      response.decision === "always_allow" &&
-      response.selectedPattern &&
-      response.selectedScope
-    ) {
-      log.info(
-        {
-          toolName,
-          pattern: response.selectedPattern,
-          scope: response.selectedScope,
-        },
-        "Persisting always-allow trust rule (proxy)",
-      );
-      await addRule(
-        toolName,
-        response.selectedPattern,
-        response.selectedScope,
-        "allow",
-        100,
-      );
-    }
-    if (
-      response.decision === "always_deny" &&
-      response.selectedPattern &&
-      response.selectedScope
-    ) {
-      log.info(
-        {
-          toolName,
-          pattern: response.selectedPattern,
-          scope: response.selectedScope,
-        },
-        "Persisting always-deny trust rule (proxy)",
-      );
-      await addRule(
-        toolName,
-        response.selectedPattern,
-        response.selectedScope,
-        "deny",
-      );
-    }
-
-    return isAllowDecision(response.decision);
+  return async (_request: ProxyApprovalRequest): Promise<boolean> => {
+    // Proxied asks follow the same non-host auto-allow contract as regular
+    // network_request invocations — suppress deterministic approval cards.
+    return true;
   };
 }
 

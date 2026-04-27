@@ -1,43 +1,26 @@
-import type { TrustRuleBase } from "@vellumai/service-contracts/trust-rules";
-
 export type {
   AllowlistOption,
   ScopeOption,
 } from "@vellumai/skill-host-contracts";
 export { RiskLevel } from "@vellumai/skill-host-contracts";
 
-/**
- * Re-exported TrustRule type from `@vellumai/service-contracts`.
- *
- * The contracts package defines `TrustRule` as a discriminated union over tool
- * families (scoped, URL, managed-skill, skill-load, generic). Some variants
- * don't carry `executionTarget`. To maintain backward
- * compatibility with existing callsites that access those fields on any rule,
- * we flatten the union here by intersecting the base with the optional fields.
- */
-export type TrustRule = TrustRuleBase & {
+/** A persistent trust rule stored on disk and used for permission matching. */
+export interface TrustRule {
+  id: string;
+  tool: string;
+  pattern: string;
+  decision: "allow" | "deny" | "ask";
+  priority: number;
+  createdAt: number;
   scope?: string;
   executionTarget?: string;
-};
+  userModifiedAt?: number;
+}
 
-export type UserDecision =
-  | "allow"
-  | "allow_10m"
-  | "allow_conversation"
-  | "always_allow"
-  | "deny"
-  | "always_deny"
-  | "temporary_override";
+export type UserDecision = "allow" | "deny";
 
-/** Returns true for any allow-variant decision. Centralizes the check to prevent omissions when new allow variants are added. */
 export function isAllowDecision(decision: UserDecision): boolean {
-  return (
-    decision === "allow" ||
-    decision === "allow_10m" ||
-    decision === "allow_conversation" ||
-    decision === "always_allow" ||
-    decision === "temporary_override"
-  );
+  return decision === "allow";
 }
 
 export interface PermissionCheckResult {
@@ -49,8 +32,6 @@ export interface PermissionCheckResult {
 /** Contextual information passed alongside a permission check for policy decisions. */
 export interface PolicyContext {
   executionTarget?: string;
-  /** Ephemeral rules for task-scoped permissions — checked before persistent trust.json rules. */
-  ephemeralRules?: TrustRule[];
   /**
    * Execution context for per-context threshold resolution.
    * - "conversation": interactive client session (default)
