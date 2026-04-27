@@ -16,6 +16,7 @@ import { ROUTES as AUDIO_ROUTES } from "./audio-routes.js";
 import { ROUTES as AVATAR_ROUTES } from "./avatar-routes.js";
 import { ROUTES as BACKUP_ROUTES } from "./backup-routes.js";
 import { ROUTES as BRAIN_GRAPH_ROUTES } from "./brain-graph-routes.js";
+import { ROUTES as CALL_ROUTES } from "./call-routes.js";
 import { ROUTES as CLIENT_ROUTES } from "./client-routes.js";
 import { ROUTES as CONVERSATION_ATTENTION_ROUTES } from "./conversation-attention-routes.js";
 import { ROUTES as CONVERSATION_STARTER_ROUTES } from "./conversation-starter-routes.js";
@@ -43,6 +44,7 @@ export const ROUTES: RouteDefinition[] = [
   ...AUDIO_ROUTES,
   ...AVATAR_ROUTES,
   ...BACKUP_ROUTES,
+  ...CALL_ROUTES,
   ...BRAIN_GRAPH_ROUTES,
   ...CLIENT_ROUTES,
   ...CONVERSATION_ATTENTION_ROUTES,
