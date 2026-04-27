@@ -7,7 +7,16 @@ import type { HttpErrorCode } from "../http-errors.js";
 import { httpError } from "../http-errors.js";
 import type { HTTPRouteDefinition } from "../http-router.js";
 import { RouteError } from "./errors.js";
-import type { RouteDefinition } from "./types.js";
+import type { ResponseHeaderArgs, RouteDefinition } from "./types.js";
+
+function resolveResponseHeaders(
+  spec: RouteDefinition["responseHeaders"],
+  args: ResponseHeaderArgs,
+): Record<string, string> | undefined {
+  if (!spec) return undefined;
+  if (typeof spec === "function") return spec(args);
+  return spec;
+}
 
 export function routeDefinitionsToHTTPRoutes(
   routes: RouteDefinition[],
@@ -36,19 +45,29 @@ export function routeDefinitionsToHTTPRoutes(
           queryParams[key] = value;
         }
 
+        const contentType = req.headers.get("content-type") ?? "";
         let body: Record<string, unknown> | undefined;
+        let rawBody: Uint8Array | undefined;
         if (
           r.method === "POST" ||
           r.method === "PUT" ||
           r.method === "PATCH"
         ) {
-          try {
-            const parsed = (await req.json()) as Record<string, unknown>;
-            if (parsed && typeof parsed === "object") {
-              body = parsed;
+          if (
+            contentType.includes("application/json") ||
+            contentType === ""
+          ) {
+            try {
+              const parsed = (await req.json()) as Record<string, unknown>;
+              if (parsed && typeof parsed === "object") {
+                body = parsed;
+              }
+            } catch {
+              // No body or invalid JSON — handler will validate
             }
-          } catch {
-            // No body or invalid JSON — handler will validate
+          } else {
+            // Binary body (e.g. application/zip, application/octet-stream)
+            rawBody = new Uint8Array(await req.arrayBuffer());
           }
         }
 
@@ -61,9 +80,27 @@ export function routeDefinitionsToHTTPRoutes(
           pathParams,
           queryParams,
           body,
+          rawBody,
           headers,
         });
-        return Response.json(result);
+
+        const responseHeaders = resolveResponseHeaders(r.responseHeaders, {
+          pathParams,
+          queryParams,
+          headers,
+        });
+
+        // Non-JSON responses: handler returned string or Uint8Array
+        if (typeof result === "string" || result instanceof Uint8Array) {
+          return new Response(result as BodyInit, {
+            headers: responseHeaders,
+          });
+        }
+
+        // JSON responses: use responseHeaders if specified, otherwise default
+        return Response.json(result, {
+          headers: responseHeaders,
+        });
       } catch (err) {
         if (err instanceof RouteError) {
           return httpError(

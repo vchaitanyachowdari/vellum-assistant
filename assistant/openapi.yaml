@@ -544,7 +544,6 @@ paths:
           required: false
           schema:
             type: string
-          description: Must be 'query' for GET requests
     post:
       operationId: apps_by_id_data_post
       summary: Mutate app data
@@ -6417,6 +6416,22 @@ paths:
                 - service
                 - requestedScopes
               additionalProperties: false
+  /v1/pages/{appId}:
+    get:
+      operationId: pages_by_appId_get
+      summary: Serve app page
+      description: Render and serve a shareable app page as HTML.
+      tags:
+        - apps
+      responses:
+        "200":
+          description: Successful response
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: string
   /v1/pairing/request:
     post:
       operationId: pairing_request_post
