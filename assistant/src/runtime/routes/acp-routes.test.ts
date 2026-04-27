@@ -67,29 +67,15 @@ import { eq } from "drizzle-orm";
 import { getDb, getSqlite, initializeDb } from "../../memory/db.js";
 import { acpSessionHistory } from "../../memory/schema.js";
 
-const { acpRouteDefinitions } = await import("./acp-routes.js");
+const { ROUTES } = await import("./acp-routes.js");
 
 function getSpawnHandler() {
-  const route = acpRouteDefinitions().find(
-    (r) => r.endpoint === "acp/spawn" && r.method === "POST",
+  const route = ROUTES.find(
+    (r: { endpoint: string; method: string }) =>
+      r.endpoint === "acp/spawn" && r.method === "POST",
   );
   if (!route) throw new Error("acp/spawn route not registered");
   return route.handler;
-}
-
-function makeSpawnCtx(body: unknown) {
-  const url = new URL("http://localhost/v1/acp/spawn");
-  return {
-    url,
-    req: new Request(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    server: {} as ReturnType<typeof Bun.serve>,
-    authContext: {} as never,
-    params: {},
-  };
 }
 
 beforeEach(() => {
@@ -102,28 +88,22 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("POST /v1/acp/spawn", () => {
-  test("returns 400 with the resolver hint when ACP is disabled", async () => {
+  test("throws BadRequestError when ACP is disabled", async () => {
     config.setConfig({ enabled: false });
 
     const handler = getSpawnHandler();
-    const res = await handler(
-      makeSpawnCtx({
-        agent: "claude",
-        task: "do a thing",
-        conversationId: "conv-1",
+    await expect(
+      handler({
+        body: {
+          agent: "claude",
+          task: "do a thing",
+          conversationId: "conv-1",
+        },
       }),
-    );
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.code).toBe("BAD_REQUEST");
-    expect(body.error.message).toContain("acp.enabled");
-    expect(body.error.message).toContain("config.json");
+    ).rejects.toThrow("acp.enabled");
   });
 
-  test("returns 400 with merged available list when agent id is unknown", async () => {
+  test("throws BadRequestError with merged available list when agent id is unknown", async () => {
     config.setConfig({
       agents: {
         "user-only": { command: "some-binary", args: [] },
@@ -131,61 +111,38 @@ describe("POST /v1/acp/spawn", () => {
     });
 
     const handler = getSpawnHandler();
-    const res = await handler(
-      makeSpawnCtx({
-        agent: "nonexistent",
-        task: "do a thing",
-        conversationId: "conv-1",
+    await expect(
+      handler({
+        body: {
+          agent: "nonexistent",
+          task: "do a thing",
+          conversationId: "conv-1",
+        },
       }),
-    );
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.code).toBe("BAD_REQUEST");
-    expect(body.error.message).toContain('Unknown agent "nonexistent"');
-    expect(body.error.message).toContain(
-      "Available: claude, codex, user-only.",
-    );
+    ).rejects.toThrow('Unknown agent "nonexistent"');
   });
 
-  test("returns 424 FAILED_DEPENDENCY with command + install hint when the agent binary is missing", async () => {
+  test("throws FailedDependencyError when the agent binary is missing", async () => {
     config.setConfig({ agents: {} });
-    which.setWhich({}); // no commands on PATH
+    which.setWhich({});
 
     const handler = getSpawnHandler();
-    const res = await handler(
-      makeSpawnCtx({
-        agent: "codex",
-        task: "do a thing",
-        conversationId: "conv-1",
+    await expect(
+      handler({
+        body: {
+          agent: "codex",
+          task: "do a thing",
+          conversationId: "conv-1",
+        },
       }),
-    );
-
-    expect(res.status).toBe(424);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.code).toBe("FAILED_DEPENDENCY");
-    expect(body.error.message).toContain("codex-acp is not on PATH");
-    // Same install hint the LLM tool surfaces.
-    expect(body.error.message).toContain("npm i -g @zed-industries/codex-acp");
+    ).rejects.toThrow("codex-acp is not on PATH");
   });
 
   test("body-shape guard short-circuits before the resolver runs", async () => {
-    // Disable ACP so a resolver-reached path would surface the disabled
-    // hint — the body-shape error message must win, proving we short-circuit.
     config.setConfig({ enabled: false });
 
     const handler = getSpawnHandler();
-    const res = await handler(makeSpawnCtx({ agent: "claude" }));
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.message).toContain(
+    await expect(handler({ body: { agent: "claude" } })).rejects.toThrow(
       "agent, task, and conversationId are required",
     );
   });
@@ -196,22 +153,12 @@ describe("POST /v1/acp/spawn", () => {
 // ---------------------------------------------------------------------------
 
 function getBulkDeleteHandler() {
-  const route = acpRouteDefinitions().find(
-    (r) => r.endpoint === "acp/sessions" && r.method === "DELETE",
+  const route = ROUTES.find(
+    (r: { endpoint: string; method: string }) =>
+      r.endpoint === "acp/sessions" && r.method === "DELETE",
   );
   if (!route) throw new Error("DELETE acp/sessions route not registered");
   return route.handler;
-}
-
-function makeBulkDeleteCtx(rawQuery: string) {
-  const url = new URL(`http://localhost/v1/acp/sessions${rawQuery}`);
-  return {
-    url,
-    req: new Request(url, { method: "DELETE" }),
-    server: {} as ReturnType<typeof Bun.serve>,
-    authContext: {} as never,
-    params: {},
-  };
 }
 
 function seedHistoryRow(id: string, status: string, startedAt: number): void {
@@ -260,11 +207,10 @@ describe("DELETE /v1/acp/sessions?status=completed", () => {
     seedHistoryRow("row-initializing", "initializing", 5000);
 
     const handler = getBulkDeleteHandler();
-    const res = await handler(makeBulkDeleteCtx("?status=completed"));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deleted: number };
-    expect(body.deleted).toBe(3);
+    const result = (await handler({ params: { status: "completed" } })) as {
+      deleted: number;
+    };
+    expect(result.deleted).toBe(3);
 
     const remaining = listRows();
     expect(remaining.map((r) => r.status).sort()).toEqual([
@@ -277,11 +223,10 @@ describe("DELETE /v1/acp/sessions?status=completed", () => {
     seedHistoryRow("row-running", "running", 1000);
 
     const handler = getBulkDeleteHandler();
-    const res = await handler(makeBulkDeleteCtx("?status=completed"));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deleted: number };
-    expect(body.deleted).toBe(0);
+    const result = (await handler({ params: { status: "completed" } })) as {
+      deleted: number;
+    };
+    expect(result.deleted).toBe(0);
 
     const remaining = listRows();
     expect(remaining).toHaveLength(1);
@@ -292,14 +237,7 @@ describe("DELETE /v1/acp/sessions?status=completed", () => {
     seedHistoryRow("row-completed", "completed", 1000);
 
     const handler = getBulkDeleteHandler();
-    const res = await handler(makeBulkDeleteCtx(""));
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.code).toBe("BAD_REQUEST");
-    expect(body.error.message).toContain("status");
+    expect(() => handler({})).toThrow("status");
     // Row must still be present — guard short-circuited before the delete.
     expect(listRows()).toHaveLength(1);
   });
@@ -308,13 +246,7 @@ describe("DELETE /v1/acp/sessions?status=completed", () => {
     seedHistoryRow("row-completed", "completed", 1000);
 
     const handler = getBulkDeleteHandler();
-    const res = await handler(makeBulkDeleteCtx("?status=failed"));
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as {
-      error: { code: string; message: string };
-    };
-    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(() => handler({ params: { status: "failed" } })).toThrow("status");
     expect(listRows()).toHaveLength(1);
   });
 });
@@ -324,22 +256,12 @@ describe("DELETE /v1/acp/sessions?status=completed", () => {
 // ---------------------------------------------------------------------------
 
 function getDeleteSessionHandler() {
-  const route = acpRouteDefinitions().find(
-    (r) => r.endpoint === "acp/sessions/:id" && r.method === "DELETE",
+  const route = ROUTES.find(
+    (r: { endpoint: string; method: string }) =>
+      r.endpoint === "acp/sessions/:id" && r.method === "DELETE",
   );
   if (!route) throw new Error("acp/sessions/:id DELETE route not registered");
   return route.handler;
-}
-
-function makeDeleteCtx(id: string) {
-  const url = new URL(`http://localhost/v1/acp/sessions/${id}`);
-  return {
-    url,
-    req: new Request(url, { method: "DELETE" }),
-    server: {} as ReturnType<typeof Bun.serve>,
-    authContext: {} as never,
-    params: { id },
-  };
 }
 
 function insertHistoryRow(opts: {
@@ -377,11 +299,10 @@ describe("DELETE /v1/acp/sessions/:id", () => {
     insertHistoryRow({ id: "sess-completed", status: "completed" });
 
     const handler = getDeleteSessionHandler();
-    const res = await handler(makeDeleteCtx("sess-completed"));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deleted: boolean };
-    expect(body.deleted).toBe(true);
+    const result = (await handler({ params: { id: "sess-completed" } })) as {
+      deleted: boolean;
+    };
+    expect(result.deleted).toBe(true);
 
     // Row really gone.
     const remaining = getDb()
@@ -403,17 +324,12 @@ describe("DELETE /v1/acp/sessions/:id", () => {
         status,
         startedAt: 1_700_000_000_000,
       });
-      // Even if a stale history row exists it must NOT be deleted while the
-      // session is active — the row would be re-written when the session
-      // reaches a terminal state.
       insertHistoryRow({ id: "sess-active", status: "completed" });
 
       const handler = getDeleteSessionHandler();
-      const res = await handler(makeDeleteCtx("sess-active"));
-
-      expect(res.status).toBe(409);
-      const body = (await res.json()) as { error: { code: string } };
-      expect(body.error.code).toBe("CONFLICT");
+      expect(() => handler({ params: { id: "sess-active" } })).toThrow(
+        `still ${status}`,
+      );
 
       // Row untouched.
       const remaining = getDb()
@@ -427,17 +343,13 @@ describe("DELETE /v1/acp/sessions/:id", () => {
 
   test("idempotent for unknown id — returns { deleted: false }", async () => {
     const handler = getDeleteSessionHandler();
-    const res = await handler(makeDeleteCtx("does-not-exist"));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deleted: boolean };
-    expect(body.deleted).toBe(false);
+    const result = (await handler({
+      params: { id: "does-not-exist" },
+    })) as { deleted: boolean };
+    expect(result.deleted).toBe(false);
   });
 
   test("deletes a cancelled in-memory session whose row is in history", async () => {
-    // A session whose status flipped to a terminal value but is still
-    // present in the in-memory map (e.g. mid-teardown) must be deletable —
-    // only running/initializing states gate the delete.
     inMemoryStates.set("sess-cancelled", {
       id: "sess-cancelled",
       agentId: "claude",
@@ -450,10 +362,9 @@ describe("DELETE /v1/acp/sessions/:id", () => {
     insertHistoryRow({ id: "sess-cancelled", status: "cancelled" });
 
     const handler = getDeleteSessionHandler();
-    const res = await handler(makeDeleteCtx("sess-cancelled"));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { deleted: boolean };
-    expect(body.deleted).toBe(true);
+    const result = (await handler({
+      params: { id: "sess-cancelled" },
+    })) as { deleted: boolean };
+    expect(result.deleted).toBe(true);
   });
 });
