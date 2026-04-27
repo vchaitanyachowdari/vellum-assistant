@@ -11,7 +11,7 @@ private let log = Logger(subsystem: Bundle.appBundleIdentifier, category: "Compo
 enum ThresholdPreset: String, CaseIterable, Identifiable, Equatable {
     /// Prompt for everything (maps to ``RiskThreshold.none``).
     case strict
-    /// Match the global interactive default (no override stored).
+    /// Conservative: auto-approve low-risk tools (maps to ``RiskThreshold.low``).
     case `default`
     /// Auto-approve most tools (maps to ``RiskThreshold.medium``).
     case relaxed
@@ -23,7 +23,7 @@ enum ThresholdPreset: String, CaseIterable, Identifiable, Equatable {
     var label: String {
         switch self {
         case .strict: return "Strict"
-        case .default: return "Default"
+        case .default: return "Conservative"
         case .relaxed: return "Relaxed"
         case .fullAccess: return "Full access"
         }
@@ -42,13 +42,13 @@ enum ThresholdPreset: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .strict: return .lock
         case .default: return .shieldCheck
-        case .relaxed: return .triangleAlert
+        case .relaxed: return .shield
         case .fullAccess: return .shieldOff
         }
     }
 
     /// The ``RiskThreshold`` value represented by this preset.
-    /// `.default` maps to `.low` for surfaces that persist explicit globals.
+    /// Each preset maps to exactly one threshold level.
     var riskThreshold: RiskThreshold {
         switch self {
         case .strict: return .none
@@ -59,11 +59,11 @@ enum ThresholdPreset: String, CaseIterable, Identifiable, Equatable {
     }
 
     /// The ``RiskThreshold`` raw value to write when this preset is selected.
-    /// Returns `nil` for `.default` — the caller should delete the override instead.
-    var thresholdValue: String? {
+    /// Returns the explicit threshold raw value to persist for each preset.
+    var thresholdValue: String {
         switch self {
         case .strict: return RiskThreshold.none.rawValue
-        case .default: return nil
+        case .default: return RiskThreshold.low.rawValue
         case .relaxed: return RiskThreshold.medium.rawValue
         case .fullAccess: return RiskThreshold.high.rawValue
         }
@@ -177,10 +177,10 @@ struct ComposerThresholdPicker: View {
 
     /// The currently displayed preset. Updated optimistically on selection and
     /// reconciled with the gateway on appearance / conversation change.
-    @State private var currentPreset: ThresholdPreset = .default
+    @State private var currentPreset: ThresholdPreset = .relaxed
 
     /// The global interactive threshold raw value, fetched on load.
-    @State private var globalInteractive: String = RiskThreshold.low.rawValue
+    @State private var globalInteractive: String = RiskThreshold.medium.rawValue
 
     /// In-flight write task. Writes are serialized so the final selection wins
     /// even when the user changes options rapidly.
@@ -286,7 +286,7 @@ struct ComposerThresholdPicker: View {
                     // During first-send bootstrap, the client can receive a
                     // conversation ID before the server has persisted the new
                     // override row. Fall back to the staged draft value to
-                    // avoid a one-frame "Default" flash.
+                    // avoid a one-frame flash to the global default.
                     override = conversationOverride ?? draftInteractiveOverride
                 } else {
                     override = draftInteractiveOverride
@@ -324,11 +324,11 @@ struct ComposerThresholdPicker: View {
         for preset: ThresholdPreset,
         globalInteractive: String
     ) -> OverrideAction {
-        if let value = preset.thresholdValue,
-           value != globalInteractive {
+        let value = preset.thresholdValue
+        if value != globalInteractive {
             return .set(value)
         }
-        // Default or matching global — remove the override row.
+        // Matches global — remove the override row.
         return .clear
     }
 
