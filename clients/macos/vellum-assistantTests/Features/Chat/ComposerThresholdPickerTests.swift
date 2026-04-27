@@ -165,8 +165,7 @@ private final class MockThresholdClient: ThresholdClientProtocol {
     func getGlobalThresholds() async throws -> GlobalThresholds {
         GlobalThresholds(
             interactive: RiskThreshold.low.rawValue,
-            background: RiskThreshold.medium.rawValue,
-            headless: RiskThreshold.none.rawValue
+            autonomous: RiskThreshold.none.rawValue
         )
     }
 

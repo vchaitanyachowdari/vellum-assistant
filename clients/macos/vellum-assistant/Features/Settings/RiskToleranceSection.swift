@@ -8,23 +8,19 @@ private let riskToleranceLog = Logger(
 )
 
 /// Risk Tolerance settings section — lets the user configure auto-approve
-/// thresholds for interactive, background, and headless execution contexts.
+/// thresholds for interactive and autonomous execution contexts.
 @MainActor
 struct RiskToleranceSection: View {
     var thresholdClient: ThresholdClientProtocol
     var assistantFeatureFlagStore: AssistantFeatureFlagStore
 
-    /// Current selection for the interactive ("When chatting") threshold.
-    /// Defaults to `.low` to match the gateway schema default.
-    @State private var interactiveSelection: RiskThreshold = .low
-
-    /// Current selection for the background ("Scheduled tasks") threshold.
+    /// Current selection for the interactive ("Conversations") threshold.
     /// Defaults to `.medium` to match the gateway schema default.
-    @State private var backgroundSelection: RiskThreshold = .medium
+    @State private var interactiveSelection: RiskThreshold = .medium
 
-    /// Current selection for the headless ("Automation / API") threshold.
-    /// Defaults to `.none` to match the gateway schema default.
-    @State private var headlessSelection: RiskThreshold = .none
+    /// Current selection for the autonomous threshold.
+    /// Defaults to `.low` to match the gateway schema default.
+    @State private var autonomousSelection: RiskThreshold = .low
 
     /// In-flight sync task. Writes are serialized so rapid picker changes
     /// resolve in order and the latest selection wins deterministically.
@@ -48,8 +44,6 @@ struct RiskToleranceSection: View {
     /// server data.
     @State private var hasUserInteracted: Bool = false
 
-    @State private var isAdvancedExpanded: Bool = false
-
     var body: some View {
         SettingsCard(title: "Risk Tolerance") {
             Text("Control which actions your assistant can take without asking first. Each action is classified by risk level — your tolerance determines which levels auto-approve.")
@@ -58,12 +52,15 @@ struct RiskToleranceSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: VSpacing.xs) {
-                Text("When chatting")
+                Text("Conversations")
                     .font(VFont.bodyMediumDefault)
                     .foregroundStyle(VColor.contentDefault)
+                Text("When you're chatting with your assistant directly.")
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentTertiary)
                 ThresholdPresetDropdown(
                     preset: ThresholdPreset.from(riskThreshold: interactiveSelection),
-                    accessibilityLabel: "When chatting risk threshold"
+                    accessibilityLabel: "Conversations risk threshold"
                 ) { preset in
                     hasUserInteracted = true
                     interactiveSelection = preset.riskThreshold
@@ -75,55 +72,28 @@ struct RiskToleranceSection: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VDisclosureSection(title: "Advanced", isExpanded: $isAdvancedExpanded) {
-                VStack(alignment: .leading, spacing: VSpacing.lg) {
-                    SettingsDivider()
+            SettingsDivider()
 
-                    VStack(alignment: .leading, spacing: VSpacing.xs) {
-                        Text("Scheduled tasks")
-                            .font(VFont.bodyMediumDefault)
-                            .foregroundStyle(VColor.contentDefault)
-                        ThresholdPresetDropdown(
-                            preset: ThresholdPreset.from(riskThreshold: backgroundSelection),
-                            accessibilityLabel: "Scheduled tasks risk threshold"
-                        ) { preset in
-                            hasUserInteracted = true
-                            backgroundSelection = preset.riskThreshold
-                            syncThresholds()
-                        }
-                        Text("When your assistant runs background tasks like heartbeats and scheduled jobs.")
-                            .font(VFont.labelDefault)
-                            .foregroundStyle(VColor.contentTertiary)
-                        Text(backgroundSelection.settingsDescription)
-                            .font(VFont.labelDefault)
-                            .foregroundStyle(VColor.contentTertiary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    SettingsDivider()
-
-                    VStack(alignment: .leading, spacing: VSpacing.xs) {
-                        Text("Automation / API")
-                            .font(VFont.bodyMediumDefault)
-                            .foregroundStyle(VColor.contentDefault)
-                        ThresholdPresetDropdown(
-                            preset: ThresholdPreset.from(riskThreshold: headlessSelection),
-                            accessibilityLabel: "Automation / API risk threshold"
-                        ) { preset in
-                            hasUserInteracted = true
-                            headlessSelection = preset.riskThreshold
-                            syncThresholds()
-                        }
-                        Text("When triggered externally via API or webhooks.")
-                            .font(VFont.labelDefault)
-                            .foregroundStyle(VColor.contentTertiary)
-                        Text(headlessSelection.settingsDescription)
-                            .font(VFont.labelDefault)
-                            .foregroundStyle(VColor.contentTertiary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: VSpacing.xs) {
+                Text("Autonomous")
+                    .font(VFont.bodyMediumDefault)
+                    .foregroundStyle(VColor.contentDefault)
+                Text("When your assistant acts without you — scheduled tasks, background jobs, and external triggers.")
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentTertiary)
+                ThresholdPresetDropdown(
+                    preset: ThresholdPreset.from(riskThreshold: autonomousSelection),
+                    accessibilityLabel: "Autonomous risk threshold"
+                ) { preset in
+                    hasUserInteracted = true
+                    autonomousSelection = preset.riskThreshold
+                    syncThresholds()
                 }
+                Text(autonomousSelection.settingsDescription)
+                    .font(VFont.labelDefault)
+                    .foregroundStyle(VColor.contentTertiary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { await loadThresholds() }
     }
@@ -144,9 +114,8 @@ struct RiskToleranceSection: View {
                 guard !Task.isCancelled else { return }
                 hasLoadedInitial = true
                 guard !hasUserInteracted else { return }
-                interactiveSelection = RiskThreshold(rawValue: thresholds.interactive) ?? .low
-                backgroundSelection = RiskThreshold(rawValue: thresholds.background) ?? .medium
-                headlessSelection = RiskThreshold(rawValue: thresholds.headless) ?? .none
+                interactiveSelection = RiskThreshold(rawValue: thresholds.interactive) ?? .medium
+                autonomousSelection = RiskThreshold(rawValue: thresholds.autonomous) ?? .low
             } catch {
                 riskToleranceLog.error(
                     "getGlobalThresholds failed: \(error.localizedDescription, privacy: .public)"
@@ -173,8 +142,7 @@ struct RiskToleranceSection: View {
 
         let payload = GlobalThresholds(
             interactive: interactiveSelection.rawValue,
-            background: backgroundSelection.rawValue,
-            headless: headlessSelection.rawValue
+            autonomous: autonomousSelection.rawValue
         )
         syncVersion &+= 1
         let requestVersion = syncVersion
