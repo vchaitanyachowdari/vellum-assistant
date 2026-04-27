@@ -31,6 +31,7 @@ import { ROUTES as LOG_EXPORT_ROUTES } from "./log-export-routes.js";
 import { ROUTES as PS_ROUTES } from "./ps-routes.js";
 import { ROUTES as RECORDING_ROUTES } from "./recording-routes.js";
 import { ROUTES as RENAME_CONVERSATION_ROUTES } from "./rename-conversation-routes.js";
+import { ROUTES as STT_ROUTES } from "./stt-routes.js";
 import { ROUTES as SUBAGENT_ROUTES } from "./subagents-routes.js";
 import { ROUTES as TELEMETRY_ROUTES } from "./telemetry-routes.js";
 import { ROUTES as TRACE_EVENT_ROUTES } from "./trace-event-routes.js";
@@ -66,6 +67,7 @@ export const ROUTES: RouteDefinition[] = [
   ...PS_ROUTES,
   ...RECORDING_ROUTES,
   ...RENAME_CONVERSATION_ROUTES,
+  ...STT_ROUTES,
   ...SUBAGENT_ROUTES,
   ...TELEMETRY_ROUTES,
   ...TRACE_EVENT_ROUTES,
