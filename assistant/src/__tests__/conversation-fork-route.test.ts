@@ -51,6 +51,7 @@ import { getPolicy } from "../runtime/auth/route-policy.js";
 import { mintToken } from "../runtime/auth/token-service.js";
 import { RuntimeHttpServer } from "../runtime/http-server.js";
 
+
 initializeDb();
 
 const CHAT_WRITE_JWT = mintToken({
@@ -269,18 +270,7 @@ describe("POST /v1/conversations/fork", () => {
   });
 
   async function startServer(): Promise<void> {
-    server = new RuntimeHttpServer({
-      port: 0,
-      conversationManagementDeps: {
-        switchConversation: async () => null,
-        renameConversation: () => false,
-        clearAllConversations: () => 0,
-        cancelGeneration: () => false,
-        destroyConversation: () => {},
-        undoLastMessage: async () => null,
-        regenerateResponse: async () => null,
-      },
-    });
+    server = new RuntimeHttpServer({ port: 0 });
     await server.start();
   }
 
