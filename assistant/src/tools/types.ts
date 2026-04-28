@@ -16,7 +16,6 @@ import type {
 import type { InterfaceId } from "../channels/types.js";
 import type { CesClient } from "../credential-execution/client.js";
 import type { HostBashProxy } from "../daemon/host-bash-proxy.js";
-import type { HostBrowserProxy } from "../daemon/host-browser-proxy.js";
 import type { HostFileProxy } from "../daemon/host-file-proxy.js";
 import type { HostTransferProxy } from "../daemon/host-transfer-proxy.js";
 import type { SecretPromptResult } from "../permissions/secret-prompter.js";
@@ -241,8 +240,6 @@ export interface ToolContext {
   toolUseId?: string;
   /** Optional proxy for delegating host_bash execution to a connected client (managed/cloud-hosted mode). */
   hostBashProxy?: HostBashProxy;
-  /** Optional proxy for delegating CDP commands to a connected client (managed/cloud-hosted mode). */
-  hostBrowserProxy?: HostBrowserProxy;
   /** Optional proxy for delegating host_file_read/write/edit execution to a connected client (managed/cloud-hosted mode). */
   hostFileProxy?: HostFileProxy;
   /** Optional proxy for delegating bidirectional file transfers between sandbox and host (managed/cloud-hosted mode). */
@@ -259,28 +256,6 @@ export interface ToolContext {
    * to cdp-inspect or local Playwright.
    */
   transportInterface?: InterfaceId;
-  /**
-   * True when the host browser proxy's sender was overridden by a
-   * registry-routed extension connection (ChromeExtensionRegistry WebSocket).
-   * The CDP factory uses this to distinguish between an SSE-backed proxy
-   * (macOS, no extension) and an extension-backed proxy: only the latter
-   * should suppress desktop-auto cdp-inspect when temporarily unavailable,
-   * because the extension transport was explicitly expected and the
-   * disconnection is transient. An SSE-backed proxy that reports
-   * unavailable (e.g. non-interactive turn) should NOT suppress
-   * cdp-inspect — the proxy was never expected to service browser requests.
-   */
-  hostBrowserRegistryRouted?: boolean;
-  /**
-   * Connected clients that support the `host_browser` capability, populated
-   * from the ClientRegistry. Used by `browser status` to report accurate
-   * extension availability even when no proxy is bound to the current
-   * conversation (e.g. when called from the CLI without a conversation ID).
-   */
-  connectedBrowserClients?: Array<{
-    clientId: string;
-    interfaceId: string;
-  }>;
   /**
    * The per-turn inference-profile override the agent loop is currently
    * running under, propagated through tool context so subagent-spawn tools

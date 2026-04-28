@@ -18,7 +18,6 @@ import {
 } from "../../browser/types.js";
 import { findConversation } from "../../daemon/conversation-store.js";
 import type { ContentBlock } from "../../providers/types.js";
-import { getClientRegistry } from "../client-registry.js";
 import type { RouteDefinition, RouteHandlerArgs } from "./types.js";
 
 // ── Param validation ─────────────────────────────────────────────────
@@ -70,8 +69,7 @@ async function handleBrowserExecute({ body = {} }: RouteHandlerArgs) {
 
   // When the caller passes a live conversation ID (e.g. from
   // __CONVERSATION_ID in a nested bash invocation), reuse that
-  // conversation's browser proxy wiring so operations like `status`
-  // see extension connectivity from the parent turn.
+  // conversation's trust context and transport interface.
   const conversation = conversationId
     ? findConversation(conversationId)
     : undefined;
@@ -80,12 +78,6 @@ async function handleBrowserExecute({ body = {} }: RouteHandlerArgs) {
     ? conversationId!
     : browserCliConversationKey(sessionId);
 
-  // When there's no conversation context (e.g. `assistant browser status`
-  // from the CLI), check the client registry for connected host_browser
-  // clients so the status command can report accurate extension availability.
-  const registry = getClientRegistry();
-  const browserClients = registry.listByCapability("host_browser");
-
   const result = await executeBrowserOperation(
     operation as BrowserOperation,
     input,
@@ -93,13 +85,7 @@ async function handleBrowserExecute({ body = {} }: RouteHandlerArgs) {
       workingDir: process.cwd(),
       conversationId: resolvedConversationId,
       trustClass: conversation?.trustContext?.trustClass ?? "unknown",
-      hostBrowserProxy: conversation?.hostBrowserProxy,
       transportInterface: conversation?.transportInterface,
-      hostBrowserRegistryRouted: !!conversation?.hostBrowserSenderOverride,
-      connectedBrowserClients: browserClients.map((c) => ({
-        clientId: c.clientId,
-        interfaceId: c.interfaceId,
-      })),
     },
   );
 

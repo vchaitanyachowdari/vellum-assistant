@@ -113,6 +113,20 @@ mock.module("../../../../util/logger.js", () => ({
   }),
 }));
 
+/** Mutable singleton proxy. Tests set this to control extension availability. */
+let mockSingletonProxy: HostBrowserProxy | null = null;
+
+mock.module("../../../../daemon/host-browser-proxy.js", () => ({
+  HostBrowserProxy: {
+    get instance() {
+      return mockSingletonProxy ?? undefined;
+    },
+    resetInstanceForTests() {
+      mockSingletonProxy = null;
+    },
+  },
+}));
+
 // Import under test AFTER mock.module calls so that the factory's
 // top-level imports resolve to our fakes.
 const {
@@ -127,9 +141,9 @@ const {
 } = await import("../factory.js");
 
 /**
- * Minimal ToolContext suitable for factory tests. Only the fields the
- * factory reads (`conversationId` and `hostBrowserProxy`) need to be
- * populated; other required fields are cast away.
+ * Minimal ToolContext suitable for factory tests. Only `conversationId`
+ * needs to be populated; other required fields are cast away.
+ * Extension availability is controlled via `mockSingletonProxy`.
  */
 function makeContext(
   overrides: Partial<ToolContext> & { conversationId: string },
@@ -171,15 +185,16 @@ describe("getCdpClient", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   // ── Candidate selection (kind reported before first send) ────────────
 
   test("routes to ExtensionCdpClient when hostBrowserProxy is set and available", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "test-convo",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -205,9 +220,9 @@ describe("getCdpClient", () => {
 
   test("skips extension when hostBrowserProxy is present but unavailable", async () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "disconnected-proxy",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -227,9 +242,9 @@ describe("getCdpClient", () => {
   test("skips extension but uses cdp-inspect when proxy unavailable and cdp-inspect enabled", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "disconnected-inspect",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -247,9 +262,9 @@ describe("getCdpClient", () => {
   test("extension wins even when cdpInspect is enabled", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "ext-wins",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -268,7 +283,6 @@ describe("getCdpClient", () => {
     cdpInspectEnabled = true;
     const ctx = makeContext({
       conversationId: "inspect-convo",
-      hostBrowserProxy: undefined,
     });
 
     const client = getCdpClient(ctx);
@@ -295,7 +309,6 @@ describe("getCdpClient", () => {
     cdpInspectEnabled = false;
     const ctx = makeContext({
       conversationId: "local-convo",
-      hostBrowserProxy: undefined,
     });
 
     const client = getCdpClient(ctx);
@@ -333,9 +346,9 @@ describe("getCdpClient", () => {
 
   test("getCdpClient without options behaves identically to auto mode", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "no-opts",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -361,9 +374,9 @@ describe("getCdpClient", () => {
 
   test("forwards send() through the manager to the extension-backed client", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "send-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -507,9 +520,9 @@ describe("getCdpClient", () => {
 
   test("dispose() on an extension-backed client tears down the extension client", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "dispose-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -576,9 +589,9 @@ describe("getCdpClient", () => {
 
   test("context with transportInterface set routes normally to extension backend", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-ext",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
     });
 
@@ -629,13 +642,14 @@ describe("buildCandidateList", () => {
     cdpInspectEnabled = false;
     desktopAutoConfig = { enabled: true, cooldownMs: 30_000 };
     _resetDesktopAutoCooldown();
+    mockSingletonProxy = null;
   });
 
   test("includes extension candidate when proxy is present and available", () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "candidates-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const candidates = buildCandidateList(ctx);
@@ -648,9 +662,9 @@ describe("buildCandidateList", () => {
 
   test("excludes extension candidate when proxy is present but unavailable", () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "candidates-no-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const candidates = buildCandidateList(ctx);
@@ -672,9 +686,9 @@ describe("buildCandidateList", () => {
   test("candidate order: extension > cdp-inspect > local when all present", () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "candidates-all",
-      hostBrowserProxy: fakeProxy,
     });
 
     const candidates = buildCandidateList(ctx);
@@ -710,10 +724,12 @@ describe("buildChainedClient failover", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   test("fails over from extension to local on transport_error", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension client fail with transport_error
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -735,7 +751,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "failover-ext-to-local",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -754,6 +769,7 @@ describe("buildChainedClient failover", () => {
   test("fails over from extension to cdp-inspect to local on transport errors", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail with transport_error
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -785,7 +801,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "failover-chain",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -803,6 +818,7 @@ describe("buildChainedClient failover", () => {
   test("does NOT fail over on cdp_error -- propagates immediately", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail with cdp_error (not transport_error)
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -820,7 +836,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "no-failover-cdp-error",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -868,6 +883,7 @@ describe("buildChainedClient failover", () => {
   test("backend becomes sticky after first successful command", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail on first call with transport_error
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -885,7 +901,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "sticky-test",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -946,6 +961,7 @@ describe("buildChainedClient failover", () => {
 
   test("kind reflects the active backend after failover", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -961,7 +977,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "kind-after-failover",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -976,6 +991,7 @@ describe("buildChainedClient failover", () => {
 
   test("dispose cleans up failed backends from failover chain", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -991,7 +1007,6 @@ describe("buildChainedClient failover", () => {
 
     const ctx = makeContext({
       conversationId: "dispose-failover",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -1023,6 +1038,7 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   // ── buildCandidateList with desktopAuto ─────────────────────────────
@@ -1043,9 +1059,9 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
 
   test("macOS turn with extension available: extension > cdp-inspect > local", () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-all",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
     });
 
@@ -1060,11 +1076,10 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
 
   test("macOS turn with registry-routed proxy unavailable skips desktop-auto cdp-inspect (extension intent)", () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-proxy-unavailable-no-inspect",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
-      hostBrowserRegistryRouted: true,
     });
 
     const candidates = buildCandidateList(ctx);
@@ -1075,24 +1090,21 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
     expect(candidates[0].kind).toBe("local");
   });
 
-  test("macOS turn with SSE-backed proxy unavailable still includes desktop-auto cdp-inspect", () => {
+  test("macOS turn with singleton proxy unavailable suppresses desktop-auto cdp-inspect", () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
-      conversationId: "macos-sse-proxy-unavailable-inspect-allowed",
-      hostBrowserProxy: fakeProxy,
+      conversationId: "macos-proxy-unavailable-inspect-suppressed",
       transportInterface: "macos",
-      // hostBrowserRegistryRouted is NOT set -- SSE-backed proxy
     });
 
     const candidates = buildCandidateList(ctx);
 
-    // SSE-backed proxy that is unavailable (non-interactive turn) should NOT
-    // suppress cdp-inspect -- the SSE proxy was never expected to service
-    // browser requests, so cdp-inspect remains available as a fallback.
-    expect(candidates.length).toBe(2);
-    expect(candidates[0].kind).toBe("cdp-inspect");
-    expect(candidates[0].reason).toContain("desktopAuto");
-    expect(candidates[1].kind).toBe("local");
+    // When the singleton proxy exists but is temporarily unavailable,
+    // cdp-inspect is suppressed — the extension transport was expected
+    // and the disconnection is transient.
+    expect(candidates.length).toBe(1);
+    expect(candidates[0].kind).toBe("local");
   });
 
   test("macOS turn with no proxy still includes desktop-auto cdp-inspect", () => {
@@ -1112,9 +1124,9 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
 
   test("macOS turn with extension available still includes cdp-inspect as fallback", () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-ext-available-inspect-fallback",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
     });
 
@@ -1265,11 +1277,10 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
 
   test("macOS turn with registry-routed proxy unavailable routes to local without trying cdp-inspect", async () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-proxy-unavail-route",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
-      hostBrowserRegistryRouted: true,
     });
 
     const client = getCdpClient(ctx);
@@ -1287,26 +1298,26 @@ describe("desktop-auto cdp-inspect (macOS)", () => {
     client.dispose();
   });
 
-  test("macOS turn with SSE-backed proxy unavailable falls through to cdp-inspect", async () => {
+  test("macOS turn with singleton proxy unavailable falls through to local (cdp-inspect suppressed)", async () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
-      conversationId: "macos-sse-proxy-unavail-inspect",
-      hostBrowserProxy: fakeProxy,
+      conversationId: "macos-proxy-unavail-local",
       transportInterface: "macos",
-      // hostBrowserRegistryRouted is NOT set -- SSE-backed proxy
     });
 
     const client = getCdpClient(ctx);
 
-    // SSE-backed proxy unavailable (non-interactive turn) should NOT
-    // suppress cdp-inspect -- it falls through to desktop-auto cdp-inspect.
-    expect(client.kind).toBe("cdp-inspect");
+    // Singleton proxy unavailable suppresses cdp-inspect (extension was
+    // expected), so the factory falls through directly to local.
+    expect(client.kind).toBe("local");
     const result = await client.send<{ ok: boolean; via: string }>(
       "Page.navigate",
     );
-    expect(result).toEqual({ ok: true, via: "cdp-inspect" });
+    expect(result).toEqual({ ok: true, via: "local" });
     expect(createExtensionCdpClientMock).not.toHaveBeenCalled();
-    expect(createCdpInspectClientMock).toHaveBeenCalledTimes(1);
+    expect(createCdpInspectClientMock).not.toHaveBeenCalled();
+    expect(createLocalCdpClientMock).toHaveBeenCalledTimes(1);
     client.dispose();
   });
 
@@ -1380,15 +1391,16 @@ describe("pinned-mode selection", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   // ── Pinned extension ────────────────────────────────────────────────
 
   test("pinned extension mode routes to extension when proxy is available", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "pinned-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx, { mode: "extension" });
@@ -1415,7 +1427,7 @@ describe("pinned-mode selection", () => {
       const cdpErr = err as CdpError;
       expect(cdpErr.code).toBe("transport_error");
       expect(cdpErr.message).toContain('Pinned mode "extension" unavailable');
-      expect(cdpErr.message).toContain("no host browser proxy provisioned");
+      expect(cdpErr.message).toContain("no active extension connection");
       expect(cdpErr.attemptDiagnostics).toBeDefined();
       expect(cdpErr.attemptDiagnostics).toHaveLength(1);
       expect(cdpErr.attemptDiagnostics![0].candidateKind).toBe("extension");
@@ -1425,9 +1437,9 @@ describe("pinned-mode selection", () => {
 
   test("pinned extension mode throws when proxy is present but unavailable", () => {
     const fakeProxy = makeUnavailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "pinned-ext-unavail",
-      hostBrowserProxy: fakeProxy,
     });
 
     expect(() => getCdpClient(ctx, { mode: "extension" })).toThrow(CdpError);
@@ -1444,6 +1456,7 @@ describe("pinned-mode selection", () => {
 
   test("pinned extension mode does NOT fall back to local on transport error", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail with transport_error
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -1459,7 +1472,6 @@ describe("pinned-mode selection", () => {
 
     const ctx = makeContext({
       conversationId: "pinned-ext-no-fallback",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx, { mode: "extension" });
@@ -1535,9 +1547,9 @@ describe("pinned-mode selection", () => {
 
   test("pinned local mode routes to local", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "pinned-local",
-      hostBrowserProxy: fakeProxy,
     });
 
     // Even with proxy available, pinned local should skip extension
@@ -1591,13 +1603,14 @@ describe("buildPinnedCandidateList", () => {
     cdpInspectEnabled = false;
     desktopAutoConfig = { enabled: true, cooldownMs: 30_000 };
     _resetDesktopAutoCooldown();
+    mockSingletonProxy = null;
   });
 
   test("extension mode produces single extension candidate", () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "bpl-ext",
-      hostBrowserProxy: fakeProxy,
     });
 
     const candidates = buildPinnedCandidateList(ctx, "extension");
@@ -1663,11 +1676,13 @@ describe("attempt diagnostics", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   test("exhausted candidates error includes full attempt diagnostics", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -1707,7 +1722,6 @@ describe("attempt diagnostics", () => {
 
     const ctx = makeContext({
       conversationId: "diag-all-fail",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -1750,6 +1764,7 @@ describe("attempt diagnostics", () => {
 
   test("successful fallback still records diagnostics for failed candidates", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -1765,7 +1780,6 @@ describe("attempt diagnostics", () => {
 
     const ctx = makeContext({
       conversationId: "diag-partial",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -1786,6 +1800,7 @@ describe("attempt diagnostics", () => {
   test("auto-mode fallback log includes candidate sequence and failure reasons", async () => {
     cdpInspectEnabled = true;
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -1813,7 +1828,6 @@ describe("attempt diagnostics", () => {
 
     const ctx = makeContext({
       conversationId: "diag-log-shape",
-      hostBrowserProxy: fakeProxy,
     });
 
     const client = getCdpClient(ctx);
@@ -1937,10 +1951,12 @@ describe("no-fallback guarantees", () => {
     desktopAutoConfig = { enabled: true, cooldownMs: 30_000 };
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   test("pinned extension: only one candidate is ever constructed", async () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
 
     // Make extension fail
     createExtensionCdpClientMock.mockImplementationOnce(
@@ -1956,7 +1972,6 @@ describe("no-fallback guarantees", () => {
 
     const ctx = makeContext({
       conversationId: "nofb-ext",
-      hostBrowserProxy: fakeProxy,
     });
     const client = getCdpClient(ctx, { mode: "extension" });
 
@@ -2043,7 +2058,7 @@ describe("no-fallback guarantees", () => {
 // Verify that macOS turns can use the host browser proxy without requiring
 // extension registry connectivity. When a HostBrowserProxy is provisioned
 // via the SSE sender path (no extension), the factory should select
-// extension as the top candidate (because hostBrowserProxy is available).
+// extension as the top candidate (because the singleton proxy is available).
 // When both proxy and fallback backends exist, selection is deterministic:
 // extension > cdp-inspect > local.
 
@@ -2060,15 +2075,16 @@ describe("macOS host-browser proxy without extension registry", () => {
     _resetDesktopAutoCooldown();
     logWarnCalls.length = 0;
     logDebugCalls.length = 0;
+    mockSingletonProxy = null;
   });
 
   test("macOS turn with SSE-provisioned hostBrowserProxy selects extension backend", async () => {
     // Simulates macOS provisioning a HostBrowserProxy via SSE (no extension
     // registry connection). The proxy is available so extension is selected.
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-sse-proxy",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
     });
 
@@ -2085,9 +2101,9 @@ describe("macOS host-browser proxy without extension registry", () => {
 
   test("macOS turn with both proxy and cdp-inspect produces deterministic 3-candidate chain", () => {
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "macos-deterministic",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "macos",
     });
 
@@ -2119,9 +2135,9 @@ describe("macOS host-browser proxy without extension registry", () => {
     // enablement — proxy presence drives extension selection regardless of
     // interface.
     const fakeProxy = makeAvailableProxy();
+    mockSingletonProxy = fakeProxy;
     const ctx = makeContext({
       conversationId: "non-macos-proxy",
-      hostBrowserProxy: fakeProxy,
       transportInterface: "cli",
     });
 

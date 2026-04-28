@@ -51,7 +51,6 @@ import {
 } from "./conversation-store.js";
 import type { ConversationCreateOptions } from "./handlers/shared.js";
 import { HostBashProxy } from "./host-bash-proxy.js";
-import { HostBrowserProxy } from "./host-browser-proxy.js";
 import { HostCuProxy } from "./host-cu-proxy.js";
 import { HostFileProxy } from "./host-file-proxy.js";
 import { HostTransferProxy } from "./host-transfer-proxy.js";
@@ -84,9 +83,7 @@ export function resolveTurnChannel(
   return "vellum";
 }
 
-export function resolveTurnInterface(
-  sourceInterface?: string,
-): InterfaceId {
+export function resolveTurnInterface(sourceInterface?: string): InterfaceId {
   if (sourceInterface != null) {
     const parsed = parseInterfaceId(sourceInterface);
     if (!parsed) {
@@ -296,17 +293,6 @@ export async function prepareConversationForMessage(
   } else if (!conversation.isProcessing()) {
     conversation.setHostBashProxy(undefined);
   }
-  if (supportsHostProxy(resolvedInterface, "host_browser")) {
-    if (!conversation.isProcessing() || !conversation.hostBrowserProxy) {
-      conversation.setHostBrowserProxy(
-        new HostBrowserProxy(conversation.getCurrentSender(), (requestId) => {
-          pendingInteractions.resolve(requestId);
-        }),
-      );
-    }
-  } else if (!conversation.isProcessing()) {
-    conversation.setHostBrowserProxy(undefined);
-  }
   if (supportsHostProxy(resolvedInterface, "host_file")) {
     if (!conversation.isProcessing() || !conversation.hostFileProxy) {
       conversation.setHostFileProxy(
@@ -315,17 +301,11 @@ export async function prepareConversationForMessage(
         }),
       );
     }
-    if (
-      !conversation.isProcessing() ||
-      !conversation.getHostTransferProxy()
-    ) {
+    if (!conversation.isProcessing() || !conversation.getHostTransferProxy()) {
       conversation.setHostTransferProxy(
-        new HostTransferProxy(
-          conversation.getCurrentSender(),
-          (requestId) => {
-            pendingInteractions.resolve(requestId);
-          },
-        ),
+        new HostTransferProxy(conversation.getCurrentSender(), (requestId) => {
+          pendingInteractions.resolve(requestId);
+        }),
       );
     }
   } else if (!conversation.isProcessing()) {
@@ -365,9 +345,7 @@ export async function prepareConversationForMessage(
           filename: a.originalFilename,
           mimeType: a.mimeType,
           data: a.dataBase64,
-          ...(sourcePaths.has(a.id)
-            ? { filePath: sourcePaths.get(a.id) }
-            : {}),
+          ...(sourcePaths.has(a.id) ? { filePath: sourcePaths.get(a.id) } : {}),
         }));
       })()
     : [];
@@ -387,15 +365,14 @@ export async function processMessage(
   sourceChannel?: string,
   sourceInterface?: string,
 ): Promise<{ messageId: string }> {
-  const { conversation, attachments } =
-    await prepareConversationForMessage(
-      conversationId,
-      content,
-      attachmentIds,
-      options,
-      sourceChannel,
-      sourceInterface,
-    );
+  const { conversation, attachments } = await prepareConversationForMessage(
+    conversationId,
+    content,
+    attachmentIds,
+    options,
+    sourceChannel,
+    sourceInterface,
+  );
 
   const config = getConfig();
   const serverInterfaceCtx = conversation.getTurnInterfaceContext();
@@ -443,9 +420,7 @@ export async function processMessage(
               serverInterfaceCtx.assistantMessageInterface,
           }
         : {}),
-      ...(Object.keys(imageSourcePaths).length > 0
-        ? { imageSourcePaths }
-        : {}),
+      ...(Object.keys(imageSourcePaths).length > 0 ? { imageSourcePaths } : {}),
     };
     const userMetaWithSlack = slackMeta
       ? { ...serverChannelMeta, slackMeta }
