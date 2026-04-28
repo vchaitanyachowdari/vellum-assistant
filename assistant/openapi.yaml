@@ -6069,16 +6069,6 @@ paths:
       responses:
         "200":
           description: Successful response
-  /v1/integrations/slack/channel/oauth-install:
-    post:
-      operationId: integrations_slack_channel_oauthinstall_post
-      summary: Run Slack OAuth install
-      description: Run an OAuth2 loopback flow to install the Slack app and capture bot + user tokens.
-      tags:
-        - integrations
-      responses:
-        "200":
-          description: Successful response
   /v1/integrations/telegram/commands:
     post:
       operationId: integrations_telegram_commands_post
