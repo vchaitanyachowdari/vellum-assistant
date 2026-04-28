@@ -95,7 +95,6 @@ import {
   startGuardianExpirySweep,
   stopGuardianExpirySweep,
 } from "./routes/channel-routes.js";
-import { conversationRouteDefinitions } from "./routes/conversation-routes.js";
 import { RouteError } from "./routes/errors.js";
 import {
   resolveHostBrowserEvent,
@@ -1478,13 +1477,6 @@ export class RuntimeHttpServer {
     return [
       ...routeDefinitionsToHTTPRoutes(ROUTES),
 
-      ...conversationRouteDefinitions({
-        interfacesDir: this.interfacesDir,
-        sendMessageDeps: this.sendMessageDeps,
-        approvalConversationGenerator: this.approvalConversationGenerator,
-        suggestionCache: this.suggestionCache,
-        suggestionInFlight: this.suggestionInFlight,
-      }),
       ...channelRouteDefinitions({
         assistantId,
         processMessage: this.processMessage,
