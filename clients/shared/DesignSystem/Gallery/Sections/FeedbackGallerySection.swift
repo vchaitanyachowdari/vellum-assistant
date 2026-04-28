@@ -244,7 +244,7 @@ struct FeedbackGallerySection: View {
                 // MARK: - VNotification
                 GallerySectionHeader(
                     title: "VNotification",
-                    description: "Compact single-line feedback bar. Supports 4 tones × 2 styles, with optional leading icon, action label, and dismiss button."
+                    description: "Compact feedback bar that wraps long messages to multiple lines. Supports 4 tones × 2 styles, with optional leading icon, action label, and dismiss button."
                 )
 
                 VCard {
@@ -378,6 +378,32 @@ struct FeedbackGallerySection: View {
                                     onAction: {}
                                 )
                             }
+                        }
+
+                        Divider().background(VColor.borderBase)
+
+                        // Multi-line
+                        Text("Multi-line")
+                            .font(VFont.labelDefault)
+                            .foregroundStyle(VColor.contentSecondary)
+                        VStack(alignment: .leading, spacing: VSpacing.sm) {
+                            VNotification(
+                                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+                                tone: .negative,
+                                style: .strong,
+                                actionLabel: "Action",
+                                onAction: {},
+                                onDismiss: {}
+                            )
+                            .frame(maxWidth: 420, alignment: .leading)
+
+                            VNotification(
+                                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+                                tone: .positive,
+                                style: .weak,
+                                onDismiss: {}
+                            )
+                            .frame(maxWidth: 420, alignment: .leading)
                         }
                     }
                 }
