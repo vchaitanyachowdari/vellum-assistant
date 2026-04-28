@@ -233,7 +233,7 @@ struct IntegrationDetailModal: View {
             }
 
             if let error = store.managedError(for: providerKey) {
-                VInlineMessage(error, tone: .error)
+                VNotification(error, tone: .negative)
             }
         }
     }
@@ -345,7 +345,7 @@ struct IntegrationDetailModal: View {
             }
 
             if let error = store.yourOwnError(for: providerKey) {
-                VInlineMessage(error, tone: .error)
+                VNotification(error, tone: .negative)
             }
         }
         .onAppear {
@@ -370,7 +370,7 @@ struct IntegrationDetailModal: View {
                 )
             }
             if yourOwnMeta?.dashboard_url != nil {
-                VInlineMessage("Find these in your \(displayName) Developer console.", tone: .info)
+                VNotification("Find these in your \(displayName) Developer console.", tone: .neutral)
             }
 
             HStack(spacing: VSpacing.sm) {
