@@ -44,6 +44,18 @@ mock.module("../../../memory/jobs-store.js", () => ({
     nextJobId += 1;
     return `test-job-${nextJobId}`;
   },
+  upsertAutoAnalysisJob: () => {},
+  upsertDebouncedJob: () => `test-debounced-${++nextJobId}`,
+  hasActiveJobOfType: () => false,
+  enqueuePruneOldLlmRequestLogsJob: () => `test-prune-${++nextJobId}`,
+  enqueuePruneOldConversationsJob: () => `test-prune-conv-${++nextJobId}`,
+  claimMemoryJobs: () => [],
+  completeMemoryJob: () => {},
+  deferMemoryJob: () => "deferred",
+  failMemoryJob: () => {},
+  resetRunningJobsToPending: () => 0,
+  failStalledJobs: () => 0,
+  getMemoryJobCounts: () => ({}),
 }));
 
 const { ROUTES: memoryV2Routes } =
