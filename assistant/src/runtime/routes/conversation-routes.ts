@@ -410,12 +410,9 @@ export function handleListMessages(
     );
   }
 
-  if (!resolvedConversationId) {
-    return { messages: [] };
-  }
-
   const beforeTimestampRaw = queryParams?.beforeTimestamp;
   const limitRaw = queryParams?.limit;
+  const pageRaw = queryParams?.page;
 
   // Validate: reject NaN values with 400
   if (beforeTimestampRaw != null && isNaN(Number(beforeTimestampRaw))) {
@@ -423,6 +420,25 @@ export function handleListMessages(
   }
   if (limitRaw != null && isNaN(Number(limitRaw))) {
     throw new BadRequestError("limit must be a valid number");
+  }
+  if (pageRaw != null && pageRaw !== "latest") {
+    throw new BadRequestError("page must be 'latest' when provided");
+  }
+  const isLatestPage = pageRaw === "latest";
+
+  if (!resolvedConversationId) {
+    // Unresolved conversation keys still need to advertise the stable
+    // `page=latest` contract so the web client can rely on metadata fields
+    // being present even before any message is persisted.
+    if (isLatestPage && beforeTimestampRaw == null) {
+      return {
+        messages: [],
+        hasMore: false,
+        oldestTimestamp: null,
+        oldestMessageId: null,
+      };
+    }
+    return { messages: [] };
   }
 
   const beforeTimestamp = beforeTimestampRaw
@@ -433,10 +449,12 @@ export function handleListMessages(
     ? Math.min(Math.max(Math.floor(Number(limitRaw)), 1), 500)
     : undefined;
 
-  // Option A: only paginate when beforeTimestamp is present.
-  // Initial load and reconnect send limit but no beforeTimestamp — those must continue
-  // returning all messages for zero regression risk.
-  const isPaginated = beforeTimestamp != null;
+  // Paginate when either `beforeTimestamp` (older-page request) or
+  // `page=latest` (initial newest-N request) is set. When both are sent,
+  // `beforeTimestamp` wins because the caller is explicitly asking for an
+  // older page; `getMessagesPaginated` ignores `beforeTimestamp === undefined`
+  // and returns the newest `limit` messages in chronological order.
+  const isPaginated = beforeTimestamp != null || isLatestPage;
 
   let rawMessages: MessageRow[];
   let hasMore = false;
@@ -682,6 +700,19 @@ export function handleListMessages(
       rawMessages.length > 0 ? rawMessages[0].createdAt : undefined;
     const oldestMessageId =
       rawMessages.length > 0 ? rawMessages[0].id : undefined;
+    // `page=latest` always emits both metadata fields so the web client has
+    // a stable contract; emit `null` when the conversation is empty.
+    // The existing `beforeTimestamp` branch keeps its conditional shape to
+    // avoid disturbing current callers.
+    if (isLatestPage && beforeTimestamp == null) {
+      return {
+        messages,
+        hasMore,
+        oldestTimestamp: oldestTimestamp ?? null,
+        oldestMessageId: oldestMessageId ?? null,
+      };
+    }
+
     return {
       messages,
       hasMore,
@@ -2680,12 +2711,14 @@ export const ROUTES: RouteDefinition[] = [
         .describe("Whether older messages exist beyond this page"),
       oldestTimestamp: z
         .number()
+        .nullable()
         .optional()
         .describe(
-          "Timestamp of the oldest message in this page (ms since epoch)",
+          "Timestamp of the oldest message in this page (ms since epoch). Null when page=latest is used on an empty conversation.",
         ),
       oldestMessageId: z
         .string()
+        .nullable()
         .optional()
         .describe("ID of the oldest message in this page"),
     }),
