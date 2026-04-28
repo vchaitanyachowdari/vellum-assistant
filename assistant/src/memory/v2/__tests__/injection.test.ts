@@ -604,7 +604,6 @@ describe("injectMemoryV2Block", () => {
       [
         {
           id: "example-skill-a",
-          displayName: "Example Skill A",
           content:
             'The "Example Skill A" skill (example-skill-a) is available. Helps with examples.',
         },
@@ -646,7 +645,6 @@ describe("injectMemoryV2Block", () => {
       [
         {
           id: "example-skill-a",
-          displayName: "Example Skill A",
           content:
             'The "Example Skill A" skill (example-skill-a) is available. Helps with examples.',
         },
@@ -706,7 +704,6 @@ describe("injectMemoryV2Block", () => {
     // skills subsection.
     const skillEntry = {
       id: "example-skill-a",
-      displayName: "Example Skill A",
       content:
         'The "Example Skill A" skill (example-skill-a) is available. Helps with examples.',
     };
@@ -769,7 +766,6 @@ describe("injectMemoryV2Block", () => {
       [
         {
           id: "example-skill-a",
-          displayName: "Example Skill A",
           content:
             'The "Example Skill A" skill (example-skill-a) is available.',
         },
