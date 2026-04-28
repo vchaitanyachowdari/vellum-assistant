@@ -122,7 +122,6 @@ export type {
   RuntimeAttachmentMetadata,
   RuntimeHttpServerOptions,
   RuntimeMessageConversationOptions,
-  SendMessageDeps,
 } from "./http-types.js";
 
 import type {
@@ -131,7 +130,6 @@ import type {
   GuardianActionCopyGenerator,
   GuardianFollowUpConversationGenerator,
   RuntimeHttpServerOptions,
-  SendMessageDeps,
 } from "./http-types.js";
 
 const log = getLogger("runtime-http");
@@ -231,11 +229,8 @@ export class RuntimeHttpServer {
   private guardianActionCopyGenerator?: GuardianActionCopyGenerator;
   private guardianFollowUpConversationGenerator?: GuardianFollowUpConversationGenerator;
   private interfacesDir: string | null;
-  private suggestionCache = new Map<string, string>();
-  private suggestionInFlight = new Map<string, Promise<string | null>>();
   private retrySweepTimer: ReturnType<typeof setInterval> | null = null;
   private sweepInProgress = false;
-  private sendMessageDeps?: SendMessageDeps;
 
   private readonly liveVoiceSessionManager: LiveVoiceSessionManager;
   private router: HttpRouter;
@@ -250,7 +245,6 @@ export class RuntimeHttpServer {
     this.guardianFollowUpConversationGenerator =
       options.guardianFollowUpConversationGenerator;
     this.interfacesDir = options.interfacesDir ?? null;
-    this.sendMessageDeps = options.sendMessageDeps;
     this.liveVoiceSessionManager = new LiveVoiceSessionManager({
       createSession: (context) => createLiveVoiceSession(context),
     });
