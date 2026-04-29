@@ -9,7 +9,7 @@
  * This module lets a caller validate a bundle while streaming:
  * - `readAndValidateManifest` consumes the first tar entry (which must be
  *   `manifest.json`), validates the schema, and verifies the self-referencing
- *   `manifest_sha256` against the canonicalized JSON.
+ *   `checksum` against the canonicalized JSON.
  * - `createHashVerifier` returns a passthrough `Transform` that hashes bytes
  *   flowing through it and errors the pipeline if the final digest or byte
  *   count does not match the expected values from the manifest.
@@ -24,9 +24,12 @@ import { Transform, type TransformCallback } from "node:stream";
 
 import type { StreamedTarEntry } from "./vbundle-tar-stream.js";
 import {
-  computeManifestSha256,
+  computeLegacyManifestSha256,
+  computeManifestChecksum,
+  LegacyManifestSchema,
   ManifestSchema,
   type ManifestType,
+  translateLegacyManifest,
 } from "./vbundle-validator.js";
 
 // ---------------------------------------------------------------------------
@@ -35,7 +38,7 @@ import {
 
 export interface ManifestReadResult {
   manifest: ManifestType;
-  /** Fast lookup from archive path -> expected sha256 + size (from manifest.files). */
+  /** Fast lookup from archive path -> expected sha256 + size (from manifest.contents). */
   expected: Map<string, { sha256: string; size: number }>;
 }
 
@@ -75,7 +78,7 @@ const MANIFEST_MAX_BYTES = 1 * 1024 * 1024;
  *   2. Size cap (1 MiB).
  *   3. JSON parse.
  *   4. Zod schema validation.
- *   5. Self-referencing `manifest_sha256` verification against the
+ *   5. Self-referencing `checksum` verification against the
  *      canonicalized JSON (minus that field).
  *
  * On success, returns the parsed manifest plus a `Map` keyed by archive
@@ -131,39 +134,58 @@ export async function readAndValidateManifest(
     );
   }
 
+  // Try the v1 schema first; fall back to the legacy six-field shape so
+  // existing on-disk bundles (backup snapshots, cross-version migrations)
+  // keep streaming-validating after upgrade. AGENTS.md prohibits silent
+  // breaks of persisted state.
   const parseResult = ManifestSchema.safeParse(manifestRaw);
-  if (!parseResult.success) {
-    const issues = parseResult.error.issues
-      .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
-      .join("; ");
-    throw new StreamingValidationError(
-      "manifest_schema",
-      `manifest.json failed schema validation: ${issues}`,
-    );
-  }
+  let manifest: ManifestType;
 
-  const manifest = parseResult.data;
-
-  // Recompute the self-referencing checksum using the exact canonicalization
-  // that vbundle-validator.ts uses. Any drift here would silently reject
-  // valid bundles produced by buildVBundle.
-  const computed = computeManifestSha256(manifestRaw);
-  if (computed !== manifest.manifest_sha256) {
-    throw new StreamingValidationError(
-      "manifest_sha256",
-      `Manifest checksum mismatch: expected ${manifest.manifest_sha256}, computed ${computed}`,
-    );
+  if (parseResult.success) {
+    manifest = parseResult.data;
+    // Recompute the self-referencing checksum using the exact canonicalization
+    // that vbundle-validator.ts uses. Any drift here would silently reject
+    // valid bundles produced by buildVBundle.
+    const computed = computeManifestChecksum(manifestRaw);
+    if (computed !== manifest.checksum) {
+      throw new StreamingValidationError(
+        "manifest_sha256",
+        `Manifest checksum mismatch: expected ${manifest.checksum}, computed ${computed}`,
+      );
+    }
+  } else {
+    const legacyParse = LegacyManifestSchema.safeParse(manifestRaw);
+    if (!legacyParse.success) {
+      const issues = parseResult.error.issues
+        .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+        .join("; ");
+      throw new StreamingValidationError(
+        "manifest_schema",
+        `manifest.json failed schema validation: ${issues}`,
+      );
+    }
+    const legacy = legacyParse.data;
+    // Verify the legacy checksum using the OLD canonicalization (strip the
+    // field entirely; do NOT replace with "").
+    const computedLegacy = computeLegacyManifestSha256(manifestRaw);
+    if (computedLegacy !== legacy.manifest_sha256) {
+      throw new StreamingValidationError(
+        "manifest_sha256",
+        `Manifest checksum mismatch: expected ${legacy.manifest_sha256}, computed ${computedLegacy}`,
+      );
+    }
+    manifest = translateLegacyManifest(legacy);
   }
 
   const expected = new Map<string, { sha256: string; size: number }>();
-  for (const file of manifest.files) {
+  for (const file of manifest.contents) {
     if (expected.has(file.path)) {
       throw new StreamingValidationError(
         "manifest_duplicate_path",
         `Manifest contains duplicate entry for path: ${file.path}`,
       );
     }
-    expected.set(file.path, { sha256: file.sha256, size: file.size });
+    expected.set(file.path, { sha256: file.sha256, size: file.size_bytes });
   }
 
   return { manifest, expected };
