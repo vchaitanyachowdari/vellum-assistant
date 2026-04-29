@@ -25,7 +25,7 @@ import {
   loadRawConfig,
   saveRawConfig,
 } from "../../config/loader.js";
-import { LLMConfigFragment } from "../../config/schemas/llm.js";
+import { ProfileEntry } from "../../config/schemas/llm.js";
 import { VALID_MEMORY_EMBEDDING_PROVIDERS } from "../../config/schemas/memory-storage.js";
 import { VALID_INFERENCE_PROVIDERS } from "../../config/schemas/services.js";
 import { getConfigWatcher } from "../../daemon/config-watcher.js";
@@ -77,6 +77,8 @@ type LlmContextSummaryResponse = NonNullable<
 type LlmContextRouteResult = Omit<LlmContextNormalizationResult, "summary"> & {
   summary?: LlmContextSummaryResponse;
 };
+
+import { MANAGED_PROFILE_NAMES } from "../../config/seed-inference-profiles.js";
 
 const INFERENCE_PROFILE_UI_KEYS = new Set([
   "provider",
@@ -269,6 +271,23 @@ function handleGetConfig() {
   }
 }
 
+function rejectManagedProfileDeletion(body: Record<string, unknown>): void {
+  const llm = asMutablePlainObject(body.llm);
+  if (!llm) return;
+  if ("profiles" in llm && llm.profiles === null) {
+    throw new BadRequestError(
+      "Cannot null llm.profiles — managed profiles would be deleted.",
+    );
+  }
+  const profiles = asMutablePlainObject(llm.profiles);
+  if (!profiles) return;
+  for (const name of Object.keys(profiles)) {
+    if (profiles[name] === null && MANAGED_PROFILE_NAMES.has(name)) {
+      throw new BadRequestError(`Cannot delete managed profile "${name}".`);
+    }
+  }
+}
+
 function handlePatchConfig({ body }: RouteHandlerArgs) {
   if (
     !body ||
@@ -278,6 +297,7 @@ function handlePatchConfig({ body }: RouteHandlerArgs) {
   ) {
     throw new BadRequestError("Body must be a non-empty JSON object");
   }
+  rejectManagedProfileDeletion(body as Record<string, unknown>);
   try {
     const raw = loadRawConfig();
     deepMergeOverwrite(raw, body);
@@ -300,7 +320,12 @@ function handleReplaceInferenceProfile({
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new BadRequestError("Body must be a JSON object");
   }
-  const parsed = LLMConfigFragment.safeParse(body);
+  if (MANAGED_PROFILE_NAMES.has(name)) {
+    throw new BadRequestError(
+      `Cannot edit managed profile "${name}". Duplicate it to create a custom profile.`,
+    );
+  }
+  const parsed = ProfileEntry.safeParse(body);
   if (!parsed.success) {
     const detail = parsed.error.issues.map((issue) => issue.message).join("; ");
     throw new BadRequestError(`Invalid profile fragment: ${detail}`);
