@@ -1,6 +1,7 @@
 import { v4 as uuid } from "uuid";
 
-import { getChromeExtensionRegistry } from "../runtime/chrome-extension-registry.js";
+import { buildAssistantEvent } from "../runtime/assistant-event.js";
+import { assistantEventHub } from "../runtime/assistant-event-hub.js";
 import { getClientRegistry } from "../runtime/client-registry.js";
 import type { ToolExecutionResult } from "../tools/types.js";
 import { AssistantError, ErrorCode } from "../util/errors.js";
@@ -61,26 +62,21 @@ export class HostBrowserProxy {
   private pending = new Map<string, PendingRequest>();
 
   /**
-   * Whether an extension client with `host_browser` capability is connected.
-   * Checks the client registry first; falls back to the chrome extension
-   * registry until all callers are migrated to the client registry.
+   * Whether a client with `host_browser` capability is connected.
    */
   isAvailable(): boolean {
-    const clientEntry =
-      getClientRegistry().getMostRecentByCapability("host_browser");
-    if (clientEntry) return true;
-    return getChromeExtensionRegistry().getAny() != null;
+    return (
+      getClientRegistry().getMostRecentByCapability("host_browser") != null
+    );
   }
 
   /**
-   * Send a ServerMessage to the connected extension. Resolves the
-   * transport at send time — tries the chrome extension registry for
-   * now. Returns true on success, false when no connection is available.
+   * Publish a ServerMessage through the assistant event hub.
    */
-  private sendToExtension(msg: ServerMessage): boolean {
-    const conn = getChromeExtensionRegistry().getAny();
-    if (!conn) return false;
-    return getChromeExtensionRegistry().send(conn.guardianId, msg);
+  private sendToExtension(msg: ServerMessage): void {
+    void assistantEventHub.publish(buildAssistantEvent(msg)).catch((err) => {
+      log.warn({ err }, "failed to publish host_browser event to hub");
+    });
   }
 
   request(
@@ -142,14 +138,7 @@ export class HostBrowserProxy {
       this.pending.set(requestId, { resolve, reject, timer, detachAbort });
 
       try {
-        const sent = this.sendToExtension({
-          ...input,
-          type: "host_browser_request",
-          requestId,
-          conversationId,
-        } as ServerMessage);
-
-        if (!sent) {
+        if (!this.isAvailable()) {
           clearTimeout(timer);
           this.pending.delete(requestId);
           detachAbort();
@@ -158,7 +147,15 @@ export class HostBrowserProxy {
               "host_browser send failed: no active extension connection",
             ),
           );
+          return;
         }
+
+        this.sendToExtension({
+          ...input,
+          type: "host_browser_request",
+          requestId,
+          conversationId,
+        } as ServerMessage);
       } catch (err) {
         // Sender threw synchronously (e.g. client transport error during
         // event emission). Clean up pending state and timer so we don't

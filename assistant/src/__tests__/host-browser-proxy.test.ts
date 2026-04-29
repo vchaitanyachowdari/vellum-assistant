@@ -9,32 +9,39 @@ mock.module("../util/logger.js", () => ({
     }),
 }));
 
-/** Messages sent through the mock registry. */
-let sentMessages: unknown[] = [];
-let mockSendResult = true;
+/** Events published through the mock event hub. */
+let publishedEvents: unknown[] = [];
 let mockHasConnection = true;
 
-mock.module("../runtime/chrome-extension-registry.js", () => ({
-  getChromeExtensionRegistry: () => ({
-    getAny: () =>
-      mockHasConnection ? { guardianId: "test-guardian" } : undefined,
-    send: (_guardianId: string, msg: unknown) => {
-      if (!mockSendResult) return false;
-      sentMessages.push(msg);
-      return true;
+mock.module("../runtime/assistant-event-hub.js", () => ({
+  assistantEventHub: {
+    publish: async (event: unknown) => {
+      publishedEvents.push(event);
     },
-  }),
+  },
+}));
+
+mock.module("../runtime/assistant-event.js", () => ({
+  buildAssistantEvent: (message: unknown) => ({ message }),
 }));
 
 mock.module("../runtime/client-registry.js", () => ({
   getClientRegistry: () => ({
-    getMostRecentByCapability: () => undefined,
+    getMostRecentByCapability: (cap: string) =>
+      cap === "host_browser" && mockHasConnection
+        ? { clientId: "test-client" }
+        : undefined,
   }),
 }));
 
 // ── Real imports (after mocks) ───────────────────────────────────────
 
 const { HostBrowserProxy } = await import("../daemon/host-browser-proxy.js");
+
+/** Extract the ServerMessage payloads from published events. */
+function getPublishedMessages(): unknown[] {
+  return publishedEvents.map((e) => (e as { message: unknown }).message);
+}
 
 // ── Tests ────────────────────────────────────────────────────────────
 
@@ -43,8 +50,7 @@ describe("HostBrowserProxy", () => {
 
   beforeEach(() => {
     HostBrowserProxy.reset();
-    sentMessages = [];
-    mockSendResult = true;
+    publishedEvents = [];
     mockHasConnection = true;
     proxy = HostBrowserProxy.instance;
   });
@@ -63,8 +69,8 @@ describe("HostBrowserProxy", () => {
         "session-1",
       );
 
-      expect(sentMessages).toHaveLength(1);
-      const sent = sentMessages[0] as Record<string, unknown>;
+      expect(getPublishedMessages()).toHaveLength(1);
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       expect(sent.type).toBe("host_browser_request");
       expect(sent.conversationId).toBe("session-1");
       expect(sent.cdpMethod).toBe("Page.navigate");
@@ -92,8 +98,8 @@ describe("HostBrowserProxy", () => {
         "session-1",
       );
 
-      expect(sentMessages).toHaveLength(1);
-      const sent = sentMessages[0] as Record<string, unknown>;
+      expect(getPublishedMessages()).toHaveLength(1);
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       expect(sent.type).toBe("host_browser_request");
       expect(sent.cdpMethod).toBe("Runtime.evaluate");
       expect(sent.cdpParams).toEqual({
@@ -116,7 +122,7 @@ describe("HostBrowserProxy", () => {
         "session-1",
       );
 
-      const sent = sentMessages[0] as Record<string, unknown>;
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       proxy.resolve(sent.requestId as string, {
         content: "Navigation failed",
         isError: true,
@@ -135,7 +141,7 @@ describe("HostBrowserProxy", () => {
         "session-1",
       );
 
-      const sent = sentMessages[0] as Record<string, unknown>;
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       const requestId = sent.requestId as string;
       expect(proxy.hasPendingRequest(requestId)).toBe(true);
 
@@ -157,7 +163,7 @@ describe("HostBrowserProxy", () => {
         "session-1",
       );
 
-      const sent = sentMessages[0] as Record<string, unknown>;
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       const requestId = sent.requestId as string;
       expect(proxy.hasPendingRequest(requestId)).toBe(true);
 
@@ -183,7 +189,7 @@ describe("HostBrowserProxy", () => {
 
       expect(result.content).toBe("Aborted");
       expect(result.isError).toBe(true);
-      expect(sentMessages).toHaveLength(0);
+      expect(getPublishedMessages()).toHaveLength(0);
     });
 
     test("mid-flight abort resolves with Aborted and emits host_browser_cancel", async () => {
@@ -194,7 +200,7 @@ describe("HostBrowserProxy", () => {
         controller.signal,
       );
 
-      const sent = sentMessages[0] as Record<string, unknown>;
+      const sent = getPublishedMessages()[0] as Record<string, unknown>;
       const requestId = sent.requestId as string;
       expect(proxy.hasPendingRequest(requestId)).toBe(true);
 
@@ -206,8 +212,8 @@ describe("HostBrowserProxy", () => {
       expect(proxy.hasPendingRequest(requestId)).toBe(false);
 
       // Cancel envelope should have been sent.
-      expect(sentMessages).toHaveLength(2);
-      const cancelMsg = sentMessages[1] as Record<string, unknown>;
+      expect(getPublishedMessages()).toHaveLength(2);
+      const cancelMsg = getPublishedMessages()[1] as Record<string, unknown>;
       expect(cancelMsg.type).toBe("host_browser_cancel");
       expect(cancelMsg.requestId).toBe(requestId);
     });
@@ -238,9 +244,9 @@ describe("HostBrowserProxy", () => {
       const p1Swallowed = p1.catch(() => {});
       const p2Swallowed = p2.catch(() => {});
 
-      const requestIds = (sentMessages as Array<Record<string, unknown>>).map(
-        (m) => m.requestId as string,
-      );
+      const requestIds = (
+        getPublishedMessages() as Array<Record<string, unknown>>
+      ).map((m) => m.requestId as string);
       expect(requestIds).toHaveLength(2);
 
       proxy.dispose();
@@ -253,7 +259,7 @@ describe("HostBrowserProxy", () => {
       await p1Swallowed;
       await p2Swallowed;
 
-      const cancelMessages = sentMessages
+      const cancelMessages = getPublishedMessages()
         .slice(2)
         .filter(
           (m) => (m as Record<string, unknown>).type === "host_browser_cancel",
@@ -269,19 +275,6 @@ describe("HostBrowserProxy", () => {
   });
 
   describe("send failure", () => {
-    test("rejects when registry.send returns false", async () => {
-      mockSendResult = false;
-
-      const resultPromise = proxy.request(
-        { cdpMethod: "Page.navigate", cdpParams: { url: "https://x.test" } },
-        "session-1",
-      );
-
-      await expect(resultPromise).rejects.toThrow(
-        "no active extension connection",
-      );
-    });
-
     test("rejects when no connection exists at send time", async () => {
       mockHasConnection = false;
 
@@ -347,7 +340,7 @@ describe("HostBrowserProxy", () => {
       expect(spy.addCalls).toEqual(["abort"]);
       expect(spy.removeCalls).toEqual([]);
 
-      const requestId = (sentMessages[0] as Record<string, unknown>)
+      const requestId = (getPublishedMessages()[0] as Record<string, unknown>)
         .requestId as string;
       proxy.resolve(requestId, { content: "ok", isError: false });
       await resultPromise;
@@ -355,7 +348,7 @@ describe("HostBrowserProxy", () => {
       expect(spy.removeCalls).toEqual(["abort"]);
 
       controller.abort();
-      expect(sentMessages).toHaveLength(1);
+      expect(getPublishedMessages()).toHaveLength(1);
     });
 
     test("removes abort listener from signal after dispose", () => {
