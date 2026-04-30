@@ -20,10 +20,14 @@
 
 import { createHash } from "node:crypto";
 
+import { and, eq } from "drizzle-orm";
+
 import {
   assistantDbQuery,
   assistantDbRun,
 } from "../db/assistant-db-proxy.js";
+import { getGatewayDb } from "../db/connection.js";
+import { channelGuardianRateLimits as gwRateLimits } from "../db/schema.js";
 import { getLogger } from "../logger.js";
 
 const log = getLogger("voice-verification");
@@ -56,7 +60,7 @@ interface PendingSession {
 }
 
 interface RateLimitRecord {
-  attemptCount: number;
+  attemptTimestampsJson: string;
   lockedUntil: number | null;
 }
 
@@ -115,72 +119,137 @@ export async function findPendingPhoneSession(): Promise<PendingSession | null> 
 }
 
 // ---------------------------------------------------------------------------
-// Rate limiting (reads/writes assistant DB)
+// Rate limiting (gateway DB primary, assistant DB dual-write)
 // ---------------------------------------------------------------------------
 
-async function getRateLimit(
+function parseTimestamps(json: string): number[] {
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function getRateLimit(
   fromNumber: string,
-): Promise<RateLimitRecord | null> {
-  const rows = await assistantDbQuery<{
-    attemptCount: number;
-    lockedUntil: number | null;
-  }>(
-    `SELECT attempt_count AS attemptCount, locked_until AS lockedUntil
-     FROM channel_verification_rate_limits
-     WHERE channel = 'phone'
-       AND external_user_id = ?
-       AND chat_id = ?
-     LIMIT 1`,
-    [fromNumber, fromNumber],
-  );
-  return rows[0] ?? null;
+): RateLimitRecord | null {
+  const gwDb = getGatewayDb();
+  const row = gwDb
+    .select()
+    .from(gwRateLimits)
+    .where(
+      and(
+        eq(gwRateLimits.channel, "phone"),
+        eq(gwRateLimits.actorExternalUserId, fromNumber),
+        eq(gwRateLimits.actorChatId, fromNumber),
+      ),
+    )
+    .get();
+
+  return row
+    ? { attemptTimestampsJson: row.attemptTimestampsJson, lockedUntil: row.lockedUntil }
+    : null;
 }
 
 async function recordInvalidAttempt(fromNumber: string): Promise<void> {
   const now = Date.now();
-  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
 
-  // Upsert rate limit record
-  await assistantDbRun(
-    `INSERT INTO channel_verification_rate_limits
-       (channel, external_user_id, chat_id, attempt_count, first_attempt_at, last_attempt_at, locked_until)
-     VALUES ('phone', ?, ?, 1, ?, ?, NULL)
-     ON CONFLICT (channel, external_user_id, chat_id) DO UPDATE SET
-       attempt_count = CASE
-         WHEN first_attempt_at < ? THEN 1
-         ELSE attempt_count + 1
-       END,
-       first_attempt_at = CASE
-         WHEN first_attempt_at < ? THEN ?
-         ELSE first_attempt_at
-       END,
-       last_attempt_at = ?,
-       locked_until = CASE
-         WHEN first_attempt_at >= ? AND attempt_count + 1 >= ? THEN ?
-         ELSE locked_until
-       END`,
-    [
-      fromNumber,
-      fromNumber,
-      now,
-      now,
-      windowStart,
-      windowStart,
-      now,
-      now,
-      windowStart,
-      RATE_LIMIT_MAX_ATTEMPTS,
-      now + RATE_LIMIT_LOCKOUT_MS,
-    ],
-  );
+  const existing = getRateLimit(fromNumber);
+  const recentTimestamps = existing
+    ? parseTimestamps(existing.attemptTimestampsJson).filter((ts) => ts > cutoff)
+    : [];
+  recentTimestamps.push(now);
+
+  const timestampsJson = JSON.stringify(recentTimestamps);
+  const newLockedUntil =
+    recentTimestamps.length >= RATE_LIMIT_MAX_ATTEMPTS
+      ? now + RATE_LIMIT_LOCKOUT_MS
+      : existing?.lockedUntil ?? null;
+
+  // Gateway DB — atomic upsert
+  const gwDb = getGatewayDb();
+  gwDb.insert(gwRateLimits)
+    .values({
+      id: crypto.randomUUID(),
+      channel: "phone",
+      actorExternalUserId: fromNumber,
+      actorChatId: fromNumber,
+      attemptTimestampsJson: timestampsJson,
+      lockedUntil: newLockedUntil,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [gwRateLimits.channel, gwRateLimits.actorExternalUserId, gwRateLimits.actorChatId],
+      set: {
+        attemptTimestampsJson: timestampsJson,
+        lockedUntil: newLockedUntil,
+        updatedAt: now,
+      },
+    })
+    .run();
+
+  // Assistant DB dual-write — atomic upsert via ON CONFLICT
+  try {
+    await assistantDbRun(
+      `INSERT INTO channel_guardian_rate_limits
+         (id, channel, actor_external_user_id, actor_chat_id,
+          attempt_timestamps_json, locked_until, created_at, updated_at)
+       VALUES (?, 'phone', ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (channel, actor_external_user_id, actor_chat_id) DO UPDATE SET
+         attempt_timestamps_json = excluded.attempt_timestamps_json,
+         locked_until = excluded.locked_until,
+         updated_at = excluded.updated_at`,
+      [
+        crypto.randomUUID(),
+        fromNumber,
+        fromNumber,
+        timestampsJson,
+        newLockedUntil,
+        now,
+        now,
+      ],
+    );
+  } catch (err) {
+    log.warn({ err }, "Assistant DB rate limit dual-write failed (best-effort)");
+  }
 }
 
 async function resetRateLimit(fromNumber: string): Promise<void> {
-  await assistantDbRun(
-    `DELETE FROM channel_verification_rate_limits
-     WHERE channel = 'phone' AND external_user_id = ? AND chat_id = ?`,
-    [fromNumber, fromNumber],
-  );
+  const now = Date.now();
+
+  // Gateway DB
+  const gwDb = getGatewayDb();
+  gwDb.update(gwRateLimits)
+    .set({
+      attemptTimestampsJson: "[]",
+      lockedUntil: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(gwRateLimits.channel, "phone"),
+        eq(gwRateLimits.actorExternalUserId, fromNumber),
+        eq(gwRateLimits.actorChatId, fromNumber),
+      ),
+    )
+    .run();
+
+  // Assistant DB dual-write
+  try {
+    await assistantDbRun(
+      `UPDATE channel_guardian_rate_limits
+       SET attempt_timestamps_json = '[]', locked_until = NULL, updated_at = ?
+       WHERE channel = 'phone'
+         AND actor_external_user_id = ?
+         AND actor_chat_id = ?`,
+      [now, fromNumber, fromNumber],
+    );
+  } catch (err) {
+    log.warn({ err }, "Assistant DB rate limit reset dual-write failed (best-effort)");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,9 +351,20 @@ export async function validateVerificationCode(
       }
     }
 
+    if (!identityMatch && session.expectedChatId != null) {
+      if (session.expectedExternalUserId != null) {
+        if (fromNumber === session.expectedExternalUserId) {
+          identityMatch = true;
+        }
+      } else if (fromNumber === session.expectedChatId) {
+        identityMatch = true;
+      }
+    }
+
     if (
       !identityMatch &&
       session.expectedPhoneE164 == null &&
+      session.expectedChatId == null &&
       session.expectedExternalUserId != null
     ) {
       if (fromNumber === session.expectedExternalUserId) {

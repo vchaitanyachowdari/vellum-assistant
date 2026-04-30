@@ -996,22 +996,6 @@ export class RelayConnection {
         "Guardian voice verification succeeded",
       );
 
-      // Guardian binding creation for inbound verification is now handled
-      // by the gateway before the ConversationRelay is established. The
-      // gateway intercepts the call, runs the DTMF challenge via <Gather>,
-      // and creates the binding itself. By the time we reach this code path
-      // (outbound verification only), the binding already exists or isn't
-      // applicable.
-      if (result.verificationType === "guardian" && result.bindingConflict) {
-        log.warn(
-          {
-            callSessionId: this.callSessionId,
-            existingGuardian: result.bindingConflict.existingGuardian,
-          },
-          "Guardian binding conflict: another user already holds the voice binding",
-        );
-      }
-
       if (isOutbound) {
         // Keep the pointer message back to the initiating conversation
         const successSession = getCallSession(this.callSessionId);

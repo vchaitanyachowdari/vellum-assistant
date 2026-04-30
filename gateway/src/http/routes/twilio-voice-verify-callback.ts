@@ -12,6 +12,8 @@
  * calls from callers whose identity the gateway has already confirmed.
  */
 
+import { eq } from "drizzle-orm";
+
 import type { GatewayConfig } from "../../config.js";
 import { getLogger } from "../../logger.js";
 import {
@@ -29,6 +31,8 @@ import {
   failureTwiml,
 } from "../../voice/verification.js";
 import { createGuardianBinding } from "../../auth/guardian-bootstrap.js";
+import { getGatewayDb } from "../../db/connection.js";
+import { contactChannels as gwContactChannels } from "../../db/schema.js";
 import {
   assistantDbQuery,
   assistantDbRun,
@@ -120,7 +124,7 @@ export function createTwilioVoiceVerifyCallbackHandler(
           `SELECT c.principal_id AS principalId
            FROM contacts c
            JOIN contact_channels cc ON cc.contact_id = c.id
-           WHERE c.role = 'guardian' AND cc.type = 'vellum'
+           WHERE c.role = 'guardian' AND cc.type = 'vellum' AND cc.status = 'active'
            LIMIT 1`,
           [],
         );
@@ -194,19 +198,43 @@ export function createTwilioVoiceVerifyCallbackHandler(
 
 /**
  * Revoke the existing phone guardian binding by setting status to 'revoked'.
+ * Dual-writes to both assistant DB and gateway DB.
  */
 async function revokeExistingPhoneGuardian(): Promise<void> {
   const now = Date.now();
+
+  const revokedRows = await assistantDbQuery<{ id: string }>(
+    `SELECT cc.id
+     FROM contacts c
+     JOIN contact_channels cc ON cc.contact_id = c.id
+     WHERE c.role = 'guardian' AND cc.type = 'phone' AND cc.status = 'active'`,
+    [],
+  );
+
+  if (revokedRows.length === 0) return;
+
+  const ids = revokedRows.map((r) => r.id);
+  const placeholders = ids.map(() => "?").join(", ");
+
   await assistantDbRun(
     `UPDATE contact_channels
      SET status = 'revoked', policy = 'deny', updated_at = ?
-     WHERE id IN (
-       SELECT cc.id FROM contacts c
-       JOIN contact_channels cc ON cc.contact_id = c.id
-       WHERE c.role = 'guardian' AND cc.type = 'phone' AND cc.status = 'active'
-     )`,
-    [now],
+     WHERE id IN (${placeholders})`,
+    [now, ...ids],
   );
+
+  // Gateway DB dual-write (best-effort)
+  try {
+    const gwDb = getGatewayDb();
+    for (const id of ids) {
+      gwDb.update(gwContactChannels)
+        .set({ status: "revoked", policy: "deny", updatedAt: now })
+        .where(eq(gwContactChannels.id, id))
+        .run();
+    }
+  } catch (gwErr) {
+    log.warn({ err: gwErr }, "Gateway DB revoke dual-write failed (best-effort)");
+  }
 }
 
 /**
