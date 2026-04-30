@@ -72,6 +72,10 @@ struct InferenceServiceCard: View {
 
     // MARK: - Computed State
 
+    private var profilesEnabled: Bool {
+        assistantFeatureFlagStore?.isEnabled("inference-profiles") == true
+    }
+
     private var isLoggedIn: Bool {
         authManager.isAuthenticated
     }
@@ -132,10 +136,14 @@ struct InferenceServiceCard: View {
             managedContent: {
                 if isLoggedIn {
                     VStack(alignment: .leading, spacing: VSpacing.sm) {
-                        managedProviderPicker
-                        if assistantFeatureFlagStore?.isEnabled("inference-profiles") == true {
+                        if profilesEnabled {
                             activeProfilePicker
-                            manageProfilesButton
+                            HStack(spacing: VSpacing.md) {
+                                manageProfilesButton
+                                overridesBadge
+                            }
+                        } else {
+                            managedProviderPicker
                         }
                         ServiceCardActions(
                             hasChanges: hasChanges,
@@ -149,15 +157,19 @@ struct InferenceServiceCard: View {
             },
             yourOwnContent: {
                 VStack(alignment: .leading, spacing: VSpacing.sm) {
-                    providerPicker
+                    if !profilesEnabled {
+                        providerPicker
+                    }
 
                     // API Key field
                     apiKeyField
 
-                    // Active profile picker + Manage Profiles button
-                    if assistantFeatureFlagStore?.isEnabled("inference-profiles") == true {
+                    if profilesEnabled {
                         activeProfilePicker
-                        manageProfilesButton
+                        HStack(spacing: VSpacing.md) {
+                            manageProfilesButton
+                            overridesBadge
+                        }
                     }
 
                     // Action buttons
@@ -176,13 +188,7 @@ struct InferenceServiceCard: View {
                 }
             },
             footer: {
-                // Per-call-site overrides badge — only visible when the user has
-                // at least one override configured. Tapping opens the overrides
-                // sheet.
-                if assistantFeatureFlagStore?.isEnabled("inference-profiles") == true,
-                   store.overridesCount > 0 {
-                    overridesBadge
-                }
+                EmptyView()
             }
         )
         .sheet(isPresented: $showOverridesSheet) {
@@ -359,16 +365,18 @@ struct InferenceServiceCard: View {
 
     // MARK: - Per-Call-Site Overrides Badge
 
-    /// Compact link-styled label that surfaces the count of explicit per-task
-    /// overrides and opens the read-only overrides sheet on tap. Hidden by
-    /// the parent when `store.overridesCount == 0`.
+    /// Compact link-styled label that opens the model profile overrides
+    /// sheet. Shows the override count when overrides exist, or a plain
+    /// "Model profile overrides" link otherwise.
     private var overridesBadge: some View {
         Button {
             showOverridesSheet = true
         } label: {
             Text(
-                "\(store.overridesCount) per-task override"
-                    + (store.overridesCount == 1 ? "" : "s")
+                store.overridesCount > 0
+                    ? "\(store.overridesCount) model profile override"
+                        + (store.overridesCount == 1 ? "" : "s")
+                    : "Model profile overrides"
             )
             .font(VFont.bodySmallDefault)
             .foregroundStyle(.secondary)
@@ -376,7 +384,7 @@ struct InferenceServiceCard: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .accessibilityLabel("View per-task model overrides")
+        .accessibilityLabel("View model profile overrides")
     }
 
     // MARK: - Managed Login Prompt
