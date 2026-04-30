@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import type { SecureKeyBackend } from "@vellumai/credential-storage";
 
@@ -10,6 +10,7 @@ import type { CesMigration } from "../migrations/types.js";
 
 let mockFileExists = false;
 let mockFileContents: string | null = null;
+let useMocks = true;
 
 const existsSyncFn = mock((_path: string): boolean => mockFileExists);
 const mkdirSyncFn = mock((): void => {});
@@ -27,15 +28,36 @@ const logErrorFn = mock((..._args: unknown[]): void => {});
 
 // ---------------------------------------------------------------------------
 // Mock modules — before importing module under test
+//
+// mock.module is process-global in bun. To avoid poisoning other test files,
+// each overridden function delegates to a real implementation (captured via
+// require() before mocking) once `useMocks` is flipped false in afterAll.
+// All other node:fs exports are forwarded unchanged.
 // ---------------------------------------------------------------------------
 
-mock.module("node:fs", () => ({
-  existsSync: existsSyncFn,
-  mkdirSync: mkdirSyncFn,
-  readFileSync: readFileSyncFn,
-  writeFileSync: writeFileSyncFn,
-  renameSync: renameSyncFn,
-}));
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+const _realFs = require("node:fs");
+/* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+
+mock.module("node:fs", () => {
+  const proxy: Record<string, unknown> = {};
+  // Forward every export from the real module.
+  for (const key of Object.keys(_realFs)) {
+    proxy[key] = _realFs[key];
+  }
+  // Override only the five functions the migration runner uses.
+  proxy.existsSync = (...a: unknown[]) =>
+    useMocks ? existsSyncFn(a[0] as string) : _realFs.existsSync(...a);
+  proxy.mkdirSync = (...a: unknown[]) =>
+    useMocks ? mkdirSyncFn(...a) : _realFs.mkdirSync(...a);
+  proxy.readFileSync = (...a: unknown[]) =>
+    useMocks ? readFileSyncFn(...a) : _realFs.readFileSync(...a);
+  proxy.writeFileSync = (...a: unknown[]) =>
+    useMocks ? writeFileSyncFn(...a) : _realFs.writeFileSync(...a);
+  proxy.renameSync = (...a: unknown[]) =>
+    useMocks ? renameSyncFn(...a) : _realFs.renameSync(...a);
+  return proxy;
+});
 
 // Intercept pino at the package level (same technique as workspace-migrations-runner.test.ts)
 // so that the lazy proxy in getLogger() returns our mock child logger.
@@ -55,6 +77,13 @@ mock.module("pino-pretty", () => ({ default: (): object => ({}) }));
 
 // Import after mocking
 import { runCesMigrations } from "../migrations/runner.js";
+
+// ---------------------------------------------------------------------------
+// Restore real behavior after all tests so other files aren't poisoned.
+// ---------------------------------------------------------------------------
+afterAll(() => {
+  useMocks = false;
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
