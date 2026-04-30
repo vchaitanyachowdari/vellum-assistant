@@ -46,6 +46,7 @@ import { resolveCanonicalGuardianRequest } from "../memory/canonical-guardian-st
 import {
   getConversation,
   getConversationOriginChannel,
+  getConversationOverrideProfileFromRow,
 } from "../memory/conversation-crud.js";
 import { ConversationGraphMemory } from "../memory/graph/conversation-graph-memory.js";
 import { PermissionPrompter } from "../permissions/prompter.js";
@@ -561,7 +562,11 @@ export class Conversation {
 
     provider
       .sendMessage([warmMessage], tools, systemPrompt, {
-        config: { max_tokens: 1, callSite: "mainAgent" },
+        config: {
+          max_tokens: 1,
+          callSite: "mainAgent",
+          usageTracking: "manual",
+        },
         signal: abort.signal,
       })
       .then(() => {
@@ -1083,6 +1088,10 @@ export class Conversation {
         lastCompactedAt: this.contextCompactedAt ?? undefined,
         conversationOriginChannel:
           getConversationOriginChannel(this.conversationId) ?? undefined,
+        overrideProfile:
+          getConversationOverrideProfileFromRow(
+            getConversation(this.conversationId),
+          ) ?? null,
       },
     );
     // Track circuit-breaker state for user-initiated `/compact` and other

@@ -869,6 +869,13 @@ export async function runAgentLoopImpl(
         reqId,
       );
     }
+    const compactionOptions = {
+      lastCompactedAt: ctx.contextCompactedAt ?? undefined,
+      precomputedEstimate: compactCheck.estimatedTokens,
+      conversationOriginChannel:
+        getConversationOriginChannel(ctx.conversationId) ?? undefined,
+      overrideProfile: turnOverrideProfile ?? null,
+    };
     let compacted: Awaited<
       ReturnType<typeof ctx.contextWindowManager.maybeCompact>
     > | null = null;
@@ -882,12 +889,7 @@ export async function runAgentLoopImpl(
           {
             messages: messagesForStartOfTurnCompaction,
             signal: abortController.signal,
-            options: {
-              lastCompactedAt: ctx.contextCompactedAt ?? undefined,
-              precomputedEstimate: compactCheck.estimatedTokens,
-              conversationOriginChannel:
-                getConversationOriginChannel(ctx.conversationId) ?? undefined,
-            },
+            options: compactionOptions,
           },
           buildPluginTurnContext(ctx, reqId),
           DEFAULT_TIMEOUTS.compaction,
@@ -1554,7 +1556,10 @@ export async function runAgentLoopImpl(
               {
                 messages: msgs,
                 signal,
-                options: opts,
+                options: {
+                  ...(opts ?? {}),
+                  overrideProfile: turnOverrideProfile ?? null,
+                },
               },
               buildPluginTurnContext(ctx, reqId),
               DEFAULT_TIMEOUTS.compaction,
@@ -1902,6 +1907,7 @@ export async function runAgentLoopImpl(
               targetInputTokensOverride: preflightBudget,
               conversationOriginChannel:
                 getConversationOriginChannel(ctx.conversationId) ?? undefined,
+              overrideProfile: turnOverrideProfile ?? null,
             },
           },
           buildPluginTurnContext(ctx, reqId),
@@ -2160,7 +2166,10 @@ export async function runAgentLoopImpl(
           },
           reducerState,
           (msgs, signal, opts) =>
-            ctx.contextWindowManager.maybeCompact(msgs, signal!, opts),
+            ctx.contextWindowManager.maybeCompact(msgs, signal!, {
+              ...(opts ?? {}),
+              overrideProfile: turnOverrideProfile ?? null,
+            }),
           abortController.signal,
         );
 
@@ -2312,6 +2321,7 @@ export async function runAgentLoopImpl(
                   force: true,
                   minKeepRecentUserTurns: 0,
                   targetInputTokensOverride: correctedTarget,
+                  overrideProfile: turnOverrideProfile ?? null,
                 },
               },
               buildPluginTurnContext(ctx, reqId),
@@ -2581,6 +2591,10 @@ export async function runAgentLoopImpl(
       {
         tokens: state.lastCallInputTokens,
         maxTokens: config.llm.default.contextWindow.maxInputTokens,
+      },
+      {
+        callSite: turnCallSite,
+        overrideProfile: turnOverrideProfile ?? null,
       },
     );
 
@@ -2933,6 +2947,10 @@ function emitUsage(
   providerName?: string,
   llmCallCount = 1,
   contextWindow?: { tokens: number; maxTokens: number },
+  attribution?: {
+    callSite: LLMCallSite | null;
+    overrideProfile?: string | null;
+  },
 ): void {
   recordUsage(
     {
@@ -2951,6 +2969,7 @@ function emitUsage(
     rawResponse,
     llmCallCount,
     contextWindow,
+    attribution,
   );
 }
 
@@ -3001,6 +3020,8 @@ export function applyCompactionResult(
     summaryCacheCreationInputTokens?: number;
     summaryCacheReadInputTokens?: number;
     summaryRawResponses?: unknown[];
+    summaryCallSite?: LLMCallSite;
+    summaryOverrideProfile?: string | null;
   },
   onEvent: (msg: ServerMessage) => void,
   reqId: string | null,
@@ -3059,6 +3080,11 @@ export function applyCompactionResult(
     collapseRawResponses(result.summaryRawResponses),
     undefined /* providerName */,
     1 /* llmCallCount */,
+    undefined /* contextWindow */,
+    {
+      callSite: result.summaryCallSite ?? null,
+      overrideProfile: result.summaryOverrideProfile ?? null,
+    },
   );
 }
 
