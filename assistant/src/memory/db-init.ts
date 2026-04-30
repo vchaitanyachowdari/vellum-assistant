@@ -162,6 +162,7 @@ import {
   migrateStripIntegrationPrefixFromProviderKeys,
   migrateStripPlaceholderSentinelsFromMessages,
   migrateStripThinkingFromConsolidated,
+  migrateToolInvocationsMatchedRuleId,
   migrateUsageDashboardIndexes,
   migrateUsageLlmCallCount,
   migrateVoiceInviteColumns,
@@ -399,6 +400,7 @@ export function initializeDb(): void {
     migrateCreateDocumentConversations,
     migrateLlmUsageAttribution,
     migrateSlackCompactionWatermark,
+    migrateToolInvocationsMatchedRuleId,
     function migrateBackfillAppConversationIds() {
       backfillAppConversationIds();
     },
