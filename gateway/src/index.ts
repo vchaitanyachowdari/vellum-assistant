@@ -1,6 +1,15 @@
 process.title = "vellum-gateway";
 
 import { randomBytes } from "node:crypto";
+
+import {
+  TWILIO_CONNECT_ACTION_WEBHOOK_PATH,
+  TWILIO_MEDIA_STREAM_WEBHOOK_PATH,
+  TWILIO_RELAY_WEBHOOK_PATH,
+  TWILIO_STATUS_WEBHOOK_PATH,
+  TWILIO_VOICE_WEBHOOK_PATH,
+} from "@vellumai/service-contracts/twilio-ingress";
+
 import { AuthRateLimiter } from "./auth-rate-limiter.js";
 import {
   loadOrCreateSigningKey,
@@ -141,6 +150,11 @@ import { fetchImpl } from "./fetch.js";
 import { isNewCommand, handleNewCommand } from "./webhook-pipeline.js";
 import { reconcileTelegramWebhook } from "./telegram/webhook-manager.js";
 import { registerEmailCallbackRoute } from "./email/register-callback.js";
+import { syncConfiguredTwilioPhoneNumberWebhooks } from "./twilio/webhook-sync.js";
+import {
+  isOnlyVelayTwilioIngressChange,
+  shouldSyncTwilioPhoneWebhooksAfterConfigChange,
+} from "./twilio/webhook-sync-trigger.js";
 import { GatewayIpcServer } from "./ipc/server.js";
 import { contactRoutes } from "./ipc/contact-handlers.js";
 import {
@@ -156,6 +170,7 @@ import { AvatarSyncWatcher } from "./avatar-sync/avatar-sync-watcher.js";
 import { SlackAvatarSyncer } from "./avatar-sync/slack-avatar-syncer.js";
 import { initGatewayDb } from "./db/connection.js";
 import { runPostAssistantReady } from "./post-assistant-ready.js";
+import { createVelayTunnelClient } from "./velay/client.js";
 
 const log = getLogger("main");
 
@@ -277,6 +292,10 @@ async function main() {
   // caches at call time, with automatic TTL refresh.
   const credentialCache = new CredentialCache();
   const configFileCache = new ConfigFileCache();
+  const velayTunnelClient = createVelayTunnelClient(config, {
+    credentials: credentialCache,
+    configFile: configFileCache,
+  });
 
   // ── Avatar sync ──
   const avatarChannelSyncer = new AvatarChannelSyncer();
@@ -445,15 +464,15 @@ async function main() {
       handler: (req) => handleTelegramWebhook(req),
     },
     {
-      path: "/webhooks/twilio/voice",
+      path: TWILIO_VOICE_WEBHOOK_PATH,
       handler: (req) => handleTwilioVoiceWebhook(req),
     },
     {
-      path: "/webhooks/twilio/status",
+      path: TWILIO_STATUS_WEBHOOK_PATH,
       handler: (req) => handleTwilioStatusWebhook(req),
     },
     {
-      path: "/webhooks/twilio/connect-action",
+      path: TWILIO_CONNECT_ACTION_WEBHOOK_PATH,
       handler: (req) => handleTwilioConnectActionWebhook(req),
     },
     {
@@ -1445,15 +1464,15 @@ async function main() {
       // ── Pre-router: WebSocket upgrades ──
       // Bun's WS upgrade needs `server.upgrade()` which doesn't return
       // a Response, so these can't go through the route table.
-      if (url.pathname === "/webhooks/twilio/relay") {
+      if (url.pathname === TWILIO_RELAY_WEBHOOK_PATH) {
         const upgradeResult = handleTwilioRelayWs(req, server);
         if (upgradeResult !== undefined) return upgradeResult;
         return undefined as unknown as Response;
       }
 
       if (
-        url.pathname === "/webhooks/twilio/media-stream" ||
-        url.pathname.startsWith("/webhooks/twilio/media-stream/")
+        url.pathname === TWILIO_MEDIA_STREAM_WEBHOOK_PATH ||
+        url.pathname.startsWith(`${TWILIO_MEDIA_STREAM_WEBHOOK_PATH}/`)
       ) {
         const upgradeResult = handleTwilioMediaWs(req, server);
         if (upgradeResult !== undefined) return upgradeResult;
@@ -1532,6 +1551,7 @@ async function main() {
 
   log.info({ port: server.port }, "Gateway HTTP server listening");
   logAuthBypassState();
+  velayTunnelClient?.start();
 
   // Start periodic background cleanup for dedup caches
   telegramDedupCache.startCleanup();
@@ -1902,6 +1922,15 @@ async function main() {
       }
     }
 
+    if (changed.has("twilio")) {
+      syncConfiguredTwilioPhoneNumberWebhooks({
+        credentials: credentialCache,
+        configFile: configFileCache,
+      }).catch((err) => {
+        log.warn({ err }, "Twilio webhook sync failed after credential change");
+      });
+    }
+
     // Register email callback route with the platform so inbound email
     // webhooks are forwarded to this gateway (same pattern as Telegram).
     // Fires on initial credential load and whenever vellum credentials change
@@ -1933,7 +1962,13 @@ async function main() {
     configFileCache.invalidate();
 
     // Side effect: reconcile Telegram webhook when ingress URL changes
-    if (event.changedKeys.has("ingress") && isTelegramConfigured()) {
+    const onlyVelayTwilioIngressChanged = isOnlyVelayTwilioIngressChange(event);
+
+    if (
+      event.changedKeys.has("ingress") &&
+      !onlyVelayTwilioIngressChanged &&
+      isTelegramConfigured()
+    ) {
       reconcileTelegramWebhook(telegramCaches).catch((err) => {
         log.error(
           { err },
@@ -1942,9 +1977,22 @@ async function main() {
       });
     }
 
+    if (shouldSyncTwilioPhoneWebhooksAfterConfigChange(event)) {
+      syncConfiguredTwilioPhoneNumberWebhooks({
+        credentials: credentialCache,
+        configFile: configFileCache,
+      }).catch((err) => {
+        log.warn({ err }, "Twilio webhook sync failed after config change");
+      });
+    }
+
     // Side effect: re-register email callback when ingress URL changes so
     // the platform callback route points at the new self-hosted URL.
-    if (event.changedKeys.has("ingress") && vellumReady) {
+    if (
+      event.changedKeys.has("ingress") &&
+      !onlyVelayTwilioIngressChanged &&
+      vellumReady
+    ) {
       registerEmailCallbackRoute({
         credentials: credentialCache,
         configFile: configFileCache,
@@ -2014,12 +2062,15 @@ async function main() {
   process.on("SIGTERM", () => {
     log.info("SIGTERM received, starting graceful shutdown");
     draining = true;
+    const shutdownTasks: Promise<void>[] = [];
     sleepWakeDetector.stop();
     credentialWatcher.stop();
     configFileWatcher.stop();
     avatarSyncWatcher.stop();
     featureFlagWatcher.stop();
     remoteFeatureFlagSync.stop();
+    const velayStop = velayTunnelClient?.stop();
+    if (velayStop) shutdownTasks.push(velayStop);
     ipcServer.stop();
     telegramDedupCache.stopCleanup();
     whatsappDedupCache.stopCleanup();
@@ -2031,8 +2082,10 @@ async function main() {
     }
     setTimeout(() => {
       log.info("Drain window elapsed, stopping server");
-      server.stop(true);
-      process.exit(0);
+      void Promise.allSettled(shutdownTasks).then(() => {
+        server.stop(true);
+        process.exit(0);
+      });
     }, drainMs);
   });
 }

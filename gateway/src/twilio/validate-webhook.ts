@@ -1,3 +1,11 @@
+import {
+  normalizePublicBaseUrl,
+  TWILIO_CONNECT_ACTION_WEBHOOK_PATH,
+  TWILIO_PUBLIC_BASE_URL_FIELD,
+  TWILIO_STATUS_WEBHOOK_PATH,
+  TWILIO_VOICE_WEBHOOK_PATH,
+} from "@vellumai/service-contracts/twilio-ingress";
+
 import type { CredentialCache } from "../credential-cache.js";
 import type { ConfigFileCache } from "../config-file-cache.js";
 import type { GatewayConfig } from "../config.js";
@@ -28,15 +36,15 @@ function firstHeaderValue(value: string | null): string | undefined {
 function inferWebhookKind(reqUrl: string): TwilioWebhookKind {
   const pathname = new URL(reqUrl).pathname;
 
-  if (pathname === "/webhooks/twilio/voice") {
+  if (pathname === TWILIO_VOICE_WEBHOOK_PATH) {
     return "voice";
   }
 
-  if (pathname === "/webhooks/twilio/status") {
+  if (pathname === TWILIO_STATUS_WEBHOOK_PATH) {
     return "status";
   }
 
-  if (pathname === "/webhooks/twilio/connect-action") {
+  if (pathname === TWILIO_CONNECT_ACTION_WEBHOOK_PATH) {
     return "connect-action";
   }
 
@@ -55,6 +63,7 @@ function normalizeUrlForLog(url: string): string {
 type ResolvedValidationContext = {
   authToken: string | undefined;
   ingressUrl: string | undefined;
+  twilioIngressUrl: string | undefined;
 };
 
 function buildSignatureUrlCandidateDetails(
@@ -80,11 +89,12 @@ function buildSignatureUrlCandidateDetails(
     source: SignatureUrlCandidateSource,
   ): void => {
     if (!base) return;
-    const normalized = base.trim().replace(/\/+$/, "");
+    const normalized = normalizePublicBaseUrl(base);
     if (!normalized) return;
     addCandidate(`${normalized}${pathAndQuery}`, source);
   };
 
+  addBase(resolved.twilioIngressUrl, "configured_ingress");
   addBase(resolved.ingressUrl, "configured_ingress");
 
   const forwardedProto =
@@ -173,6 +183,31 @@ export type TwilioValidationCaches = {
   configFile?: ConfigFileCache;
 };
 
+function readConfiguredIngressUrls(
+  configFile: ConfigFileCache | undefined,
+): Pick<ResolvedValidationContext, "ingressUrl" | "twilioIngressUrl"> {
+  if (!configFile) {
+    return { ingressUrl: undefined, twilioIngressUrl: undefined };
+  }
+
+  return {
+    ingressUrl: configFile.getString("ingress", "publicBaseUrl"),
+    twilioIngressUrl: configFile.getString(
+      "ingress",
+      TWILIO_PUBLIC_BASE_URL_FIELD,
+    ),
+  };
+}
+
+function isPublicIngressDisabled(
+  configFile: ConfigFileCache | undefined,
+): boolean {
+  if (!configFile || typeof configFile.getBoolean !== "function") {
+    return false;
+  }
+  return configFile.getBoolean("ingress", "enabled", { force: true }) === false;
+}
+
 /**
  * Validate an incoming Twilio webhook request:
  * - Enforces POST method
@@ -201,17 +236,30 @@ export async function validateTwilioWebhookRequest(
     return Response.json({ error: "Payload too large" }, { status: 413 });
   }
 
+  if (isPublicIngressDisabled(caches?.configFile)) {
+    log.warn(
+      { webhookKind: inferWebhookKind(req.url) },
+      "Twilio webhook rejected because public ingress is disabled",
+    );
+    return Response.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   // Resolve the auth token from cache
   let authToken = caches?.credentials
     ? await caches.credentials.get(credentialKey("twilio", "auth_token"))
     : undefined;
 
-  // Resolve ingress URL from cache
-  let ingressUrl = caches?.configFile
-    ? caches.configFile.getString("ingress", "publicBaseUrl")
-    : undefined;
+  // Resolve ingress URLs from cache. Twilio-specific ingress wins, then
+  // the generic public ingress URL remains the compatibility fallback.
+  let { ingressUrl, twilioIngressUrl } = readConfiguredIngressUrls(
+    caches?.configFile,
+  );
 
-  let resolved: ResolvedValidationContext = { authToken, ingressUrl };
+  let resolved: ResolvedValidationContext = {
+    authToken,
+    ingressUrl,
+    twilioIngressUrl,
+  };
 
   let validationDiagnostics = buildValidationDiagnostics(req, resolved);
   let { logContext: validationLogContext, signatureUrlCandidates } =
@@ -226,16 +274,21 @@ export async function validateTwilioWebhookRequest(
     );
     if (freshAuthToken) {
       let freshIngressUrl = ingressUrl;
+      let freshTwilioIngressUrl = twilioIngressUrl;
       if (caches.configFile) {
         caches.configFile.refreshNow();
-        freshIngressUrl = caches.configFile.getString(
-          "ingress",
-          "publicBaseUrl",
-        );
+        const freshIngressUrls = readConfiguredIngressUrls(caches.configFile);
+        freshIngressUrl = freshIngressUrls.ingressUrl;
+        freshTwilioIngressUrl = freshIngressUrls.twilioIngressUrl;
       }
       authToken = freshAuthToken;
       ingressUrl = freshIngressUrl;
-      resolved = { authToken: freshAuthToken, ingressUrl: freshIngressUrl };
+      twilioIngressUrl = freshTwilioIngressUrl;
+      resolved = {
+        authToken: freshAuthToken,
+        ingressUrl: freshIngressUrl,
+        twilioIngressUrl: freshTwilioIngressUrl,
+      };
       validationDiagnostics = buildValidationDiagnostics(req, resolved);
       ({ logContext: validationLogContext, signatureUrlCandidates } =
         validationDiagnostics);
@@ -298,19 +351,24 @@ export async function validateTwilioWebhookRequest(
       { force: true },
     );
     let freshIngressUrl: string | undefined;
+    let freshTwilioIngressUrl: string | undefined;
     if (caches.configFile) {
       caches.configFile.refreshNow();
-      freshIngressUrl = caches.configFile.getString("ingress", "publicBaseUrl");
+      const freshIngressUrls = readConfiguredIngressUrls(caches.configFile);
+      freshIngressUrl = freshIngressUrls.ingressUrl;
+      freshTwilioIngressUrl = freshIngressUrls.twilioIngressUrl;
     }
 
     const retryAuthToken = freshAuthToken;
     const retryIngressUrl = freshIngressUrl;
+    const retryTwilioIngressUrl = freshTwilioIngressUrl;
 
     if (retryAuthToken) {
       // Rebuild candidates with potentially updated ingress URL
       const retryResolved: ResolvedValidationContext = {
         authToken: retryAuthToken,
         ingressUrl: retryIngressUrl,
+        twilioIngressUrl: retryTwilioIngressUrl,
       };
       const retryDiagnostics = buildValidationDiagnostics(req, retryResolved);
       const retryCandidateUrls = retryDiagnostics.signatureUrlCandidates.map(
@@ -325,9 +383,13 @@ export async function validateTwilioWebhookRequest(
 
       if (validatingIndex !== -1) {
         log.info(
-          "Twilio webhook signature validated after forced credential refresh",
+          "Twilio webhook signature validated after forced cache refresh",
         );
         // Update references for the success log below
+        ingressUrl = retryIngressUrl;
+        twilioIngressUrl = retryTwilioIngressUrl;
+        validationLogContext = retryDiagnostics.logContext;
+        signatureUrlCandidates = retryDiagnostics.signatureUrlCandidates;
         signatureCandidateUrls = retryCandidateUrls;
       }
     }
@@ -351,12 +413,12 @@ export async function validateTwilioWebhookRequest(
     validatedCandidateUrl: normalizeUrlForLog(validatingCandidate.url),
   };
 
-  // When ingressPublicBaseUrl is configured and the signature only validated
+  // When a configured ingress URL is present and the signature only validated
   // against the raw local URL (last candidate), log a warning. This indicates
   // a likely drift between the configured ingress URL and the actual webhook
   // registration — the ingress URL should match what Twilio is signing against.
   if (
-    ingressUrl &&
+    (twilioIngressUrl || ingressUrl) &&
     validatingIndex === signatureCandidateUrls.length - 1 &&
     signatureCandidateUrls.length > 1
   ) {
@@ -364,9 +426,10 @@ export async function validateTwilioWebhookRequest(
       {
         ...successLogContext,
         ingressPublicBaseUrl: ingressUrl,
+        twilioPublicBaseUrl: twilioIngressUrl,
       },
       "Twilio signature validated against raw request URL fallback — " +
-        "ingress.publicBaseUrl may be stale or mismatched with the actual webhook registration",
+        "configured Twilio ingress may be stale or mismatched with the actual webhook registration",
     );
   } else {
     log.info(successLogContext, "Twilio webhook signature validated");
