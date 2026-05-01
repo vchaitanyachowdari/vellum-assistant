@@ -28,10 +28,6 @@ import {
 import { ProfileEntry } from "../../config/schemas/llm.js";
 import { VALID_MEMORY_EMBEDDING_PROVIDERS } from "../../config/schemas/memory-storage.js";
 import { VALID_INFERENCE_PROVIDERS } from "../../config/schemas/services.js";
-import {
-  clearTwilioPublicBaseUrlManagedBy,
-  configPatchSetsTwilioPublicBaseUrl,
-} from "../../config/twilio-ingress-ownership.js";
 import { getConfigWatcher } from "../../daemon/config-watcher.js";
 import {
   getEmbeddingConfigInfo,
@@ -342,12 +338,7 @@ function handlePatchConfig({ body }: RouteHandlerArgs) {
   try {
     const raw = loadRawConfig();
     const patch = body as Record<string, unknown>;
-    const clearsTwilioPublicBaseUrlManager =
-      configPatchSetsTwilioPublicBaseUrl(patch);
     deepMergeOverwrite(raw, patch);
-    if (clearsTwilioPublicBaseUrlManager) {
-      clearTwilioPublicBaseUrlManagedBy(raw);
-    }
     saveRawConfig(raw);
     return { ok: true };
   } catch (err) {

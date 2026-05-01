@@ -310,8 +310,7 @@ describe("ChannelReadinessService", () => {
     mockTwilioPhoneNumber = "+15550123";
     mockRawConfig = {
       ingress: {
-        publicBaseUrl: "",
-        twilioPublicBaseUrl: "https://twilio.example.com",
+        publicBaseUrl: "https://twilio.example.com",
       },
     };
 
@@ -326,34 +325,31 @@ describe("ChannelReadinessService", () => {
     });
   });
 
-  test("phone readiness falls back to generic ingress when Twilio-specific ingress is whitespace", async () => {
+  test("phone readiness fails when publicBaseUrl is whitespace only", async () => {
     mockHasTwilioCredentials = true;
     mockTwilioPhoneNumber = "+15550123";
     mockRawConfig = {
       ingress: {
-        publicBaseUrl: "https://ngrok.example.com",
-        twilioPublicBaseUrl: "   ",
+        publicBaseUrl: "   ",
       },
     };
 
     const readiness = createReadinessService();
     const [snapshot] = await readiness.getReadiness("phone");
 
-    expect(snapshot.ready).toBe(true);
-    expect(snapshot.localChecks).toContainEqual({
-      name: "ingress",
-      passed: true,
-      message: "Twilio public ingress URL is configured",
+    expect(snapshot.ready).toBe(false);
+    expect(snapshot.reasons).toContainEqual({
+      code: "ingress",
+      text: "No Twilio public ingress URL or managed callback route is configured",
     });
   });
 
-  test("telegram readiness still requires generic public ingress", async () => {
+  test("telegram readiness fails when publicBaseUrl is empty", async () => {
     mockSecureKeys[credentialKey("telegram", "bot_token")] = "123:abc";
     mockSecureKeys[credentialKey("telegram", "webhook_secret")] = "secret";
     mockRawConfig = {
       ingress: {
         publicBaseUrl: "",
-        twilioPublicBaseUrl: "https://twilio.example.com",
       },
     };
 
