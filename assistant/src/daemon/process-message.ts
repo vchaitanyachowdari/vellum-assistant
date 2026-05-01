@@ -17,6 +17,7 @@ import {
   parseInterfaceId,
   supportsHostProxy,
 } from "../channels/types.js";
+import { resolveEffectiveContextWindow } from "../config/llm-context-resolution.js";
 import { getConfig } from "../config/loader.js";
 import {
   getAttachmentsByIds,
@@ -25,6 +26,7 @@ import {
 import {
   addMessage,
   getConversation,
+  getConversationOverrideProfile,
   provenanceFromTrustContext,
   setConversationOriginChannelIfUnset,
   setConversationOriginInterfaceIfUnset,
@@ -37,7 +39,11 @@ import type { Conversation } from "./conversation.js";
 import { buildSlackMetaForPersistence } from "./conversation-messaging.js";
 import { formatCompactResult } from "./conversation-process.js";
 import { resolveChannelCapabilities } from "./conversation-runtime-assembly.js";
-import { resolveSlash, type SlashContext } from "./conversation-slash.js";
+import {
+  classifySlash,
+  resolveSlash,
+  type SlashContext,
+} from "./conversation-slash.js";
 import {
   getOrCreateConversation as getOrCreateActiveConversation,
   mergeConversationOptions,
@@ -224,18 +230,28 @@ export async function processMessage(
     sourceInterface,
   );
 
-  const config = getConfig();
   const serverInterfaceCtx = conversation.getTurnInterfaceContext();
-  const slashContext: SlashContext = {
-    messageCount: conversation.getMessages().length,
-    inputTokens: conversation.usageStats.inputTokens,
-    outputTokens: conversation.usageStats.outputTokens,
-    maxInputTokens: config.llm.default.contextWindow.maxInputTokens,
-    model: config.llm.default.model,
-    provider: config.llm.default.provider,
-    estimatedCost: conversation.usageStats.estimatedCost,
-    userMessageInterface: serverInterfaceCtx?.userMessageInterface,
-  };
+  const slashContext: SlashContext | undefined =
+    classifySlash(content) === "passthrough"
+      ? undefined
+      : (() => {
+          const config = getConfig();
+          const contextWindow = resolveEffectiveContextWindow({
+            llm: config.llm,
+            callSite: "mainAgent",
+            overrideProfile: getConversationOverrideProfile(conversationId),
+          });
+          return {
+            messageCount: conversation.getMessages().length,
+            inputTokens: conversation.usageStats.inputTokens,
+            outputTokens: conversation.usageStats.outputTokens,
+            maxInputTokens: contextWindow.maxInputTokens,
+            model: contextWindow.model,
+            provider: contextWindow.provider,
+            estimatedCost: conversation.usageStats.estimatedCost,
+            userMessageInterface: serverInterfaceCtx?.userMessageInterface,
+          };
+        })();
   const slashResult = await resolveSlash(content, slashContext);
 
   const slackMeta = buildSlackMetaForPersistence({
