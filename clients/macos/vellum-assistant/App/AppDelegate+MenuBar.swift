@@ -917,7 +917,8 @@ extension AppDelegate {
         }
         let result = try await AuthService.shared.hatchAssistant(
             organizationId: organizationId,
-            name: name
+            name: name,
+            mode: .create
         )
         guard case .createdNew(let platformAssistant) = result else {
             throw AssistantSwitcherError.assistantAlreadyExists
