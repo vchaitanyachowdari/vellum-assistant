@@ -5,6 +5,11 @@
  * implements the MessagingProvider interface.
  */
 
+import {
+  buildSlackUserLabelMap,
+  renderSlackTextForModel,
+} from "@vellumai/slack-text";
+
 import { findContactChannel } from "../../../contacts/contact-store.js";
 import { upsertContactChannel } from "../../../contacts/contacts-write.js";
 import type { OAuthConnection } from "../../../oauth/connection.js";
@@ -218,6 +223,7 @@ function mapMessage(
   msg: SlackMessage,
   channelId: string,
   senderName: string,
+  renderedText: string,
 ): Message {
   // Bot-authored when Slack sets `subtype: "bot_message"` or attributes the
   // row to a `bot_id` with no user. Backfill callers rely on this flag to
@@ -229,7 +235,7 @@ function mapMessage(
     id: msg.ts,
     conversationId: channelId,
     sender: { id: msg.user ?? msg.bot_id ?? "unknown", name: senderName },
-    text: msg.text,
+    text: renderedText,
     timestamp: parseFloat(msg.ts) * 1000,
     threadId: msg.thread_ts,
     replyCount: msg.reply_count,
@@ -247,12 +253,15 @@ function mapMessage(
   };
 }
 
-function mapSearchMatch(match: SlackSearchMatch): Message {
+function mapSearchMatch(
+  match: SlackSearchMatch,
+  userLabels: Record<string, string>,
+): Message {
   return {
     id: match.ts,
     conversationId: match.channel.id,
     sender: { id: match.user ?? "unknown", name: match.username ?? "unknown" },
-    text: match.text,
+    text: renderSlackTextForModel(match.text, { userLabels }),
     timestamp: parseFloat(match.ts) * 1000,
     threadId: match.thread_ts,
     platform: "slack",
@@ -265,12 +274,43 @@ async function mapSlackMessages(
   channelId: string,
   slackMessages: SlackMessage[],
 ): Promise<Message[]> {
+  const userLabels = await buildMentionUserLabels(
+    auth,
+    slackMessages.map((msg) => msg.text),
+  );
   const messages: Message[] = [];
   for (const msg of slackMessages) {
     const name = await resolveUserName(auth, msg.user ?? "");
-    messages.push(mapMessage(msg, channelId, name));
+    messages.push(
+      mapMessage(
+        msg,
+        channelId,
+        name,
+        renderSlackTextForModel(msg.text, { userLabels }),
+      ),
+    );
   }
   return messages;
+}
+
+async function buildMentionUserLabels(
+  auth: OAuthConnection | string,
+  textValues: Iterable<string | undefined>,
+): Promise<Record<string, string>> {
+  return buildSlackUserLabelMap(textValues, (userId) =>
+    resolveUserName(auth, userId),
+  );
+}
+
+async function mapSearchMatches(
+  auth: OAuthConnection | string,
+  matches: SlackSearchMatch[],
+): Promise<Message[]> {
+  const userLabels = await buildMentionUserLabels(
+    auth,
+    matches.map((match) => match.text),
+  );
+  return matches.map((match) => mapSearchMatch(match, userLabels));
 }
 
 export const slackProvider: MessagingProvider = {
@@ -444,12 +484,14 @@ export const slackProvider: MessagingProvider = {
     query: string,
     options?: SearchOptions,
   ): Promise<SearchResult> {
-    const resp = await runReadWithFallback(connection, (auth) =>
-      slack.searchMessages(auth, query, options?.count ?? 20),
-    );
+    let auth: OAuthConnection | string = getReadAuth(connection);
+    const resp = await runReadWithFallback(connection, async (a) => {
+      auth = a;
+      return slack.searchMessages(a, query, options?.count ?? 20);
+    });
     return {
       total: resp.messages.total,
-      messages: resp.messages.matches.map(mapSearchMatch),
+      messages: await mapSearchMatches(auth, resp.messages.matches),
       hasMore: resp.messages.paging.page < resp.messages.paging.pages,
     };
   },

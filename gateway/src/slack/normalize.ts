@@ -1,3 +1,8 @@
+import {
+  renderSlackTextForModel,
+  stripLeadingSlackMentionFallback,
+  stripLeadingSlackUserMention,
+} from "@vellumai/slack-text";
 import type { GatewayConfig } from "../config.js";
 import { fetchImpl } from "../fetch.js";
 import { resolveAssistant, isRejection } from "../routing/resolve-assistant.js";
@@ -275,15 +280,55 @@ export interface SlackMessageDeletedEvent {
   };
 }
 
+export type SlackTextRenderContext = {
+  botUserId?: string;
+  userLabels?: Record<string, string>;
+};
+
 /**
- * Strip leading bot-mention tokens (`<@U...>`) from the message text.
- * Slack wraps mentions as `<@UXXXXXX>`, often at the start of an
- * app_mention event's text field. We remove all leading occurrences
- * so the assistant receives clean user content.
+ * Strip leading bot-mention tokens from Slack message text.
+ *
+ * When the bot user ID is known, only that exact mention is stripped. Without a
+ * bot user ID, strip just one leading mention as an app_mention compatibility
+ * fallback.
  */
-export function stripBotMention(text: string): string {
-  const stripped = text.replace(/^(<@[A-Z0-9]+>\s*)+/i, "").trim();
-  return stripped || text.trim();
+export function stripBotMention(text: string, botUserId?: string): string {
+  const stripped = botUserId
+    ? stripLeadingSlackUserMention(text, botUserId)
+    : stripLeadingSlackMentionFallback(text);
+  return stripped.trim() || text.trim();
+}
+
+function renderSlackInboundText(
+  text: string,
+  context: SlackTextRenderContext = {},
+  options: {
+    stripLeadingBotMention?: boolean;
+    fallbackStripFirstMention?: boolean;
+  } = {},
+): string {
+  let stripped = text;
+  if (options.stripLeadingBotMention) {
+    stripped = context.botUserId
+      ? stripBotMention(text, context.botUserId)
+      : options.fallbackStripFirstMention
+        ? stripBotMention(text)
+        : text.trim();
+  }
+
+  return renderSlackTextForModel(stripped, {
+    userLabels: context.userLabels,
+  });
+}
+
+function withBotUserId(
+  botUserId: string | undefined,
+  context: SlackTextRenderContext | undefined,
+): SlackTextRenderContext {
+  return {
+    ...context,
+    botUserId: context?.botUserId ?? botUserId,
+  };
 }
 
 function extractSlackAttachments(files: SlackFile[] | undefined): Array<{
@@ -305,6 +350,18 @@ function extractSlackAttachments(files: SlackFile[] | undefined): Array<{
       mimeType: f.mimetype,
       fileSize: f.size,
     }));
+}
+
+function extractSlackFileMap(
+  files: SlackFile[] | undefined,
+): Map<string, SlackFile> | undefined {
+  if (!files || files.length === 0) return undefined;
+  const downloadableFiles = files.filter(
+    (f) => f.url_private_download || f.url_private,
+  );
+  return downloadableFiles.length
+    ? new Map(downloadableFiles.map((f) => [f.id, f]))
+    : undefined;
 }
 
 export type NormalizedSlackEvent = {
@@ -332,6 +389,7 @@ export function normalizeSlackDirectMessage(
   config: GatewayConfig,
   botUserId?: string,
   botToken?: string,
+  renderContext?: SlackTextRenderContext,
 ): NormalizedSlackEvent | null {
   // Ignore messages from the bot itself
   if (botUserId && event.user === botUserId) return null;
@@ -360,13 +418,7 @@ export function normalizeSlackDirectMessage(
     event.client_msg_id ?? event.ts ?? `${event.channel}:${event.ts}`;
 
   const attachments = extractSlackAttachments(event.files);
-  const slackFiles = event.files?.length
-    ? new Map(
-        event.files
-          .filter((f) => f.url_private_download || f.url_private)
-          .map((f) => [f.id, f]),
-      )
-    : undefined;
+  const slackFiles = extractSlackFileMap(event.files);
 
   // Use cache-only lookup to avoid blocking normalization on network calls.
   // A background fetch warms the cache for subsequent messages from this user.
@@ -374,6 +426,10 @@ export function normalizeSlackDirectMessage(
     botToken && event.user
       ? resolveSlackUserSync(event.user, botToken)
       : undefined;
+  const content = renderSlackInboundText(
+    event.text,
+    withBotUserId(botUserId, renderContext),
+  );
 
   return {
     event: {
@@ -381,7 +437,7 @@ export function normalizeSlackDirectMessage(
       sourceChannel: "slack",
       receivedAt: new Date().toISOString(),
       message: {
-        content: event.text,
+        content,
         conversationExternalId: event.channel,
         externalMessageId,
         ...(attachments.length > 0 ? { attachments } : {}),
@@ -421,6 +477,7 @@ export function normalizeSlackChannelMessage(
   config: GatewayConfig,
   botUserId?: string,
   botToken?: string,
+  renderContext?: SlackTextRenderContext,
 ): NormalizedSlackEvent | null {
   if (botUserId && event.user === botUserId) return null;
   // file_share is allowed so image/file uploads are delivered to the assistant.
@@ -430,18 +487,16 @@ export function normalizeSlackChannelMessage(
   const routing = resolveAssistant(config, event.channel, event.user);
   if (isRejection(routing)) return null;
 
-  const content = stripBotMention(event.text);
+  const content = renderSlackInboundText(
+    event.text,
+    withBotUserId(botUserId, renderContext),
+    { stripLeadingBotMention: true, fallbackStripFirstMention: true },
+  );
   const externalMessageId =
     event.client_msg_id ?? event.ts ?? `${event.channel}:${event.ts}`;
 
   const attachments = extractSlackAttachments(event.files);
-  const slackFiles = event.files?.length
-    ? new Map(
-        event.files
-          .filter((f) => f.url_private_download || f.url_private)
-          .map((f) => [f.id, f]),
-      )
-    : undefined;
+  const slackFiles = extractSlackFileMap(event.files);
 
   const userInfo =
     botToken && event.user
@@ -492,25 +547,28 @@ export function normalizeSlackAppMention(
   event: SlackAppMentionEvent,
   eventId: string,
   config: GatewayConfig,
+  botUserId?: string,
   botToken?: string,
+  renderContext?: SlackTextRenderContext,
 ): NormalizedSlackEvent | null {
   const routing = resolveAssistant(config, event.channel, event.user);
   if (isRejection(routing)) {
     return null;
   }
 
-  const content = stripBotMention(event.text);
+  const content = renderSlackInboundText(
+    event.text,
+    withBotUserId(botUserId, renderContext),
+    {
+      stripLeadingBotMention: true,
+      fallbackStripFirstMention: true,
+    },
+  );
   const externalMessageId =
     event.client_msg_id ?? event.ts ?? `${event.channel}:${event.ts}`;
 
   const attachments = extractSlackAttachments(event.files);
-  const slackFiles = event.files?.length
-    ? new Map(
-        event.files
-          .filter((f) => f.url_private_download || f.url_private)
-          .map((f) => [f.id, f]),
-      )
-    : undefined;
+  const slackFiles = extractSlackFileMap(event.files);
 
   const userInfo =
     botToken && event.user
@@ -792,6 +850,7 @@ export function normalizeSlackMessageEdit(
   eventId: string,
   config: GatewayConfig,
   botUserId?: string,
+  renderContext?: SlackTextRenderContext,
 ): NormalizedSlackEvent | null {
   const edited = event.message;
   if (!edited) return null;
@@ -817,7 +876,14 @@ export function normalizeSlackMessageEdit(
   }
   if (isRejection(routing)) return null;
 
-  const content = stripBotMention(edited.text);
+  const content = renderSlackInboundText(
+    edited.text,
+    withBotUserId(botUserId, renderContext),
+    {
+      stripLeadingBotMention: true,
+      fallbackStripFirstMention: !botUserId,
+    },
+  );
 
   // Each edit event gets a unique externalMessageId so the dedup pipeline
   // does not discard subsequent edits of the same Slack message.

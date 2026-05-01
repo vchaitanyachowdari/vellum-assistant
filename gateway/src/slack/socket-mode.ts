@@ -1,7 +1,9 @@
+import { buildSlackUserLabelMap } from "@vellumai/slack-text";
 import { getLogger } from "../logger.js";
 import { fetchImpl } from "../fetch.js";
 import type { GatewayConfig } from "../config.js";
 import { SlackStore } from "../db/slack-store.js";
+import { isRejection, resolveAssistant } from "../routing/resolve-assistant.js";
 import {
   normalizeSlackAppMention,
   normalizeSlackDirectMessage,
@@ -30,6 +32,7 @@ const MAX_BACKOFF_MS = 30_000;
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEDUP_CLEANUP_INTERVAL_MS = 60 * 60 * 1_000;
 const ACTIVE_THREAD_TTL_MS = 24 * 60 * 60 * 1_000;
+const USER_RESOLVE_TIMEOUT_MS = 3_000;
 
 export type SlackSocketModeConfig = {
   appToken: string;
@@ -61,6 +64,7 @@ export class SlackSocketModeClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private dedupCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private store: SlackStore;
+  private emitQueues: Map<string, Promise<void>> | undefined = new Map();
 
   constructor(
     config: SlackSocketModeConfig,
@@ -586,7 +590,20 @@ export class SlackSocketModeClient {
     }
     this.store.markEventSeen(eventId, DEDUP_TTL_MS);
 
-    this.normalizeAndEmit(
+    if (isAppMention) {
+      const appMentionEvent = event as SlackAppMentionEvent;
+      const threadTs = appMentionEvent.thread_ts ?? appMentionEvent.ts;
+      const routing = resolveAssistant(
+        this.config.gatewayConfig,
+        appMentionEvent.channel,
+        appMentionEvent.user,
+      );
+      if (threadTs && !isRejection(routing)) {
+        this.store.trackThread(threadTs, ACTIVE_THREAD_TTL_MS);
+      }
+    }
+
+    this.enqueueNormalizeAndEmit(
       event,
       eventId,
       isAppMention,
@@ -599,7 +616,50 @@ export class SlackSocketModeClient {
     );
   }
 
-  private normalizeAndEmit(
+  private extractTextBearingContent(
+    event:
+      | SlackAppMentionEvent
+      | SlackDirectMessageEvent
+      | SlackChannelMessageEvent
+      | SlackMessageChangedEvent
+      | SlackMessageDeletedEvent
+      | SlackReactionAddedEvent
+      | SlackReactionRemovedEvent,
+  ): string | undefined {
+    if (
+      event.type === "message" &&
+      (event as SlackMessageChangedEvent).subtype === "message_changed"
+    ) {
+      return (event as SlackMessageChangedEvent).message?.text;
+    }
+
+    if (event.type === "app_mention" || event.type === "message") {
+      return (event as SlackAppMentionEvent | SlackDirectMessageEvent).text;
+    }
+
+    return undefined;
+  }
+
+  private async resolveMentionLabelsForText(
+    text: string,
+  ): Promise<Record<string, string>> {
+    return buildSlackUserLabelMap(
+      [text],
+      async (id): Promise<string | undefined> => {
+        const userInfo = await Promise.race([
+          resolveSlackUser(id, this.config.botToken),
+          new Promise<undefined>((resolve) =>
+            setTimeout(resolve, USER_RESOLVE_TIMEOUT_MS),
+          ),
+        ]);
+        if (!userInfo) return undefined;
+        return userInfo.displayName || userInfo.username;
+      },
+      { ignoredUserIds: [this.config.botUserId] },
+    );
+  }
+
+  private enqueueNormalizeAndEmit(
     event:
       | SlackAppMentionEvent
       | SlackDirectMessageEvent
@@ -617,6 +677,103 @@ export class SlackSocketModeClient {
     isMessageDeleted: boolean,
     isDm: boolean,
   ): void {
+    const queues = (this.emitQueues ??= new Map());
+    const orderingKey = this.getEventOrderingKey(event, eventId);
+    const previous = queues.get(orderingKey) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() =>
+        this.normalizeAndEmit(
+          event,
+          eventId,
+          isAppMention,
+          isActiveThreadReply,
+          isReactionAdded,
+          isReactionRemoved,
+          isMessageChanged,
+          isMessageDeleted,
+          isDm,
+        ),
+      );
+
+    queues.set(orderingKey, current);
+    void current
+      .catch((err: unknown) => {
+        log.error({ err, eventId }, "Slack event normalization failed");
+      })
+      .finally(() => {
+        if (queues.get(orderingKey) === current) {
+          queues.delete(orderingKey);
+        }
+      });
+  }
+
+  private getEventOrderingKey(
+    event:
+      | SlackAppMentionEvent
+      | SlackDirectMessageEvent
+      | SlackChannelMessageEvent
+      | SlackMessageChangedEvent
+      | SlackMessageDeletedEvent
+      | SlackReactionAddedEvent
+      | SlackReactionRemovedEvent,
+    eventId: string,
+  ): string {
+    if (event.type === "reaction_added" || event.type === "reaction_removed") {
+      const reaction = event as
+        | SlackReactionAddedEvent
+        | SlackReactionRemovedEvent;
+      return `${reaction.item.channel}:${reaction.item.ts}`;
+    }
+
+    if (
+      event.type === "message" &&
+      (event as SlackMessageChangedEvent).subtype === "message_changed"
+    ) {
+      const changed = event as SlackMessageChangedEvent;
+      return `${changed.channel}:${changed.message.thread_ts ?? changed.message.ts ?? eventId}`;
+    }
+
+    if (
+      event.type === "message" &&
+      (event as SlackMessageDeletedEvent).subtype === "message_deleted"
+    ) {
+      const deleted = event as SlackMessageDeletedEvent;
+      return `${deleted.channel}:${deleted.previous_message?.thread_ts ?? deleted.deleted_ts ?? eventId}`;
+    }
+
+    const message = event as
+      | SlackAppMentionEvent
+      | SlackDirectMessageEvent
+      | SlackChannelMessageEvent;
+    return `${message.channel}:${message.thread_ts ?? message.ts ?? eventId}`;
+  }
+
+  private async normalizeAndEmit(
+    event:
+      | SlackAppMentionEvent
+      | SlackDirectMessageEvent
+      | SlackChannelMessageEvent
+      | SlackMessageChangedEvent
+      | SlackMessageDeletedEvent
+      | SlackReactionAddedEvent
+      | SlackReactionRemovedEvent,
+    eventId: string,
+    isAppMention: boolean,
+    isActiveThreadReply: boolean,
+    isReactionAdded: boolean,
+    isReactionRemoved: boolean,
+    isMessageChanged: boolean,
+    isMessageDeleted: boolean,
+    isDm: boolean,
+  ): Promise<void> {
+    const text = this.extractTextBearingContent(event);
+    const userLabels = text ? await this.resolveMentionLabelsForText(text) : {};
+    const renderContext = {
+      botUserId: this.config.botUserId,
+      userLabels,
+    };
+
     let normalized: NormalizedSlackEvent | null;
     if (isReactionAdded) {
       normalized = normalizeSlackReactionAdded(
@@ -637,7 +794,9 @@ export class SlackSocketModeClient {
         event as SlackAppMentionEvent,
         eventId,
         this.config.gatewayConfig,
+        this.config.botUserId,
         this.config.botToken,
+        renderContext,
       );
     } else if (isMessageChanged) {
       normalized = normalizeSlackMessageEdit(
@@ -645,6 +804,7 @@ export class SlackSocketModeClient {
         eventId,
         this.config.gatewayConfig,
         this.config.botUserId,
+        renderContext,
       );
     } else if (isMessageDeleted) {
       normalized = normalizeSlackMessageDelete(
@@ -659,6 +819,7 @@ export class SlackSocketModeClient {
         this.config.gatewayConfig,
         this.config.botUserId,
         this.config.botToken,
+        renderContext,
       );
     } else if (isDm) {
       normalized = normalizeSlackDirectMessage(
@@ -667,6 +828,7 @@ export class SlackSocketModeClient {
         this.config.gatewayConfig,
         this.config.botUserId,
         this.config.botToken,
+        renderContext,
       );
     } else {
       log.warn(
@@ -707,22 +869,21 @@ export class SlackSocketModeClient {
     // ensures the event is always emitted even if the Slack API hangs.
     const actor = normalized.event.actor;
     if (actor?.actorExternalId && !actor.displayName) {
-      const USER_RESOLVE_TIMEOUT_MS = 3_000;
-      Promise.race([
+      const mentionedLabel = userLabels[actor.actorExternalId];
+      if (mentionedLabel) {
+        actor.displayName = mentionedLabel;
+      }
+
+      const userInfo = await Promise.race([
         resolveSlackUser(actor.actorExternalId, this.config.botToken),
-        new Promise<undefined>((r) => setTimeout(r, USER_RESOLVE_TIMEOUT_MS)),
-      ])
-        .then((userInfo) => {
-          if (userInfo) {
-            actor.displayName = userInfo.displayName;
-            actor.username = userInfo.username;
-          }
-          this.onEvent(normalized!);
-        })
-        .catch(() => {
-          this.onEvent(normalized!);
-        });
-      return;
+        new Promise<undefined>((resolve) =>
+          setTimeout(resolve, USER_RESOLVE_TIMEOUT_MS),
+        ),
+      ]);
+      if (userInfo) {
+        actor.displayName = userInfo.displayName;
+        actor.username = userInfo.username;
+      }
     }
 
     this.onEvent(normalized);
