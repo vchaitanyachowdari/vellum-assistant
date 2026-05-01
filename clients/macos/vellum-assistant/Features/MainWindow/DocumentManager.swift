@@ -159,6 +159,40 @@ final class DocumentManager {
         }
     }
 
+    func exportToPDF() {
+        guard let surfaceId = surfaceId,
+              let conversationId = conversationId else { return }
+        let titleForFile = title
+        let contentToSave = currentContent ?? ""
+        let wordCountToSave = wordCount
+        let client = documentClient
+        Task {
+            // Await the save so the server has the latest content before rendering
+            _ = await client.saveDocument(
+                surfaceId: surfaceId,
+                conversationId: conversationId,
+                title: titleForFile,
+                content: contentToSave,
+                wordCount: wordCountToSave
+            )
+            guard let pdfData = await client.exportDocumentPDF(surfaceId: surfaceId) else {
+                log.error("PDF export failed: no data returned")
+                return
+            }
+            await MainActor.run {
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = sanitizedFilename(from: titleForFile) + ".pdf"
+                panel.canCreateDirectories = true
+                panel.begin { response in
+                    guard response == .OK, let url = panel.url else { return }
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        try? pdfData.write(to: url)
+                    }
+                }
+            }
+        }
+    }
+
     private func sanitizedFilename(from title: String) -> String {
         let replaced = title.replacingOccurrences(of: " ", with: "-")
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
