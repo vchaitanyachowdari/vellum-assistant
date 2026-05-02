@@ -575,8 +575,10 @@ struct HatchingStepView: View {
     private static let dockerReadySentinel = "Docker containers are up and running"
 
     /// Build the --config key=value pairs for the onboarding selections.
-    /// When managed sign-in is enabled and the user did not skip auth, set all
-    /// services to managed mode so they route through the platform proxy.
+    /// Build config overrides to pass as --config flags during hatch.
+    ///
+    /// Most config default values are determined by the daemon process and may
+    /// depend on whether the assistant is hatched on the Vellum Platform or not.
     private func buildOnboardingConfigValues() -> [String: String] {
         var configValues: [String: String] = [:]
         if !state.selectedProvider.isEmpty {
@@ -584,16 +586,6 @@ struct HatchingStepView: View {
         }
         if !state.selectedModel.isEmpty {
             configValues["llm.default.model"] = state.selectedModel
-        }
-        if !state.skippedAuth {
-            configValues["services.inference.mode"] = "managed"
-            configValues["services.image-generation.mode"] = "managed"
-            configValues["services.web-search.mode"] = "managed"
-            configValues["services.google-oauth.mode"] = "managed"
-            configValues["services.outlook-oauth.mode"] = "managed"
-            configValues["services.linear-oauth.mode"] = "managed"
-            configValues["services.github-oauth.mode"] = "managed"
-            configValues["services.notion-oauth.mode"] = "managed"
         }
         return configValues
     }
