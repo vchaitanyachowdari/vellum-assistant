@@ -1037,6 +1037,12 @@ public final class ChatViewModel: MessageSendCoordinatorDelegate {
         paginationState.paginatedVisibleMessages
     }
 
+    /// Whether `paginatedVisibleMessages` is empty. Prefer over
+    /// `paginatedVisibleMessages.isEmpty` to avoid observing the full array.
+    public var isPaginatedEmpty: Bool {
+        paginationState.isPaginatedEmpty
+    }
+
     public var historyCursor: Double? {
         get { paginationState.historyCursor }
         set { paginationState.historyCursor = newValue }
