@@ -239,10 +239,32 @@ describe("app_control_observe", () => {
     expect(validate(s, { app: "com.apple.Safari" }).ok).toBe(true);
   });
 
+  test("well-formed input passes (with optional settle_ms override)", () => {
+    expect(validate(s, { app: "com.apple.Safari", settle_ms: 0 }).ok).toBe(
+      true,
+    );
+    expect(validate(s, { app: "com.apple.Safari", settle_ms: 500 }).ok).toBe(
+      true,
+    );
+  });
+
+  test("non-integer settle_ms rejects", () => {
+    const result = validate(s, {
+      app: "com.apple.Safari",
+      settle_ms: "200",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("settle_ms");
+  });
+
   test("missing required app rejects", () => {
     const result = validate(s, {});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("app");
+  });
+
+  test("settle_ms is optional", () => {
+    expect(s.required ?? []).not.toContain("settle_ms");
   });
 
   test("declares low risk", () => {
