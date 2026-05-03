@@ -165,13 +165,10 @@ function regexToOpenApiPath(escaped: string): string | null {
 // ── Routes that are intentionally undocumented in the OpenAPI schema ──
 // Each entry must have a comment explaining why it's excluded.
 const EXCLUDED_FROM_SCHEMA = new Set([
-  // Browser relay WebSocket upgrade — handled pre-router, not a REST endpoint
-  "/v1/browser-relay",
-
-  // Generic loopback pairing — localhost-only, no external consumers
-  "/v1/pair",
   // Runtime proxy catch-all — documented as /{path} in the schema
   "catch-all",
+  // Loopback-only pairing endpoint — not part of the public gateway API
+  "/v1/pair",
 ]);
 
 // ── Schema paths that don't map to a discrete route definition ──
