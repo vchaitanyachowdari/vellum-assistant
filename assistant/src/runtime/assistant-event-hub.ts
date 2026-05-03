@@ -32,10 +32,6 @@ const HOST_PREFIX_TO_CAPABILITY: Record<string, HostProxyCapability> = {
  * Infer the {@link HostProxyCapability} a message should be targeted at based
  * on its `type` field.  Returns `undefined` for message types that are not
  * host-proxy messages (i.e. they should broadcast to all subscribers).
- *
- * Host-proxy message types are shaped `host_<domain>[_<sub>]_<verb>` where
- * `<verb>` is `request` or `cancel`. We strip the trailing verb and look up
- * the remaining stem directly in {@link HOST_PREFIX_TO_CAPABILITY}.
  */
 export function capabilityForMessageType(
   type: string,
@@ -586,7 +582,7 @@ function resolveCanonicalRequestSourceType(
 function registerPendingInteraction(
   msg: ServerMessage,
   conversationId: string,
-  targetClientId?: string,
+  _targetClientId?: string,
 ): void {
   if (msg.type === "confirmation_request") {
     pendingInteractions.register(msg.requestId, {
@@ -612,37 +608,9 @@ function registerPendingInteraction(
       conversationId,
       kind: "secret",
     });
-  } else if (msg.type === "host_bash_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_bash",
-      targetClientId, // NEW — may be undefined for macos-origin turns
-    });
-  } else if (msg.type === "host_browser_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_browser",
-    });
-  } else if (msg.type === "host_file_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_file",
-    });
-  } else if (msg.type === "host_cu_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_cu",
-    });
-  } else if (msg.type === "host_app_control_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_app_control",
-    });
-  } else if (msg.type === "host_transfer_request") {
-    pendingInteractions.register(msg.requestId, {
-      conversationId,
-      kind: "host_transfer",
-    });
+  // Host proxy interactions (host_bash, host_file, host_cu, host_browser,
+  // host_app_control, host_transfer) self-register in pendingInteractions with
+  // full RPC lifecycle state — no registration needed here.
   }
 }
 
