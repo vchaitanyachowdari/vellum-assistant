@@ -21,14 +21,43 @@ import {
 
 export const slackActiveThreads = sqliteTable("slack_active_threads", {
   threadTs: text("thread_ts").primaryKey(),
+  // Channel hosting the active thread. Nullable because SQLite's
+  // ALTER TABLE ADD COLUMN cannot add a NOT NULL column without a default
+  // (https://sqlite.org/lang_altertable.html#alter_table_add_column);
+  // legacy rows pre-dating this column carry NULL until they age out of
+  // the thread TTL window, and reconnect catch-up enumeration filters them.
+  channelId: text("channel_id"),
   trackedAt: integer("tracked_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
 });
 
 export const slackSeenEvents = sqliteTable("slack_seen_events", {
+  // Generic dedup key. Holds either a Slack `event_id` (live path) or a
+  // synthetic `msg:${channel}:${ts}` key (reconnect catch-up path) so both
+  // paths dedup symmetrically against the same row. The physical column
+  // name `event_id` is a historical artefact; semantically this is a
+  // dedup key, not strictly an event ID.
   eventId: text("event_id").primaryKey(),
   seenAt: integer("seen_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
+});
+
+/**
+ * Persistent high-watermark for Slack Socket Mode catch-up.
+ *
+ * Slack does not buffer events for disconnected Socket Mode clients
+ * (https://api.slack.com/apis/socket-mode), so missed @mentions and DMs
+ * during a reconnect window are recovered via `conversations.history` /
+ * `conversations.replies`. This row stores the latest accepted event
+ * timestamp so catch-up knows where to resume from. A single row keyed
+ * by `'global'` is used; per-channel watermarks would add precision but
+ * are not necessary because the compound `msg:${channel}:${ts}` dedup
+ * absorbs the resulting overlap.
+ */
+export const slackLastSeenTs = sqliteTable("slack_last_seen_ts", {
+  key: text("key").primaryKey(),
+  ts: text("ts").notNull(),
+  updatedAt: integer("updated_at").notNull(),
 });
 
 // ---------------------------------------------------------------------------
