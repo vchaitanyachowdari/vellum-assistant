@@ -112,8 +112,6 @@ struct ChatBubble: View, Equatable {
     // correct layout path instead of flashing through the fallback layout.
     @State var cachedHasInterleavedContent: Bool
     @State var cachedContentGroups: [ContentGroup]
-    /// Set of stableIds for tool-call groups that have non-empty text after them.
-    @State var cachedToolGroupsWithTrailingText: Set<String>
 
     /// Interaction state for progress cards that must outlive lazy row churn.
     /// Consolidates step expansion, card expansion overrides, and rehydration
@@ -189,7 +187,6 @@ struct ChatBubble: View, Equatable {
         if let cached = Self.cachedInterleavedResult(for: message) {
             _cachedHasInterleavedContent = State(initialValue: cached.hasInterleaved)
             _cachedContentGroups = State(initialValue: cached.groups)
-            _cachedToolGroupsWithTrailingText = State(initialValue: cached.trailingTextIds)
         } else {
             let interleaved = Self.computeHasInterleavedContent(message.contentOrder)
             _cachedHasInterleavedContent = State(initialValue: interleaved)
@@ -201,32 +198,17 @@ struct ChatBubble: View, Equatable {
                 )
                 _cachedContentGroups = State(initialValue: groups)
 
-                var trailingTextIds = Set<String>()
-                for group in groups {
-                    guard case .toolCalls(let indices) = group else { continue }
-                    if Self.computeHasTextAfterToolGroupStatic(
-                        toolIndices: indices,
-                        contentOrder: message.contentOrder,
-                        textSegments: message.textSegments,
-                        hasText: !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ) {
-                        trailingTextIds.insert(group.stableId)
-                    }
-                }
-                _cachedToolGroupsWithTrailingText = State(initialValue: trailingTextIds)
-
                 // Store in static cache for future init() calls
                 Self.storeInterleavedResult(
-                    InterleavedCacheValue(hasInterleaved: interleaved, groups: groups, trailingTextIds: trailingTextIds),
+                    InterleavedCacheValue(hasInterleaved: interleaved, groups: groups),
                     for: message
                 )
             } else {
                 _cachedContentGroups = State(initialValue: [])
-                _cachedToolGroupsWithTrailingText = State(initialValue: [])
 
                 // Store non-interleaved result in static cache
                 Self.storeInterleavedResult(
-                    InterleavedCacheValue(hasInterleaved: false, groups: [], trailingTextIds: []),
+                    InterleavedCacheValue(hasInterleaved: false, groups: []),
                     for: message
                 )
             }
@@ -811,34 +793,69 @@ struct ChatBubble: View, Equatable {
     /// rendered alongside a bubble that contains the remaining content.
     /// This keeps the transformation at the presentation layer — the
     /// streaming pipeline and `ChatMessage` data model are unchanged.
+    ///
+    /// When tool calls are present **and** the `show-thinking-blocks`
+    /// feature flag is enabled, thinking content is folded into the
+    /// progress card (via `expandedItemsForProgressCard`) instead of
+    /// rendering as standalone `ThinkingBlockView`s. Only the stripped
+    /// text is rendered in the bubble. When the flag is off, thinking
+    /// is rendered as `ThinkingBlockView`s above the text regardless
+    /// of whether tool calls exist — otherwise the thinking content
+    /// would be silently dropped (stripped from text but absent from
+    /// the progress card which returns `nil` when the flag is off).
     @ViewBuilder
     private var bubbleContentWithInlineThinking: some View {
-        let chunks = parseInlineThinkingTags(message.text)
-        let thinkingChunks: [String] = chunks.compactMap { chunk in
-            if case .thinking(let body) = chunk { return body }
-            return nil
-        }
-        let textChunks: [String] = chunks.compactMap { chunk in
-            if case .text(let body) = chunk { return body }
-            return nil
-        }
-        let joinedText = textChunks
-            .joined(separator: "\n\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasRenderedText = !joinedText.isEmpty
-        let hasAttachments = !message.attachments.isEmpty
+        let showThinkingBlocks = MacOSClientFeatureFlagManager.shared.isEnabled("show-thinking-blocks")
 
-        VStack(alignment: .leading, spacing: VSpacing.sm) {
-            ForEach(Array(thinkingChunks.enumerated()), id: \.offset) { offset, content in
-                ThinkingBlockView(
-                    content: content,
-                    isStreaming: message.isStreaming,
-                    expansionKey: "\(message.id.uuidString)-inline-\(offset)",
-                    typographyGeneration: typographyGeneration
-                )
+        if !message.toolCalls.isEmpty && showThinkingBlocks {
+            // Tool calls present AND flag is on — thinking is folded into the
+            // progress card via expandedItemsForProgressCard. Strip thinking
+            // from text and render only the remaining content in the bubble.
+            let chunks = parseInlineThinkingTags(message.text)
+            let textChunks: [String] = chunks.compactMap { chunk in
+                if case .text(let body) = chunk { return body }
+                return nil
             }
+            let joinedText = textChunks
+                .joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasRenderedText = !joinedText.isEmpty
+            let hasAttachments = !message.attachments.isEmpty
+
             if hasRenderedText || hasAttachments {
                 bubbleContent(renderingText: joinedText)
+            }
+        } else {
+            // Either no tool calls, or the show-thinking-blocks flag is off.
+            // Render ThinkingBlockViews above the text bubble so thinking
+            // content is never silently dropped.
+            let chunks = parseInlineThinkingTags(message.text)
+            let thinkingChunks: [String] = chunks.compactMap { chunk in
+                if case .thinking(let body) = chunk { return body }
+                return nil
+            }
+            let textChunks: [String] = chunks.compactMap { chunk in
+                if case .text(let body) = chunk { return body }
+                return nil
+            }
+            let joinedText = textChunks
+                .joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasRenderedText = !joinedText.isEmpty
+            let hasAttachments = !message.attachments.isEmpty
+
+            VStack(alignment: .leading, spacing: VSpacing.sm) {
+                ForEach(Array(thinkingChunks.enumerated()), id: \.offset) { offset, content in
+                    ThinkingBlockView(
+                        content: content,
+                        isStreaming: message.isStreaming,
+                        expansionKey: "\(message.id.uuidString)-inline-\(offset)",
+                        typographyGeneration: typographyGeneration
+                    )
+                }
+                if hasRenderedText || hasAttachments {
+                    bubbleContent(renderingText: joinedText)
+                }
             }
         }
     }
