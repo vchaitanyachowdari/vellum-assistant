@@ -30,12 +30,7 @@ import {
 const log = getLogger("scheduler");
 
 import type { ScheduleMessageProcessor } from "./scheduler-types.js";
-export type {
-  ScheduleMessageOptions,
-  ScheduleMessageProcessor,
-} from "./scheduler-types.js";
-
-export type ScheduleNotifyModeNotifier = (payload: {
+type ScheduleNotifyModeNotifier = (payload: {
   id: string;
   label: string;
   message: string;
@@ -43,13 +38,13 @@ export type ScheduleNotifyModeNotifier = (payload: {
   routingHints: Record<string, unknown>;
 }) => void | Promise<void>;
 
-export type ScheduleConversationCreatedNotifier = (info: {
+type ScheduleConversationCreatedNotifier = (info: {
   conversationId: string;
   scheduleJobId: string;
   title: string;
 }) => void;
 
-export interface SchedulerHandle {
+interface SchedulerHandle {
   runOnce(): Promise<number>;
   stop(): void;
 }
