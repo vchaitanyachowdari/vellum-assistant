@@ -68,7 +68,6 @@ Fields:
   hasWebhookSecret    Whether a stored webhook secret is available (needed
                       for email and other inbound webhook channels)
   available           Whether callback registration prerequisites are satisfied
-  connected           Whether platform credentials are stored (boolean)
   organizationId      The platform organization ID (from stored credentials)
   userId              The platform user ID (from stored credentials)
 
@@ -80,19 +79,6 @@ Examples:
       try {
         const context = await resolvePlatformCallbackRegistrationContext();
 
-        const storedBaseUrl =
-          (await getSecureKeyAsync(
-            credentialKey(
-              CREDENTIAL_KEYS.baseUrl.service,
-              CREDENTIAL_KEYS.baseUrl.field,
-            ),
-          )) ?? "";
-        const hasStoredApiKey = !!(await getSecureKeyAsync(
-          credentialKey(
-            CREDENTIAL_KEYS.apiKey.service,
-            CREDENTIAL_KEYS.apiKey.field,
-          ),
-        ));
         const organizationId =
           (
             await getSecureKeyAsync(
@@ -116,8 +102,6 @@ Examples:
           credentialKey("vellum", "webhook_secret"),
         ));
 
-        const connected = !!storedBaseUrl && hasStoredApiKey;
-
         const result = {
           isPlatform: context.isPlatform,
           baseUrl: context.platformBaseUrl,
@@ -126,7 +110,6 @@ Examples:
           hasAssistantApiKey: context.hasAssistantApiKey,
           hasWebhookSecret,
           available: context.enabled,
-          connected,
           organizationId: organizationId || null,
           userId: userId || null,
         };
@@ -149,7 +132,6 @@ Examples:
           log.info(
             `Callback registration available: ${result.available ? "yes" : "no"}`,
           );
-          log.info(`Connected: ${connected}`);
           log.info(`Organization ID: ${organizationId || "(not set)"}`);
           log.info(`User ID: ${userId || "(not set)"}`);
         }
