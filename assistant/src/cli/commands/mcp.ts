@@ -9,15 +9,61 @@ import type { Command } from "commander";
 
 import { loadRawConfig, saveRawConfig } from "../../config/loader.js";
 import type { McpConfig, McpServerConfig } from "../../config/schemas/mcp.js";
+import { cliIpcCall } from "../../ipc/cli-client.js";
 import { McpClient } from "../../mcp/client.js";
 import {
   deleteMcpOAuthCredentials,
   McpOAuthProvider,
 } from "../../mcp/mcp-oauth-provider.js";
+import { openInHostBrowser } from "../../util/browser.js";
 import { getSignalsDir } from "../../util/platform.js";
 import { log } from "../logger.js";
 
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+
+async function pollMcpAuthStatus(
+  serverId: string,
+  options: { intervalMs: number; timeoutMs: number },
+): Promise<{ status: "complete" | "error"; error?: string }> {
+  const deadline = Date.now() + options.timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, options.intervalMs),
+    );
+    const result = await cliIpcCall<{ status: string; error?: string }>(
+      "internal_mcp_auth_status",
+      { pathParams: { serverId } },
+    );
+    if (result.ok && result.result?.status === "complete") {
+      return { status: "complete" };
+    }
+    if (result.ok && result.result?.status === "error") {
+      return { status: "error", error: result.result.error };
+    }
+    // The daemon returned an IPC-level error (ok: false) indicating the flow
+    // was not found — most likely because the daemon restarted mid-poll and
+    // lost the in-memory state.  Surface this immediately instead of looping
+    // for the full 2.5 minutes and then reporting a generic timeout.
+    if (
+      !result.ok &&
+      result.error &&
+      result.error.includes("No active OAuth flow")
+    ) {
+      return {
+        status: "error",
+        error: `OAuth flow was lost (assistant may have restarted). Run 'assistant mcp auth ${serverId}' to retry.`,
+      };
+    }
+    // Fail fast on any other real IPC error instead of looping for 2.5 minutes
+    if (!result.ok && result.error) {
+      return { status: "error", error: result.error };
+    }
+  }
+  return {
+    status: "error",
+    error: "OAuth authorization timed out after 2.5 minutes",
+  };
+}
 
 export async function checkServerHealth(
   serverId: string,
@@ -475,6 +521,80 @@ Examples:
         process.exitCode = 1;
         return;
       }
+
+      // IPC-first path — attempt daemon-orchestrated flow (works on hosted assistants)
+      const startResult = await cliIpcCall<{
+        auth_url: string;
+        state: string;
+        already_authenticated?: boolean;
+      }>("internal_mcp_auth_start", { body: { serverId: name } });
+
+      if (startResult.ok && startResult.result?.already_authenticated) {
+        log.info(`Server "${name}" is already authenticated.`);
+        process.exit(0);
+        return;
+      }
+
+      if (startResult.ok && startResult.result?.auth_url) {
+        const authUrl = startResult.result.auth_url;
+        log.info(`Opening browser for "${name}" OAuth authorization...`);
+        await openInHostBrowser(authUrl);
+        log.info(`If the browser did not open, visit:\n${authUrl}`);
+        log.info(
+          "Waiting for authorization in browser... (press Ctrl+C to cancel)",
+        );
+
+        const finalStatus = await pollMcpAuthStatus(name, {
+          intervalMs: 2_000,
+          timeoutMs: 150_000, // matches existing OAUTH_TIMEOUT_MS
+        });
+
+        if (finalStatus.status === "complete") {
+          log.info(`Authentication successful for "${name}".`);
+          // No signalMcpReload() here — the daemon-side orchestrator triggers
+          // reloadMcpServers() itself on completion (via the IPC path, the
+          // assistant always knows when the flow finished). The deprecated
+          // file-based signal mechanism is reserved for legacy CLI commands
+          // that don't have an IPC equivalent.
+          log.info(
+            "The running assistant has picked up this change automatically.",
+          );
+          process.exit(0);
+          return;
+        }
+
+        const errMsg = finalStatus.error ?? "Unknown error";
+        if (errMsg.includes("denied") || errMsg.includes("cancelled")) {
+          log.error(`Authorization cancelled for "${name}".`);
+        } else if (errMsg.includes("timed out")) {
+          log.error(
+            `Authorization timed out for "${name}". Try again with: assistant mcp auth ${name}`,
+          );
+        } else {
+          log.error(`OAuth failed for "${name}": ${errMsg}`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+
+      // Distinguish "daemon unreachable / pre-IPC-route" (fall back to loopback)
+      // from "daemon returned a real error" (surface and exit). Without this
+      // narrowing, orchestrator failures on hosted assistants are silently
+      // masked and retried through the very loopback path the IPC route is
+      // meant to replace.
+      const ipcErrMsg = startResult.error ?? "";
+      const isDaemonUnavailable =
+        ipcErrMsg.startsWith("Could not connect to assistant daemon") ||
+        ipcErrMsg.startsWith("Unknown method:");
+
+      if (!startResult.ok && ipcErrMsg && !isDaemonUnavailable) {
+        log.error(`MCP OAuth failed via assistant: ${ipcErrMsg}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      // IPC unavailable (old daemon, socket missing, route not registered)
+      // → fall through to existing in-process loopback flow.
 
       const provider = new McpOAuthProvider(
         name,
