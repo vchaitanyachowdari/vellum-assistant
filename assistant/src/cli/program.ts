@@ -41,6 +41,7 @@ import { registerPlatformCommand } from "./commands/platform/index.js";
 import { registerRoutesCommand } from "./commands/routes.js";
 import { registerSequenceCommand } from "./commands/sequence.js";
 import { registerSkillsCommand } from "./commands/skills.js";
+import { registerStatusCommand } from "./commands/status.js";
 import { registerSttCommand } from "./commands/stt.js";
 import { registerTaskCommand } from "./commands/task.js";
 import { registerTrustCommand } from "./commands/trust.js";
@@ -110,6 +111,7 @@ Examples:
   registerPlatformCommand(program);
   registerRoutesCommand(program);
   registerSequenceCommand(program);
+  registerStatusCommand(program);
   registerSkillsCommand(program);
   registerSttCommand(program);
   registerTaskCommand(program);
@@ -126,7 +128,7 @@ Examples:
   // remain available even without a workspace.
   // Workspace-independent commands are exempt:
   //   completions — pure shell-script generation, no workspace files needed
-  const workspaceExemptCommands = new Set(["completions"]);
+  const workspaceExemptCommands = new Set(["completions", "status"]);
   program.hook("preAction", (_thisCommand, actionCommand) => {
     if (workspaceExemptCommands.has(actionCommand.name())) {
       return;
