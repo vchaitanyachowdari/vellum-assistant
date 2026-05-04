@@ -4725,6 +4725,35 @@ paths:
                   - success
                   - ran
                 additionalProperties: false
+  /v1/gateway/logs/tail:
+    get:
+      operationId: gateway_logs_tail_get
+      summary: Tail gateway log entries
+      description: Return the last N structured log entries from the gateway log files.
+      tags:
+        - gateway-logs
+      responses:
+        "200":
+          description: Successful response
+      parameters:
+        - name: n
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "Number of lines to return (1–1000, default: 10)"
+        - name: level
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "Minimum pino level name (default: info)"
+        - name: module
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to exact pino module name
   /v1/groups:
     get:
       operationId: groups_get
