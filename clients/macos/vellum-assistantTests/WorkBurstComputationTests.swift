@@ -141,9 +141,9 @@ struct WorkBurstComputationTests {
         #expect(bursts[1].stableId == "th1")
     }
 
-    // MARK: - Standalone thinking (no adjacent tools) -> not part of any burst
+    // MARK: - Standalone thinking separated by text is forwarded into the following tool burst
 
-    @Test("Standalone thinking without adjacent tools is not part of any burst")
+    @Test("Standalone thinking separated by text is forwarded into the following tool burst")
     func standaloneThinking() {
         let groups: [ContentGroup] = [
             .thinking([0]),
@@ -166,11 +166,11 @@ struct WorkBurstComputationTests {
             messageId: Self.messageId
         )
 
-        // Only one burst — the tool call. The thinking is standalone (separated by text).
+        // Only one burst — thinking is forwarded into the tool burst for decluttering.
         #expect(bursts.count == 1)
         #expect(bursts[0].toolIndices == [0])
-        #expect(bursts[0].thinkingIndices.isEmpty)
-        #expect(bursts[0].stableId == "tc0")
+        #expect(bursts[0].thinkingIndices == [0])
+        #expect(bursts[0].stableId == "th0")
     }
 
     // MARK: - thinking-tool-tool-thinking-tool-text -> one burst with all items
@@ -380,9 +380,9 @@ struct WorkBurstComputationTests {
             Issue.record("Expected thinking item in first burst")
         }
 
-        // Second burst's thinking SHOULD be streaming
+        // Second burst's thinking should NOT be streaming — a tool call follows
         if case .thinking(_, _, let isStreaming) = bursts[1].expandedItems[0] {
-            #expect(isStreaming)
+            #expect(!isStreaming)
         } else {
             Issue.record("Expected thinking item in second burst")
         }
