@@ -8,21 +8,25 @@ struct ChatSearchOverlay: View {
     var viewModel: ChatViewModel
     @Binding var isSearchActive: Bool
     @Binding var anchorMessageId: UUID?
+    @Binding var searchQuery: String
 
-    @State private var searchText = ""
     @State private var currentMatchIndex = 0
 
-    private var searchMatches: [UUID] {
-        guard isSearchActive, !searchText.isEmpty else { return [] }
-        let query = searchText.lowercased()
-        return viewModel.messages.filter { $0.text.lowercased().contains(query) }.map(\.id)
+    struct SearchMatch {
+        let messageId: UUID
+        let range: NSRange
+    }
+
+    private var searchMatches: [SearchMatch] {
+        guard isSearchActive, !searchQuery.isEmpty else { return [] }
+        return Self.searchMatches(in: viewModel.messages, query: searchQuery)
     }
 
     var body: some View {
         Group {
             if isSearchActive {
                 ChatSearchBar(
-                    searchText: $searchText,
+                    searchText: $searchQuery,
                     matchCount: searchMatches.count,
                     currentMatchIndex: currentMatchIndex,
                     onPrevious: { navigateMatch(delta: -1) },
@@ -35,7 +39,7 @@ struct ChatSearchOverlay: View {
                 .layoutHangSignpost("chat.searchOverlay")
             }
         }
-        .onChange(of: searchText) {
+        .onChange(of: searchQuery) {
             currentMatchIndex = 0
             scrollToCurrentMatch()
         }
@@ -47,7 +51,7 @@ struct ChatSearchOverlay: View {
         }
         .onChange(of: isSearchActive) { _, active in
             if !active {
-                searchText = ""
+                searchQuery = ""
                 currentMatchIndex = 0
             }
         }
@@ -63,6 +67,35 @@ struct ChatSearchOverlay: View {
     private func scrollToCurrentMatch() {
         let matches = searchMatches
         guard !matches.isEmpty, currentMatchIndex < matches.count else { return }
-        anchorMessageId = matches[currentMatchIndex]
+        anchorMessageId = matches[currentMatchIndex].messageId
+    }
+
+    static func searchMatches(in messages: [ChatMessage], query: String) -> [SearchMatch] {
+        guard !query.isEmpty else { return [] }
+        return messages.flatMap { message in
+            occurrenceRanges(in: message.text, query: query).map { range in
+                SearchMatch(messageId: message.id, range: range)
+            }
+        }
+    }
+
+    static func occurrenceRanges(in text: String, query: String) -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        let nsText = text as NSString
+        var ranges: [NSRange] = []
+        var start = 0
+
+        while start < nsText.length {
+            let found = nsText.range(
+                of: query,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                range: NSRange(location: start, length: nsText.length - start)
+            )
+            guard found.location != NSNotFound, found.length > 0 else { break }
+            ranges.append(found)
+            start = found.location + found.length
+        }
+
+        return ranges
     }
 }
