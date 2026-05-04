@@ -3,7 +3,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statfsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statfsSync } from "node:fs";
 import { availableParallelism, cpus, totalmem } from "node:os";
 
 import { z } from "zod";
@@ -21,6 +21,7 @@ import {
   getWorkspacePromptPath,
 } from "../../util/platform.js";
 import { APP_VERSION } from "../../version.js";
+import { resolveHatchedAtReadOnly } from "../../workspace/hatched-date.js";
 import { WORKSPACE_MIGRATIONS } from "../../workspace/migrations/registry.js";
 import { getLastWorkspaceMigrationId } from "../../workspace/migrations/runner.js";
 import { NotFoundError } from "./errors.js";
@@ -488,13 +489,7 @@ function getIdentity() {
 
   const version = APP_VERSION;
 
-  let createdAt: string | undefined;
-  try {
-    const stats = statSync(identityPath);
-    createdAt = stats.birthtime.toISOString();
-  } catch {
-    // ignore
-  }
+  const createdAt = resolveIdentityCreatedAt(identityPath);
 
   return {
     name: fields.name ?? "",
@@ -505,6 +500,10 @@ function getIdentity() {
     version,
     createdAt,
   };
+}
+
+function resolveIdentityCreatedAt(identityPath: string): string | undefined {
+  return resolveHatchedAtReadOnly(identityPath);
 }
 
 function getIdentityIntro() {
