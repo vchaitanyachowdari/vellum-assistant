@@ -52,6 +52,7 @@ import { sanitizeConfigForTransfer } from "../../config/sanitize-for-transfer.js
 import { resetDb } from "../../memory/db-connection.js";
 import { isGuardianPersonaCustomized } from "../../prompts/persona-resolver.js";
 import { getLogger } from "../../util/logger.js";
+import { APP_VERSION } from "../../version.js";
 import type { PathResolver } from "./vbundle-import-analyzer.js";
 import * as policy from "./vbundle-import-policy.js";
 import type {
@@ -103,9 +104,13 @@ const DEFAULT_MAX_BUNDLE_ENTRIES = 100_000;
  * this run (via a `Set<string>` built from the backupDir/tempWorkspaceDir
  * basenames), so a user entry that happens to start with one of these
  * prefixes is still swept into the swap.
+ *
+ * Exported so tests asserting "no orphan temp/backup dirs" stay in sync with
+ * the actual layout. Both dirs are created at `${workspaceDir}/<prefix><uuid>`
+ * (i.e. INSIDE workspaceDir, not as a sibling).
  */
-const IMPORT_TEMP_PREFIX = ".import-";
-const IMPORT_BACKUP_PREFIX = ".pre-import-";
+export const IMPORT_TEMP_PREFIX = ".import-";
+export const IMPORT_BACKUP_PREFIX = ".pre-import-";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -273,18 +278,16 @@ export async function streamCommitImport(
   // Compared against `bundleEntryCap`.
   let entryCount = 0;
 
-  // Create the temp workspace dir up front so any failure between here and
-  // the atomic swap can be cleaned up by the catch block below.
-  try {
-    await mkdir(tempWorkspaceDir, { recursive: true });
-  } catch (err) {
-    return {
-      ok: false,
-      reason: "write_failed",
-      message: `Failed to create temp workspace dir "${tempWorkspaceDir}": ${errMessage(err)}`,
-    };
-  }
-
+  // The temp workspace dir is created lazily inside the parse loop AFTER
+  // the manifest's version gate passes (see the `entryIndex === 0` block
+  // below). Creating it up front would materialize `${workspaceDir}` (and
+  // the `.import-<uuid>` subdir) on a fresh filesystem before we knew the
+  // bundle was compatible — violating the plan invariant that importers
+  // gate on runtime-version compat BEFORE any state mutation.
+  //
+  // `cleanupTempDir` is safe whether or not the dir was ever created:
+  // `rm(..., { recursive: true, force: true })` is a no-op on a missing
+  // path.
   const cleanupTempDir = async (): Promise<void> => {
     try {
       await rm(tempWorkspaceDir, { recursive: true, force: true });
@@ -313,6 +316,30 @@ export async function streamCommitImport(
         const manifestResult = await readAndValidateManifest(entry);
         manifest = manifestResult.manifest;
         expected = manifestResult.expected;
+
+        // Defense-in-depth: refuse to populate the temp tree when the
+        // bundle's compat range excludes APP_VERSION. The version gate
+        // runs BEFORE we materialize `${workspaceDir}/.import-<uuid>`
+        // (the mkdir below is sequenced after this check), so on a fresh
+        // filesystem an incompatible bundle leaves zero filesystem trace.
+        // Throwing inside the generator's try block still triggers
+        // cleanupTempDir() in the catch — a safe no-op on a missing path
+        // — and mapThrownToResult translates VersionIncompatibleError into
+        // the version_incompatible result shape. Catches legacy bundles
+        // whose ExportJob row predates the platform compat-column rollout
+        // (compat columns NULL → platform gate skipped) and any future
+        // drift between the platform gate and the manifest.
+        const compatResult = policy.evaluateRuntimeCompatibility(
+          manifest.compatibility,
+          APP_VERSION,
+        );
+        if (!compatResult.ok) {
+          throw new VersionIncompatibleError(
+            compatResult.bundle_compat,
+            compatResult.runtime_version,
+          );
+        }
+
         // Entry-count ceiling check. The manifest declares every file the
         // bundle claims to contain, so one check here bounds the work the
         // importer is willing to do for this bundle.
@@ -322,6 +349,24 @@ export async function streamCommitImport(
             `bundle contains more than ${bundleEntryCap} entries (declared: ${manifest.contents.length})`,
           );
         }
+
+        // Only NOW — after the manifest is parsed, the version gate passes,
+        // and the entry-count ceiling is enforced — do we materialize the
+        // temp staging dir on disk. Doing this lazily preserves the plan
+        // invariant that importers gate on runtime-version compat BEFORE
+        // any state mutation. If this throws, the outer catch runs
+        // cleanupTempDir (a safe no-op on a missing path) and
+        // mapThrownToResult translates the WriteFailedError into the
+        // write_failed shape of ImportCommitResult.
+        try {
+          await mkdir(tempWorkspaceDir, { recursive: true });
+        } catch (err) {
+          throw wrapWriteError(
+            `Failed to create temp workspace dir "${tempWorkspaceDir}"`,
+            err,
+          );
+        }
+
         entryIndex += 1;
         continue;
       }
@@ -2400,6 +2445,15 @@ function mapThrownToResult(err: unknown): ImportCommitResult {
     };
   }
 
+  if (err instanceof VersionIncompatibleError) {
+    return {
+      ok: false,
+      reason: "version_incompatible",
+      bundle_compat: err.bundleCompat,
+      runtime_version: err.runtimeVersion,
+    };
+  }
+
   // Errors we raised ourselves for disk-side failures.
   if (err instanceof WriteFailedError) {
     return {
@@ -2429,6 +2483,25 @@ class WriteFailedError extends Error {
 
 function wrapWriteError(prefix: string, cause: unknown): WriteFailedError {
   return new WriteFailedError(`${prefix}: ${errMessage(cause)}`);
+}
+
+/**
+ * Sentinel error thrown when the bundle's manifest declares a runtime-version
+ * compat range that excludes the current `APP_VERSION`. Caught by the same
+ * try/catch that wraps the streaming parse loop so `cleanupTempDir()` runs
+ * before `mapThrownToResult` translates it into the `version_incompatible`
+ * shape of `ImportCommitResult`.
+ */
+class VersionIncompatibleError extends Error {
+  constructor(
+    readonly bundleCompat: policy.RuntimeCompatibility,
+    readonly runtimeVersion: string,
+  ) {
+    super(
+      policy.formatRuntimeCompatibilityMessage(bundleCompat, runtimeVersion),
+    );
+    this.name = "VersionIncompatibleError";
+  }
 }
 
 function errMessage(err: unknown): string {

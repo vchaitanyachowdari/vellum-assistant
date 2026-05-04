@@ -9,6 +9,7 @@ import { pollJobUntilDone } from "../lib/job-polling.js";
 import {
   MigrationInProgressError,
   localRuntimeExportToGcs,
+  localRuntimeIdentity,
   localRuntimePollJobStatus,
 } from "../lib/local-runtime-client.js";
 import {
@@ -232,9 +233,30 @@ async function backupPlatform(
   // signed-download request.
   let exportPlatformToken = platformToken;
 
+  // Step 0 — Ask the source runtime which version it's running. The bundle
+  // is produced by the daemon (not the CLI), and the CLI version can drift
+  // from the daemon version, so the daemon's version is the authoritative
+  // value to record as the bundle's `min_runtime_version`. Stamping with
+  // `cliPkg.version` here would record an inaccurate compatibility band on
+  // the signed-URL request.
+  let runtimeIdentity: { version: string };
+  try {
+    runtimeIdentity = await localRuntimeIdentity(entry, exportPlatformToken);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `Error: Could not fetch runtime identity from '${name}': ${msg}`,
+    );
+    process.exit(1);
+  }
+
   // Step 1 — Request a signed upload URL.
   const { url: uploadUrl, bundleKey } = await platformRequestSignedUrl(
-    { operation: "upload" },
+    {
+      operation: "upload",
+      minRuntimeVersion: runtimeIdentity.version,
+      maxRuntimeVersion: null,
+    },
     exportPlatformToken,
     platformUrl,
   );
@@ -289,8 +311,19 @@ async function backupPlatform(
   // poll-loop 401 refresh doesn't get clobbered here — otherwise a long
   // export that recovered mid-poll via re-auth would still 401 on the
   // download-URL request and abort an otherwise successful run.
+  //
+  // We deliberately do NOT send `targetRuntimeVersion` here. This flow
+  // saves the bundle to disk for offline storage; there is no target
+  // runtime to gate against, and the user can later restore the file
+  // into any compatible runtime. Sending the CLI's version would
+  // incorrectly block older CLIs from backing up newer assistants.
+  // The platform treats `target_runtime_version` as optional and skips
+  // the version check when it's omitted.
   const { url: bundleUrl } = await platformRequestSignedUrl(
-    { operation: "download", bundleKey },
+    {
+      operation: "download",
+      bundleKey,
+    },
     exportPlatformToken,
     platformUrl,
   );

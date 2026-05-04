@@ -66,6 +66,11 @@ import {
   DefaultPathResolver,
 } from "../migrations/vbundle-import-analyzer.js";
 import {
+  evaluateRuntimeCompatibility,
+  formatRuntimeCompatibilityMessage,
+  type RuntimeCompatibility,
+} from "../migrations/vbundle-import-policy.js";
+import {
   commitImport,
   extractCredentialsFromBundle,
   type ImportCommitReport,
@@ -79,6 +84,7 @@ import {
   InternalError,
   NotFoundError,
   RouteError,
+  UnprocessableEntityError,
 } from "./errors.js";
 import type { RouteDefinition, RouteHandlerArgs } from "./types.js";
 import { RouteResponse } from "./types.js";
@@ -866,6 +872,23 @@ export async function handleMigrationImport(
       };
     }
 
+    // Pre-check runtime-version compat before the DB close/reopen cycle.
+    // commitImport runs the same gate as defense-in-depth for callers that
+    // don't pre-check; we run it here too so an incompatible bundle short-
+    // circuits before resetDb().
+    const compatResult = evaluateRuntimeCompatibility(
+      validation.manifest!.compatibility,
+      APP_VERSION,
+    );
+    if (!compatResult.ok) {
+      throwImportCommitFailure({
+        ok: false,
+        reason: "version_incompatible",
+        bundle_compat: compatResult.bundle_compat,
+        runtime_version: compatResult.runtime_version,
+      });
+    }
+
     const pathResolver = new DefaultPathResolver(
       getWorkspaceDir(),
       getWorkspaceHooksDir(),
@@ -918,6 +941,12 @@ export async function handleMigrationImport(
 
     return importCommitSuccessResult(result.report, credentialsImported);
   } catch (err) {
+    // Preserve typed RouteError instances (e.g. UnprocessableEntityError for
+    // version_incompatible, BadRequestError for validation_failed) — only
+    // wrap genuinely unexpected errors as 500 InternalError.
+    if (err instanceof RouteError) {
+      throw err;
+    }
     log.error({ err }, "Unexpected error during import commit");
     throw new InternalError(
       err instanceof Error ? err.message : "Unexpected import error",
@@ -1014,12 +1043,18 @@ interface GcsImportErrorInit {
     | "fetch_failed"
     | "validation_failed"
     | "extraction_failed"
+    | "version_incompatible"
     | "write_failed";
   message: string;
   upstreamStatus?: number;
   reason?: string;
   errors?: Array<{ code: string; message: string; path?: string }>;
   partial_report?: ImportCommitReport;
+  /** Populated for `version_incompatible` — mirrors the platform's PR #5470
+   *  response shape so the URL-body endpoint can return the same body. */
+  bundle_compat?: RuntimeCompatibility;
+  /** Populated for `version_incompatible`. */
+  runtime_version?: string;
 }
 
 class GcsImportError extends Error {
@@ -1028,6 +1063,8 @@ class GcsImportError extends Error {
   public readonly reason?: string;
   public readonly errors?: GcsImportErrorInit["errors"];
   public readonly partial_report?: ImportCommitReport;
+  public readonly bundle_compat?: RuntimeCompatibility;
+  public readonly runtime_version?: string;
 
   constructor(init: GcsImportErrorInit) {
     super(init.message);
@@ -1044,6 +1081,12 @@ class GcsImportError extends Error {
     }
     if (init.partial_report !== undefined) {
       this.partial_report = init.partial_report;
+    }
+    if (init.bundle_compat !== undefined) {
+      this.bundle_compat = init.bundle_compat;
+    }
+    if (init.runtime_version !== undefined) {
+      this.runtime_version = init.runtime_version;
     }
   }
 }
@@ -1343,6 +1386,22 @@ async function runGcsImport(
         reason: result.reason,
       });
     }
+    if (result.reason === "version_incompatible") {
+      // Returned by commitImport / streamCommitImport when the runtime falls
+      // outside the bundle's compat range. The platform-side gate is the
+      // primary check; this catches legacy bundles whose ExportJob row
+      // predates PR #5470 (compat columns NULL → platform gate skipped).
+      throw new GcsImportError({
+        code: "version_incompatible",
+        message: formatRuntimeCompatibilityMessage(
+          result.bundle_compat,
+          result.runtime_version,
+        ),
+        reason: result.reason,
+        bundle_compat: result.bundle_compat,
+        runtime_version: result.runtime_version,
+      });
+    }
     // write_failed
     throw new GcsImportError({
       code: "write_failed",
@@ -1441,6 +1500,20 @@ function throwGcsImportError(err: unknown): never {
           errors: err.errors ?? [],
         }),
       );
+    }
+    if (err.code === "version_incompatible") {
+      // 422 (not 500) — the bundle is structurally valid but cannot be
+      // imported on this runtime. Body mirrors the platform's PR #5470
+      // response shape.
+      throw new UnprocessableEntityError(err.message, {
+        reason: "version_incompatible" as const,
+        ...(err.bundle_compat !== undefined && {
+          bundle_compat: err.bundle_compat,
+        }),
+        ...(err.runtime_version !== undefined && {
+          runtime_version: err.runtime_version,
+        }),
+      });
     }
     if (err.code === "extraction_failed") {
       throw new InternalError(err.message);
@@ -1672,6 +1745,29 @@ function throwImportCommitFailure(
 
   if (result.reason === "extraction_failed") {
     throw new InternalError(result.message);
+  }
+
+  if (result.reason === "version_incompatible") {
+    // Returned by commitImport / streamCommitImport when the runtime falls
+    // outside the bundle's compat range. The platform-side gate is the
+    // primary check; this catches legacy bundles whose ExportJob row
+    // predates PR #5470 (compat columns NULL → platform gate skipped).
+    //
+    // 422 (not 500) — the bundle is structurally valid but cannot be
+    // imported on this runtime; the caller can act on it (upgrade the
+    // runtime, choose a different bundle). Body mirrors the platform's
+    // PR #5470 response shape.
+    throw new UnprocessableEntityError(
+      formatRuntimeCompatibilityMessage(
+        result.bundle_compat,
+        result.runtime_version,
+      ),
+      {
+        reason: "version_incompatible" as const,
+        bundle_compat: result.bundle_compat,
+        runtime_version: result.runtime_version,
+      },
+    );
   }
 
   // write_failed

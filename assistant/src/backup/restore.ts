@@ -21,9 +21,14 @@ import { readFile } from "node:fs/promises";
 
 import { resetDb } from "../memory/db-connection.js";
 import type { PathResolver } from "../runtime/migrations/vbundle-import-analyzer.js";
+import {
+  evaluateRuntimeCompatibility,
+  formatRuntimeCompatibilityMessage,
+} from "../runtime/migrations/vbundle-import-policy.js";
 import { commitImport } from "../runtime/migrations/vbundle-importer.js";
 import type { ManifestType } from "../runtime/migrations/vbundle-validator.js";
 import { validateVBundle } from "../runtime/migrations/vbundle-validator.js";
+import { APP_VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -95,6 +100,23 @@ export async function restoreFromSnapshot(
     throw new Error(`Snapshot failed validation: ${summary}`);
   }
 
+  // Pre-check runtime-version compat before the DB close/reopen cycle.
+  // commitImport runs the same gate as defense-in-depth for callers that
+  // don't pre-check; we run it here too so an incompatible bundle short-
+  // circuits before resetDbImpl().
+  const compatResult = evaluateRuntimeCompatibility(
+    validation.manifest.compatibility,
+    APP_VERSION,
+  );
+  if (!compatResult.ok) {
+    throw new Error(
+      `Snapshot restore failed: ${formatRuntimeCompatibilityMessage(
+        compatResult.bundle_compat,
+        compatResult.runtime_version,
+      )}`,
+    );
+  }
+
   resetDbImpl();
 
   const commitResult = commitImpl({
@@ -116,6 +138,12 @@ export async function restoreFromSnapshot(
       case "extraction_failed":
       case "write_failed":
         message = commitResult.message;
+        break;
+      case "version_incompatible":
+        message = formatRuntimeCompatibilityMessage(
+          commitResult.bundle_compat,
+          commitResult.runtime_version,
+        );
         break;
     }
     throw new Error(`Snapshot restore failed: ${message}`);

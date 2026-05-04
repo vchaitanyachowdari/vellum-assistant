@@ -256,6 +256,8 @@ function createValidVBundle(
     bundle_id: string;
     origin_mode: "managed" | "self-hosted-remote" | "self-hosted-local";
     secrets_redacted: boolean;
+    min_runtime_version: string;
+    max_runtime_version: string | null;
   }>,
 ): Uint8Array {
   const dbData = new Uint8Array([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65]);
@@ -296,8 +298,11 @@ function createValidVBundle(
       mode: overrides?.origin_mode ?? "self-hosted-local",
     },
     compatibility: {
-      min_runtime_version: "0.0.0-test",
-      max_runtime_version: null,
+      min_runtime_version: overrides?.min_runtime_version ?? "0.0.0-test",
+      max_runtime_version:
+        overrides?.max_runtime_version === undefined
+          ? null
+          : overrides.max_runtime_version,
     },
     contents,
     checksum: "",
@@ -649,6 +654,107 @@ describe("handleMigrationImport — validation failures", () => {
 
     expect(currentDb).toEqual(originalDb);
     expect(currentConfig).toBe(originalConfig);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HTTP handler tests: version_incompatible (Codex P2 regression)
+//
+// Pin: a bundle whose min_runtime_version exceeds APP_VERSION must surface as
+// a 4xx user-actionable response (422 Unprocessable Entity), not a 500
+// InternalError. Body mirrors the platform's PR #5470 response shape so
+// clients can render the same UX regardless of which gate (platform or
+// runtime) rejected the bundle.
+// ---------------------------------------------------------------------------
+
+describe("handleMigrationImport — version_incompatible", () => {
+  test("incompatible bundle returns 422 with structured body, not 500", async () => {
+    const vbundle = createValidVBundle(undefined, {
+      min_runtime_version: "99.0.0",
+    });
+    const req = new Request("http://localhost/v1/migrations/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: toArrayBuffer(vbundle),
+    });
+
+    const res = await callHandler(handleMigrationImport, req);
+    const body = (await res.json()) as {
+      error: {
+        code: string;
+        message: string;
+        details?: {
+          reason: string;
+          bundle_compat: {
+            min_runtime_version: string;
+            max_runtime_version: string | null;
+          };
+          runtime_version: string;
+        };
+      };
+    };
+
+    expect(res.status).toBe(422);
+    expect(body.error.code).toBe("UNPROCESSABLE_ENTITY");
+    expect(body.error.message).toContain("99.0.0");
+    expect(body.error.details).toBeDefined();
+    expect(body.error.details!.reason).toBe("version_incompatible");
+    expect(body.error.details!.bundle_compat.min_runtime_version).toBe(
+      "99.0.0",
+    );
+    expect(body.error.details!.bundle_compat.max_runtime_version).toBeNull();
+    expect(typeof body.error.details!.runtime_version).toBe("string");
+  });
+
+  test("incompatible bundle does not modify disk", async () => {
+    const originalDb = new Uint8Array(readFileSync(testDbPath));
+    const originalConfig = readFileSync(testConfigPath, "utf8");
+
+    const vbundle = createValidVBundle(undefined, {
+      min_runtime_version: "99.0.0",
+    });
+    const req = new Request("http://localhost/v1/migrations/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: toArrayBuffer(vbundle),
+    });
+
+    await callHandler(handleMigrationImport, req);
+
+    const currentDb = new Uint8Array(readFileSync(testDbPath));
+    const currentConfig = readFileSync(testConfigPath, "utf8");
+
+    expect(currentDb).toEqual(originalDb);
+    expect(currentConfig).toBe(originalConfig);
+  });
+
+  // Regression: the route handler pre-checks runtime-version compat using
+  // `validation.manifest.compatibility` before calling `resetDb()` and
+  // `commitImport()`. If a future refactor reorders the close to come
+  // before the gate, an incompatible bundle would still 422 (commitImport
+  // has its own defense-in-depth gate) but it would unnecessarily close
+  // and reopen the live SQLite singleton on every rejected import.
+  //
+  // We can't easily spy on `resetDb` here without mocking `db-connection.js`
+  // module-wide (which other tests in this file rely on for real). The
+  // semantic regression — disk unchanged + 422 — is covered by the two
+  // tests above. This test is a marker so future readers know the pre-
+  // check intent; if it ever starts failing, recheck `handleMigrationImport`
+  // ordering against the comment at line 861-862 ("Validate the bundle
+  // before closing the DB to avoid an unnecessary close/reopen cycle when
+  // the bundle is invalid").
+  test("incompatible bundle short-circuits before resetDb (intent marker)", async () => {
+    const vbundle = createValidVBundle(undefined, {
+      min_runtime_version: "99.0.0",
+    });
+    const req = new Request("http://localhost/v1/migrations/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: toArrayBuffer(vbundle),
+    });
+
+    const res = await callHandler(handleMigrationImport, req);
+    expect(res.status).toBe(422);
   });
 });
 

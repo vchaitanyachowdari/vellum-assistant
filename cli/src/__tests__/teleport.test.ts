@@ -196,6 +196,15 @@ const localRuntimeImportFromGcsMock = spyOn(
   "localRuntimeImportFromGcs",
 ).mockResolvedValue({ jobId: "local-import-job-1" });
 
+// Default to a fixed version string. Tests that exercise the version-gate
+// surface override this mock per-case to assert the value flows from the
+// target runtime's `/v1/identity` (NOT from `cliPkg.version`) into the
+// download signed-URL request.
+const localRuntimeIdentityMock = spyOn(
+  localRuntimeClient,
+  "localRuntimeIdentity",
+).mockResolvedValue({ version: "0.6.5" });
+
 const localRuntimePollJobStatusMock = spyOn(
   localRuntimeClient,
   "localRuntimePollJobStatus",
@@ -297,6 +306,7 @@ afterAll(() => {
   computeDeviceIdMock.mockRestore();
   localRuntimeExportToGcsMock.mockRestore();
   localRuntimeImportFromGcsMock.mockRestore();
+  localRuntimeIdentityMock.mockRestore();
   localRuntimePollJobStatusMock.mockRestore();
   rmSync(testDir, { recursive: true, force: true });
   delete process.env.VELLUM_LOCKFILE_DIR;
@@ -446,6 +456,8 @@ beforeEach(() => {
   localRuntimeImportFromGcsMock.mockResolvedValue({
     jobId: "local-import-job-1",
   });
+  localRuntimeIdentityMock.mockReset();
+  localRuntimeIdentityMock.mockResolvedValue({ version: "0.6.5" });
   localRuntimePollJobStatusMock.mockReset();
   localRuntimePollJobStatusMock.mockImplementation(defaultLocalRuntimePollImpl);
 
@@ -850,7 +862,11 @@ describe("unified GCS flow — four directions", () => {
       // Signed-URL request for upload — pinned to the platform target's URL
       // so upload and download land on the same platform.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        expect.objectContaining({ operation: "upload" }),
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.6.5",
+          maxRuntimeVersion: null,
+        }),
         "platform-token",
         "https://platform.vellum.ai",
       );
@@ -937,7 +953,11 @@ describe("unified GCS flow — four directions", () => {
       // Platform side: requested an upload URL, kicked off a runtime export to
       // GCS, and polled the unified job status.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        expect.objectContaining({ operation: "upload" }),
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.6.5",
+          maxRuntimeVersion: null,
+        }),
         "platform-token",
         "https://platform.vellum.ai",
       );
@@ -974,13 +994,23 @@ describe("unified GCS flow — four directions", () => {
       // platform's bundle_key. The URL must target the SOURCE platform
       // (where the bundle was written) — pinned so a lockfile change
       // can't split upload and download across instances.
+      //
+      // `targetRuntimeVersion` MUST come from the target runtime's
+      // `/v1/identity` (mocked to "0.6.5"), NOT from the CLI's package
+      // version. The local target's daemon can be on a different version
+      // than the CLI orchestrating the teleport.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        {
+        expect.objectContaining({
           operation: "download",
           bundleKey: "platform-exports/org-1/bundle-abc.vbundle",
-        },
+          targetRuntimeVersion: "0.6.5",
+        }),
         "platform-token",
         "https://platform.vellum.ai",
+      );
+      expect(localRuntimeIdentityMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cloud: "local" }),
+        expect.any(String),
       );
 
       // Runtime import-from-gcs was kicked off with that URL.
@@ -1032,20 +1062,31 @@ describe("unified GCS flow — four directions", () => {
       // lives in one place end-to-end. For local→docker neither side is
       // platform, so we default to getPlatformUrl() (resolved once).
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        expect.objectContaining({ operation: "upload" }),
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.6.5",
+          maxRuntimeVersion: null,
+        }),
         "platform-token",
         "https://platform.vellum.ai",
       );
       expect(localRuntimeExportToGcsMock).toHaveBeenCalled();
 
       // Import: download-URL for the docker target, then runtime import.
+      // targetRuntimeVersion comes from the docker target's runtime
+      // identity (mocked to "0.6.5"), not from cliPkg.version.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        {
+        expect.objectContaining({
           operation: "download",
           bundleKey: "bundle-key-123",
-        },
+          targetRuntimeVersion: "0.6.5",
+        }),
         "platform-token",
         "https://platform.vellum.ai",
+      );
+      expect(localRuntimeIdentityMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cloud: "docker" }),
+        expect.any(String),
       );
       expect(localRuntimeImportFromGcsMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1099,7 +1140,11 @@ describe("unified GCS flow — four directions", () => {
       // Export leg: upload-URL (pinned to the same platform as import),
       // then runtime export.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        expect.objectContaining({ operation: "upload" }),
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.6.5",
+          maxRuntimeVersion: null,
+        }),
         "platform-token",
         "https://platform.vellum.ai",
       );
@@ -1163,7 +1208,11 @@ describe("signed-URL request targets the bundle-owning platform", () => {
       // The signed-URL request for upload MUST target the existing
       // platform assistant's runtimeUrl, not the default platform URL.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        expect.objectContaining({ operation: "upload" }),
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.6.5",
+          maxRuntimeVersion: null,
+        }),
         "platform-token",
         "https://staging-platform.vellum.ai",
       );
@@ -1224,8 +1273,14 @@ describe("signed-URL request targets the bundle-owning platform", () => {
 
       // The download URL must be requested from the SOURCE platform (where
       // the bundle was written by the runtime export), not the default.
+      // targetRuntimeVersion comes from the local target's `/v1/identity`
+      // (mocked to "0.6.5"), not from cliPkg.version.
       expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
-        { operation: "download", bundleKey: "dev-bundle-key" },
+        expect.objectContaining({
+          operation: "download",
+          bundleKey: "dev-bundle-key",
+          targetRuntimeVersion: "0.6.5",
+        }),
         "platform-token",
         "https://dev-platform.vellum.ai",
       );
@@ -1518,6 +1573,274 @@ describe("MigrationInProgressError handling", () => {
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("already in progress"),
       );
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VersionMismatchError handling — 422 from platformRequestSignedUrl on the
+// download leg is terminal: surface a friendly message + exit 1, no retry.
+// ---------------------------------------------------------------------------
+
+describe("VersionMismatchError handling", () => {
+  test("local target: 422 on download signed-URL exits 1 with friendly message", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    platformPollJobStatusMock.mockResolvedValue({
+      jobId: "platform-export-job-1",
+      type: "export",
+      status: "complete",
+      bundleKey: "platform-bundle-key-abc",
+    });
+
+    // Upload signed-URL succeeds; download signed-URL throws version-mismatch.
+    platformRequestSignedUrlMock.mockImplementation(async (params) => {
+      if (params.operation === "download") {
+        throw new platformClient.VersionMismatchError(
+          { min_runtime_version: "99.0.0", max_runtime_version: null },
+          "0.7.1",
+        );
+      }
+      return {
+        url: "https://storage.googleapis.com/bucket/signed-upload",
+        bundleKey: params.bundleKey ?? "bundle-key-123",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      };
+    });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("process.exit:1");
+
+      // Friendly message uses the prefix from VersionMismatchError.formatMessage.
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Cannot import: bundle requires runtime"),
+      );
+
+      // Terminal: no retry of the download signed-URL request.
+      const downloadCalls = platformRequestSignedUrlMock.mock.calls.filter(
+        (c) => (c[0] as { operation: string }).operation === "download",
+      );
+      expect(downloadCalls).toHaveLength(1);
+
+      // Runtime import-from-gcs must NOT be kicked off after the 422.
+      expect(localRuntimeImportFromGcsMock).not.toHaveBeenCalled();
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("docker target: 422 on download signed-URL exits 1 with friendly message", async () => {
+    setArgv("--from", "my-local", "--docker");
+
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+    const dockerEntry = makeEntry("new-docker", {
+      cloud: "docker",
+      runtimeUrl: "http://localhost:7822",
+    });
+
+    findAssistantByNameMock.mockImplementation((name: string) =>
+      name === "my-local" ? localEntry : null,
+    );
+
+    loadAllAssistantsMock.mockImplementation(() => {
+      if (hatchDockerMock.mock.calls.length > 0) {
+        return [localEntry, dockerEntry];
+      }
+      return [localEntry];
+    });
+
+    platformRequestSignedUrlMock.mockImplementation(async (params) => {
+      if (params.operation === "download") {
+        throw new platformClient.VersionMismatchError(
+          { min_runtime_version: "99.0.0", max_runtime_version: null },
+          "0.7.1",
+        );
+      }
+      return {
+        url: "https://storage.googleapis.com/bucket/signed-upload",
+        bundleKey: params.bundleKey ?? "bundle-key-123",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      };
+    });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("process.exit:1");
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Cannot import: bundle requires runtime"),
+      );
+
+      expect(localRuntimeImportFromGcsMock).not.toHaveBeenCalled();
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("non-VersionMismatchError on download signed-URL re-raises", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    platformPollJobStatusMock.mockResolvedValue({
+      jobId: "platform-export-job-1",
+      type: "export",
+      status: "complete",
+      bundleKey: "platform-bundle-key-abc",
+    });
+
+    platformRequestSignedUrlMock.mockImplementation(async (params) => {
+      if (params.operation === "download") {
+        throw new Error("network blew up");
+      }
+      return {
+        url: "https://storage.googleapis.com/bucket/signed-upload",
+        bundleKey: params.bundleKey ?? "bundle-key-123",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      };
+    });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("network blew up");
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Target-runtime version fetch — the download signed-URL request must use
+// the TARGET runtime's reported version, not the orchestrating CLI's
+// version (which can diverge when the target was upgraded independently).
+// ---------------------------------------------------------------------------
+
+describe("target runtime version fetch", () => {
+  test("local target: targetRuntimeVersion comes from /v1/identity, not cliPkg", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    platformPollJobStatusMock.mockResolvedValue({
+      jobId: "platform-export-job-1",
+      type: "export",
+      status: "complete",
+      bundleKey: "platform-bundle-key-abc",
+    });
+
+    // Choose a version unlikely to match cliPkg.version so a regression
+    // would be obvious.
+    localRuntimeIdentityMock.mockResolvedValue({ version: "1.2.3-runtime" });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await teleport();
+
+      const downloadCall = platformRequestSignedUrlMock.mock.calls.find(
+        (c) => (c[0] as { operation: string }).operation === "download",
+      );
+      expect(downloadCall).toBeDefined();
+      expect(downloadCall![0]).toMatchObject({
+        targetRuntimeVersion: "1.2.3-runtime",
+      });
+
+      // Identity was fetched against the TARGET (local) entry, not the
+      // platform source.
+      expect(localRuntimeIdentityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cloud: "local",
+          assistantId: "my-local",
+        }),
+        expect.any(String),
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("identity fetch failure aborts before requesting download URL", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    platformPollJobStatusMock.mockResolvedValue({
+      jobId: "platform-export-job-1",
+      type: "export",
+      status: "complete",
+      bundleKey: "platform-bundle-key-abc",
+    });
+
+    // Identity is fetched twice in this flow: once on the source (platform)
+    // for `min_runtime_version` on the upload signed-URL, then once on the
+    // target (local) for `targetRuntimeVersion` on the download signed-URL.
+    // Succeed on the source call so the flow gets as far as the target
+    // identity fetch — that's the failure this test is exercising.
+    localRuntimeIdentityMock.mockImplementation(async (entry) => {
+      if (entry.cloud === "local") {
+        throw new Error("Local runtime identity failed (502): bad gateway");
+      }
+      return { version: "0.6.5" };
+    });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("process.exit:1");
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Could not read target runtime version"),
+      );
+
+      // No download signed-URL request was made — we aborted before that.
+      const downloadCalls = platformRequestSignedUrlMock.mock.calls.filter(
+        (c) => (c[0] as { operation: string }).operation === "download",
+      );
+      expect(downloadCalls).toHaveLength(0);
+      expect(localRuntimeImportFromGcsMock).not.toHaveBeenCalled();
     } finally {
       restoreFetch();
     }
@@ -2144,6 +2467,185 @@ describe("auth + transient-error resilience", () => {
     } finally {
       restoreFetch();
       warnSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source-runtime version is sourced from the daemon, not the CLI
+// (Codex P1 regression guard for PR #29436)
+// ---------------------------------------------------------------------------
+
+describe("upload signed-URL records source runtime version (not CLI version)", () => {
+  test("local source: identity is fetched BEFORE the upload signed-URL request", async () => {
+    setArgv("--from", "my-local", "--platform");
+
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+    findAssistantByNameMock.mockImplementation((name: string) =>
+      name === "my-local" ? localEntry : null,
+    );
+
+    // Distinguish the daemon's version from anything else hardcoded.
+    localRuntimeIdentityMock.mockResolvedValue({ version: "0.5.9" });
+
+    // Order tracker: capture which mock was called first.
+    const callOrder: string[] = [];
+    localRuntimeIdentityMock.mockImplementationOnce(async () => {
+      callOrder.push("identity");
+      return { version: "0.5.9" };
+    });
+    platformRequestSignedUrlMock.mockImplementationOnce(async (params) => {
+      callOrder.push("signed-url");
+      return {
+        url: "https://storage.googleapis.com/bucket/signed-upload",
+        bundleKey: params.bundleKey ?? "bundle-key-123",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      };
+    });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await teleport();
+
+      expect(callOrder[0]).toBe("identity");
+      expect(callOrder[1]).toBe("signed-url");
+
+      // Upload request stamps minRuntimeVersion with the daemon's version,
+      // NOT cliPkg.version.
+      expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.5.9",
+          maxRuntimeVersion: null,
+        }),
+        "platform-token",
+        "https://platform.vellum.ai",
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("local source: identity fetch failure aborts before signed-URL request", async () => {
+    setArgv("--from", "my-local", "--platform");
+
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+    findAssistantByNameMock.mockImplementation((name: string) =>
+      name === "my-local" ? localEntry : null,
+    );
+
+    localRuntimeIdentityMock.mockRejectedValue(
+      new Error("Failed to fetch runtime identity: 503 Service Unavailable"),
+    );
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("process.exit:1");
+
+      // Must NOT have proceeded to signed URL or export.
+      expect(platformRequestSignedUrlMock).not.toHaveBeenCalled();
+      expect(localRuntimeExportToGcsMock).not.toHaveBeenCalled();
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Could not fetch runtime identity"),
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("platform source: managed runtime's identity is fetched and recorded", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    platformPollJobStatusMock.mockResolvedValue({
+      jobId: "platform-export-job-1",
+      type: "export",
+      status: "complete",
+      bundleKey: "platform-bundle",
+    });
+
+    localRuntimeIdentityMock.mockResolvedValue({ version: "0.7.2" });
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await teleport();
+
+      // Identity was fetched against the platform-managed runtime entry
+      // (cloud=vellum) with the platform token — not via guardian token.
+      expect(localRuntimeIdentityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cloud: "vellum",
+          runtimeUrl: "https://platform.vellum.ai",
+          assistantId: "my-platform",
+        }),
+        "platform-token",
+      );
+
+      // The recorded version came from the platform runtime, not the CLI.
+      expect(platformRequestSignedUrlMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: "upload",
+          minRuntimeVersion: "0.7.2",
+          maxRuntimeVersion: null,
+        }),
+        "platform-token",
+        "https://platform.vellum.ai",
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  test("platform source: identity fetch failure aborts before signed-URL request", async () => {
+    setArgv("--from", "my-platform", "--local", "my-local");
+
+    const platformEntry = makeEntry("my-platform", {
+      cloud: "vellum",
+      runtimeUrl: "https://platform.vellum.ai",
+    });
+    const localEntry = makeEntry("my-local", { cloud: "local" });
+
+    findAssistantByNameMock.mockImplementation((name: string) => {
+      if (name === "my-platform") return platformEntry;
+      if (name === "my-local") return localEntry;
+      return null;
+    });
+
+    localRuntimeIdentityMock.mockRejectedValue(
+      new Error("Failed to fetch runtime identity: 502 Bad Gateway"),
+    );
+
+    const restoreFetch = installTrackingFetch();
+    try {
+      await expect(teleport()).rejects.toThrow("process.exit:1");
+
+      // Signed-URL upload request must not have happened.
+      const uploadCalls = platformRequestSignedUrlMock.mock.calls.filter(
+        (call: unknown[]) =>
+          (call[0] as { operation: string }).operation === "upload",
+      );
+      expect(uploadCalls.length).toBe(0);
+
+      // Runtime export was never kicked off.
+      expect(localRuntimeExportToGcsMock).not.toHaveBeenCalled();
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Could not fetch runtime identity"),
+      );
+    } finally {
+      restoreFetch();
     }
   });
 });
