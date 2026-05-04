@@ -22,7 +22,10 @@ import type { HostProxyCapability } from "../../channels/types.js";
 import { parseInterfaceId, supportsHostProxy } from "../../channels/types.js";
 import { getOrCreateConversation } from "../../memory/conversation-key-store.js";
 import { getLogger } from "../../util/logger.js";
-import { formatSseFrame, formatSseHeartbeat } from "../assistant-event.js";
+import {
+  formatSseFrame,
+  formatSseHeartbeatWithData,
+} from "../assistant-event.js";
 import type {
   AssistantEventCallback,
   AssistantEventFilter,
@@ -37,8 +40,8 @@ import type { RouteDefinition, RouteHandlerArgs } from "./types.js";
 
 const log = getLogger("events-routes");
 
-/** Keep-alive comment sent to idle clients every 7 s by default. */
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 7_000;
+/** Keep-alive comment sent to idle clients every 5 s by default. */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 
 /**
  * Stream assistant events as Server-Sent Events.
@@ -58,7 +61,7 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 7_000;
  *
  * Options (for testing):
  *   hub               -- override the event hub (defaults to process singleton).
- *   heartbeatIntervalMs -- how often to emit keep-alive comments (default 7 s).
+ *   heartbeatIntervalMs -- how often to emit keep-alive comments (default 5 s).
  */
 export function handleSubscribeAssistantEvents(
   args: RouteHandlerArgs,
@@ -191,7 +194,7 @@ export function handleSubscribeAssistantEvents(
           return;
         }
 
-        controller.enqueue(encoder.encode(formatSseHeartbeat()));
+        controller.enqueue(encoder.encode(formatSseHeartbeatWithData()));
 
         heartbeatTimer = setInterval(() => {
           try {
@@ -203,7 +206,7 @@ export function handleSubscribeAssistantEvents(
             if (clientId) {
               hub.touchClient(clientId);
             }
-            controller.enqueue(encoder.encode(formatSseHeartbeat()));
+            controller.enqueue(encoder.encode(formatSseHeartbeatWithData()));
           } catch {
             sub.dispose();
             cleanup();
