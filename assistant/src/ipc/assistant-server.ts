@@ -150,6 +150,7 @@ export class AssistantIpcServer {
     this.methods.set("db_proxy", (params) =>
       handleDbProxy(params as unknown as DbProxyParams),
     );
+
   }
 
   /** Start listening on the Unix domain socket. */
