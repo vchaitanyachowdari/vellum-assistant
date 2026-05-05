@@ -64,12 +64,15 @@ afterAll(() => {
   mock.restore();
 });
 
+import { resolveCallSiteConfig } from "../config/llm-resolver.js";
 import {
   deepMergeOverwrite,
   getConfig,
   invalidateConfigCache,
   loadConfig,
+  mergeDefaultWorkspaceConfig,
 } from "../config/loader.js";
+import { seedInferenceProfiles } from "../config/seed-inference-profiles.js";
 import { _setStorePath } from "../security/encrypted-store.js";
 
 // ---------------------------------------------------------------------------
@@ -274,6 +277,8 @@ describe("loadConfig startup behavior", () => {
     ensureTestDir();
     const resetPaths = [
       CONFIG_PATH,
+      join(WORKSPACE_DIR, "default-config.json"),
+      join(WORKSPACE_DIR, "hatch-overlay.json"),
       join(WORKSPACE_DIR, "keys.enc"),
       join(WORKSPACE_DIR, "data"),
       join(WORKSPACE_DIR, "data", "memory"),
@@ -295,11 +300,13 @@ describe("loadConfig startup behavior", () => {
     if (existsSync(updatesPath)) rmSync(updatesPath, { force: true });
     ensureTestDir();
     _setStorePath(join(WORKSPACE_DIR, "keys.enc"));
+    delete process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH;
     invalidateConfigCache();
   });
 
   afterEach(() => {
     _setStorePath(null);
+    delete process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH;
     invalidateConfigCache();
   });
 
@@ -389,6 +396,83 @@ describe("loadConfig startup behavior", () => {
     // Sanity: schema-defaulted nested fields are materialized
     expect(raw.memory?.v2?.bm25_b).toBe(0.4);
     expect(raw.dataDir).toBeUndefined();
+  });
+
+  test("hatch default overlay does not suppress first-load inference profiles", () => {
+    const overlayPath = join(WORKSPACE_DIR, "hatch-overlay.json");
+    writeFileSync(
+      overlayPath,
+      JSON.stringify(
+        {
+          llm: {
+            default: {
+              provider: "anthropic",
+              model: "claude-opus-4-7",
+            },
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH = overlayPath;
+
+    seedInferenceProfiles();
+    mergeDefaultWorkspaceConfig();
+    const config = loadConfig();
+
+    expect(config.llm.default.provider).toBe("anthropic");
+    expect(config.llm.default.model).toBe("claude-opus-4-7");
+    expect(config.llm.activeProfile).toBe("balanced");
+    expect(config.llm.profiles.balanced?.model).toBe("claude-sonnet-4-6");
+
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    expect(raw.llm.default).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+    expect(raw.llm.activeProfile).toBe("balanced");
+    expect(raw.llm.profiles.balanced.model).toBe("claude-sonnet-4-6");
+  });
+
+  test("non-Anthropic hatch overlay does not activate Anthropic managed profile", () => {
+    const overlayPath = join(WORKSPACE_DIR, "hatch-overlay.json");
+    writeFileSync(
+      overlayPath,
+      JSON.stringify(
+        {
+          llm: {
+            default: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH = overlayPath;
+
+    seedInferenceProfiles();
+    mergeDefaultWorkspaceConfig();
+    const config = loadConfig();
+    const mainAgentConfig = resolveCallSiteConfig("mainAgent", config.llm);
+
+    expect(config.llm.default.provider).toBe("openai");
+    expect(config.llm.default.model).toBe("gpt-5.4");
+    expect(config.llm.activeProfile).toBeUndefined();
+    expect(config.llm.profiles.balanced?.provider).toBeUndefined();
+    expect(mainAgentConfig.provider).toBe("openai");
+    expect(mainAgentConfig.model).toBe("gpt-5.4");
+
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    expect(raw.llm.default).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    expect(raw.llm.activeProfile).toBeUndefined();
+    expect(raw.llm.profiles.balanced).toEqual({});
   });
 
   test("still quarantines corrupt JSON", () => {

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { loadRawConfig, saveRawConfig } from "./loader.js";
 import {
   DEFAULT_CONTEXT_WINDOW_MAX_INPUT_TOKENS,
@@ -60,13 +62,14 @@ export const MANAGED_PROFILE_NAMES = new Set(
  * User-created profiles are never touched; pre-existing profiles
  * without a `source` field get `source: "user"` backfilled.
  *
- * No-op when `VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH` is set (same guard
- * as migration 052) because the platform-provided default-config overlay
- * is the authoritative source for profile seeds.
+ * Still runs when `VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH` is set. Lifecycle
+ * calls this before merging the hatch overlay so managed profiles exist for the
+ * first config load, while the overlay can still override profile/default
+ * fields immediately afterward. When that overlay declares a non-Anthropic
+ * default provider, seed placeholder profile slots but do not force the
+ * Anthropic `balanced` profile active.
  */
 export function seedInferenceProfiles(): void {
-  if (process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH) return;
-
   const config = loadRawConfig();
 
   if (config.llm == null || typeof config.llm !== "object") {
@@ -78,17 +81,27 @@ export function seedInferenceProfiles(): void {
     llm.profiles = {};
   }
   const profiles = llm.profiles as Record<string, Record<string, unknown>>;
+  const isAnthropicDefault =
+    resolveEffectiveDefaultProvider(llm) === "anthropic";
 
   for (const [name, seed] of Object.entries(MANAGED_PROFILE_SEED_DATA)) {
-    profiles[name] = { ...seed };
+    profiles[name] = isAnthropicDefault ? { ...seed } : {};
   }
 
-  // Reset to the default managed profile when the current value is missing.
-  if (
+  if (isAnthropicDefault) {
+    // Reset to the default managed profile when the current value is missing.
+    if (
+      typeof llm.activeProfile !== "string" ||
+      !(llm.activeProfile in profiles)
+    ) {
+      llm.activeProfile = "balanced";
+    }
+  } else if (
     typeof llm.activeProfile !== "string" ||
-    !(llm.activeProfile in profiles)
+    !(llm.activeProfile in profiles) ||
+    MANAGED_PROFILE_NAMES.has(llm.activeProfile)
   ) {
-    llm.activeProfile = "balanced";
+    delete llm.activeProfile;
   }
 
   const profileOrder = Array.isArray(llm.profileOrder)
@@ -114,4 +127,36 @@ export function seedInferenceProfiles(): void {
   }
 
   saveRawConfig(config);
+}
+
+function resolveEffectiveDefaultProvider(llm: Record<string, unknown>): string {
+  return (
+    readDefaultProviderFromOverlay() ??
+    readString(readObject(llm.default)?.provider) ??
+    "anthropic"
+  );
+}
+
+function readDefaultProviderFromOverlay(): string | undefined {
+  const defaultConfigPath = process.env.VELLUM_DEFAULT_WORKSPACE_CONFIG_PATH;
+  if (!defaultConfigPath) return undefined;
+
+  try {
+    const raw = JSON.parse(readFileSync(defaultConfigPath, "utf-8"));
+    const llm = readObject(raw)?.llm;
+    const defaultBlock = readObject(readObject(llm)?.default);
+    return readString(defaultBlock?.provider);
+  } catch {
+    return undefined;
+  }
+}
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
