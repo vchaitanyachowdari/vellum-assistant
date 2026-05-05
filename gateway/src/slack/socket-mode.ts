@@ -762,7 +762,6 @@ export class SlackSocketModeClient {
         if (!userInfo) return undefined;
         return userInfo.displayName || userInfo.username;
       },
-      { ignoredUserIds: [this.config.botUserId] },
     );
   }
 
@@ -876,10 +875,7 @@ export class SlackSocketModeClient {
   ): Promise<void> {
     const text = this.extractTextBearingContent(event);
     const userLabels = text ? await this.resolveMentionLabelsForText(text) : {};
-    const renderContext = {
-      botUserId: this.config.botUserId,
-      userLabels,
-    };
+    const renderContext = { userLabels };
 
     let normalized: NormalizedSlackEvent | null;
     if (isReactionAdded) {
