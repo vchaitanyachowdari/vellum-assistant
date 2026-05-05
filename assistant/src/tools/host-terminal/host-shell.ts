@@ -179,6 +179,13 @@ class HostShellTool implements Tool {
       };
     }
     const background = input.background === true;
+    if (background && context.diskPressureCleanupModeActive === true) {
+      return {
+        content:
+          "Error: background host shell commands are not available during disk pressure cleanup mode.",
+        isError: true,
+      };
+    }
 
     const targetClientId =
       typeof input.target_client_id === "string" &&
@@ -314,7 +321,7 @@ class HostShellTool implements Tool {
           conversationId: context.conversationId,
           command,
           startedAt: Date.now(),
-          cancel: () => abortController.abort(),
+          cancel: (reason?: string) => abortController.abort(reason),
         });
 
         return {

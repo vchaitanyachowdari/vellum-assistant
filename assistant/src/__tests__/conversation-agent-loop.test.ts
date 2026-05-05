@@ -125,6 +125,34 @@ mock.module("../daemon/context-overflow-policy.js", () => ({
   resolveOverflowAction: () => mockOverflowAction,
 }));
 
+const mockDiskPressureStatus = {
+  enabled: true,
+  state: "critical",
+  locked: true,
+  acknowledged: true,
+  overrideActive: false,
+  effectivelyLocked: true,
+  lockId: "disk-pressure-test",
+  usagePercent: 98,
+  thresholdPercent: 95,
+  path: "/workspace",
+  lastCheckedAt: "2026-05-05T00:00:00.000Z",
+  blockedCapabilities: ["agent-turns", "background-work", "remote-ingress"],
+  error: null,
+};
+let mockDiskPressureDecision: Record<string, unknown> = {
+  action: "allow-normal",
+};
+const classifyDiskPressureTurnPolicyMock = mock(
+  (_status: unknown, _metadata: unknown) => mockDiskPressureDecision,
+);
+mock.module("../daemon/disk-pressure-guard.js", () => ({
+  getDiskPressureStatus: () => mockDiskPressureStatus,
+}));
+mock.module("../daemon/disk-pressure-policy.js", () => ({
+  classifyDiskPressureTurnPolicy: classifyDiskPressureTurnPolicyMock,
+}));
+
 const updateMessageMetadataMock = mock(
   (_id: string, _updates: Record<string, unknown>) => {},
 );
@@ -572,6 +600,8 @@ beforeEach(() => {
   mockEstimateTokens = 1000;
   mockReducerStepFn = null;
   mockOverflowAction = "fail_gracefully";
+  mockDiskPressureDecision = { action: "allow-normal" };
+  classifyDiskPressureTurnPolicyMock.mockClear();
   mockInjectionBlocks = {};
   recordUsageMock.mockClear();
   recordRequestLogMock.mockClear();
@@ -615,6 +645,218 @@ describe("session-agent-loop", () => {
       await expect(
         runAgentLoopImpl(ctx, "hello", "msg-1", () => {}),
       ).rejects.toThrow("runAgentLoop called without prior persistUserMessage");
+    });
+  });
+
+  describe("disk pressure injection context", () => {
+    test("passes cleanup context into runtime injections for cleanup-mode turns", async () => {
+      mockDiskPressureDecision = {
+        action: "allow-cleanup-mode",
+        reason: "guardian",
+      };
+      mockConversationRow = {
+        ...mockConversationRow,
+        conversationType: "standard",
+        source: "user",
+      };
+      const ctx = makeCtx({
+        channelCapabilities: {
+          channel: "telegram",
+          dashboardCapable: false,
+          supportsDynamicUi: false,
+          supportsVoiceInput: false,
+          chatType: "private",
+        },
+        trustContext: {
+          sourceChannel: "telegram",
+          trustClass: "guardian",
+        } as AgentLoopConversationContext["trustContext"],
+      });
+
+      await runAgentLoopImpl(ctx, "free up space", "msg-1", () => {});
+
+      expect(classifyDiskPressureTurnPolicyMock).toHaveBeenCalledWith(
+        mockDiskPressureStatus,
+        expect.objectContaining({
+          callSite: "mainAgent",
+          conversationSource: "user",
+          conversationType: "standard",
+          isInteractive: true,
+          sourceChannel: "telegram",
+          sourceInterface: "web",
+          trustContext: {
+            sourceChannel: "telegram",
+            trustClass: "guardian",
+          },
+        }),
+      );
+      const firstInjectionOptions = applyRuntimeInjectionsMock.mock
+        .calls[0]![1] as {
+        diskPressureContext?: { cleanupModeActive: boolean } | null;
+      };
+      expect(firstInjectionOptions.diskPressureContext).toEqual({
+        cleanupModeActive: true,
+      });
+    });
+
+    test("passes cleanup context into runtime injections for local-owner turns", async () => {
+      mockDiskPressureDecision = {
+        action: "allow-cleanup-mode",
+        reason: "local-owner",
+      };
+      const ctx = makeCtx();
+
+      await runAgentLoopImpl(ctx, "free up space", "msg-1", () => {});
+
+      expect(classifyDiskPressureTurnPolicyMock).toHaveBeenCalledWith(
+        mockDiskPressureStatus,
+        expect.objectContaining({
+          sourceChannel: "vellum",
+          sourceInterface: "web",
+          trustContext: null,
+        }),
+      );
+      const firstInjectionOptions = applyRuntimeInjectionsMock.mock
+        .calls[0]![1] as {
+        diskPressureContext?: { cleanupModeActive: boolean } | null;
+      };
+      expect(firstInjectionOptions.diskPressureContext).toEqual({
+        cleanupModeActive: true,
+      });
+    });
+
+    test("keeps cleanup context on overflow recovery reinjection", async () => {
+      mockDiskPressureDecision = {
+        action: "allow-cleanup-mode",
+        reason: "guardian",
+      };
+      mockEstimateTokens = 96000;
+      mockReducerStepFn = (msgs: Message[]) => ({
+        messages: msgs,
+        tier: "forced_compaction",
+        state: {
+          appliedTiers: ["forced_compaction"],
+          injectionMode: "full",
+          exhausted: true,
+        },
+        estimatedTokens: 50000,
+      });
+      const ctx = makeCtx({
+        trustContext: {
+          sourceChannel: "telegram",
+          trustClass: "guardian",
+        } as AgentLoopConversationContext["trustContext"],
+      });
+
+      await runAgentLoopImpl(ctx, "free up space", "msg-1", () => {});
+
+      expect(applyRuntimeInjectionsMock.mock.calls.length).toBeGreaterThan(1);
+      for (const call of applyRuntimeInjectionsMock.mock.calls) {
+        const options = call[1] as {
+          diskPressureContext?: { cleanupModeActive: boolean } | null;
+        };
+        expect(options.diskPressureContext).toEqual({
+          cleanupModeActive: true,
+        });
+      }
+    });
+
+    test("blocks policy-denied turns before runtime injection or model execution", async () => {
+      mockDiskPressureDecision = {
+        action: "block",
+        reason: "trusted-contact",
+      };
+      const events: ServerMessage[] = [];
+      const agentLoopRun = mock(async (_messages: Message[]) => {
+        throw new Error("agent loop should not run");
+      });
+      const activityStates: unknown[][] = [];
+      const traceEvents: unknown[][] = [];
+      const ctx = makeCtx({
+        emitActivityState: (...args: unknown[]) => {
+          activityStates.push(args);
+        },
+        traceEmitter: {
+          emit: (...args: unknown[]) => {
+            traceEvents.push(args);
+          },
+        } as unknown as AgentLoopConversationContext["traceEmitter"],
+      });
+      ctx.agentLoop.run = agentLoopRun as AgentLoopRun;
+
+      await runAgentLoopImpl(ctx, "hello", "msg-1", (msg) => events.push(msg));
+
+      expect(agentLoopRun).not.toHaveBeenCalled();
+      expect(applyRuntimeInjectionsMock).not.toHaveBeenCalled();
+      expect(activityStates).toContainEqual([
+        "idle",
+        "error_terminal",
+        "global",
+        "test-req",
+      ]);
+      expect(traceEvents[0]).toEqual([
+        "request_error",
+        expect.stringContaining("Storage is critically low"),
+        expect.objectContaining({
+          requestId: "test-req",
+          status: "error",
+          attributes: expect.objectContaining({
+            errorCategory: "disk_pressure",
+            errorCode: "DISK_SPACE_CRITICAL",
+            diskPressureReason: "trusted-contact",
+          }),
+        }),
+      ]);
+      expect(events.find((event) => event.type === "error")).toMatchObject({
+        type: "error",
+        conversationId: "test-conv",
+        requestId: "test-req",
+        code: "DISK_SPACE_CRITICAL",
+        category: "disk_pressure",
+        message: expect.stringContaining("remote messages are ignored"),
+      });
+      expect(
+        events.find((event) => event.type === "conversation_error"),
+      ).toMatchObject({
+        type: "conversation_error",
+        conversationId: "test-conv",
+        code: "DISK_SPACE_CRITICAL",
+        retryable: true,
+        errorCategory: "disk_pressure",
+        userMessage: expect.stringContaining("remote messages are ignored"),
+      });
+    });
+
+    test("blocked background turns clear processing state and drain the queue", async () => {
+      mockDiskPressureDecision = {
+        action: "block",
+        reason: "background",
+      };
+      const drainQueue = mock(async (_reason: unknown) => {});
+      const activityStates: unknown[][] = [];
+      const ctx = makeCtx({
+        drainQueue,
+        emitActivityState: (...args: unknown[]) => {
+          activityStates.push(args);
+        },
+      });
+
+      await runAgentLoopImpl(ctx, "background task", "msg-1", () => {}, {
+        callSite: "memoryConsolidation",
+        isInteractive: false,
+      });
+
+      expect(applyRuntimeInjectionsMock).not.toHaveBeenCalled();
+      expect(ctx.processing).toBe(false);
+      expect(ctx.abortController).toBeNull();
+      expect(ctx.currentRequestId).toBeUndefined();
+      expect(drainQueue).toHaveBeenCalledWith("loop_complete");
+      expect(activityStates).toContainEqual([
+        "idle",
+        "error_terminal",
+        "global",
+        "test-req",
+      ]);
     });
   });
 
