@@ -35,45 +35,26 @@ import { shouldOutputJson, writeOutput } from "../output.js";
 // Human-readable formatters
 // ---------------------------------------------------------------------------
 
-function formatChannelSummary(ch: ContactChannel): string {
-  const parts = [ch.type, ch.address];
-  if (ch.status !== "active") parts.push(`(${ch.status})`);
-  if (ch.policy !== "allow") parts.push(`[${ch.policy}]`);
-  return parts.join(" ");
-}
-
 function formatContactTable(contacts: ContactWithChannels[]): string {
   const headers = ["ID", "NAME", "ROLE", "CHANNELS"];
   const rows = contacts.map((c) => [
     c.id,
     c.displayName,
     `${c.role}/${c.contactType}`,
-    c.channels.length > 0
-      ? c.channels.map(formatChannelSummary).join(", ")
-      : "(no channels)",
+    String(c.channels.length),
   ]);
 
-  // Pad all columns except the last (CHANNELS can wrap naturally)
-  const fixedCols = headers.length - 1;
-  const widths = headers
-    .slice(0, fixedCols)
-    .map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]?.length ?? 0)));
+  // Pad all columns
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => r[i]?.length ?? 0)),
+  );
 
   const pad = (s: string, w: number) => s.padEnd(w);
-  const headerLine = [
-    ...headers.slice(0, fixedCols).map((h, i) => pad(h, widths[i])),
-    headers[fixedCols],
-  ].join("  ");
-  const separator = [
-    ...widths.map((w) => "─".repeat(w)),
-    "─".repeat(headers[fixedCols].length),
-  ].join("  ");
+  const headerLine = headers.map((h, i) => pad(h, widths[i])).join("  ");
+  const separator = widths.map((w) => "─".repeat(w)).join("  ");
 
   const dataLines = rows.map((row) =>
-    [
-      ...row.slice(0, fixedCols).map((cell, i) => pad(cell, widths[i])),
-      row[fixedCols],
-    ].join("  "),
+    row.map((cell, i) => pad(cell, widths[i])).join("  "),
   );
 
   return [headerLine, separator, ...dataLines].join("\n");
