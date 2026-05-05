@@ -62,7 +62,8 @@ class HostFileWriteTool implements Tool {
     }
 
     const targetClientId =
-      typeof input.target_client_id === "string" && input.target_client_id !== ""
+      typeof input.target_client_id === "string" &&
+      input.target_client_id !== ""
         ? input.target_client_id
         : undefined;
 
@@ -130,6 +131,8 @@ class HostFileWriteTool implements Tool {
         },
         context.conversationId,
         context.signal,
+        targetClientId,
+        context.sourceActorPrincipalId,
       );
     }
 
