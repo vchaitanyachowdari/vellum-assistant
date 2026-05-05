@@ -47,7 +47,10 @@ import { hatchLocal } from "../lib/hatch-local.js";
 import { retireLocal } from "../lib/retire-local.js";
 import { validateAssistantName } from "../lib/retire-archive.js";
 import { stopProcessByPidFile } from "../lib/process.js";
-import { fetchCurrentVersion } from "../lib/upgrade-lifecycle.js";
+import {
+  fetchAssistantIngressUrl,
+  fetchCurrentVersion,
+} from "../lib/upgrade-lifecycle.js";
 import { compareVersions } from "../lib/version-compat.js";
 import { join } from "node:path";
 
@@ -1066,12 +1069,19 @@ async function tryInjectPlatformCredentials(
     const user = await fetchCurrentUser(token);
     const orgId = await fetchOrganizationId(token);
     const clientInstallationId = computeDeviceId();
+    const [assistantVersion, ingressUrl] = await Promise.all([
+      fetchCurrentVersion(entry.runtimeUrl),
+      fetchAssistantIngressUrl(entry.runtimeUrl, entry.bearerToken),
+    ]);
     const registration = await ensureSelfHostedLocalRegistration(
       token,
       orgId,
       clientInstallationId,
       entry.assistantId,
       "cli",
+      assistantVersion,
+      getPlatformUrl(),
+      ingressUrl,
     );
 
     // Resolve the API key: 1) fresh from registration, 2) existing from
