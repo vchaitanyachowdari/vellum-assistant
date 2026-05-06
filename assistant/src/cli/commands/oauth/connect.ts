@@ -4,7 +4,6 @@ import type { Command } from "commander";
 
 import { getIsContainerized } from "../../../config/env-registry.js";
 import { cliIpcCall } from "../../../ipc/cli-client.js";
-import { orchestrateOAuthConnect } from "../../../oauth/connect-orchestrator.js";
 import {
   getAppByProviderAndClientId,
   getMostRecentAppByProvider,
@@ -514,57 +513,16 @@ Examples:
               return;
             }
 
-            // IPC unavailable (daemon unreachable, older daemon without this route, socket missing).
-            // Fall through to the existing in-process flow. This still carries the heap-split bug
-            // for gateway transport, but if the daemon is unreachable we have a worse problem;
-            // the fallback preserves existing behavior as a regression guard.
-            // e. Call the orchestrator (in-process fallback)
-            const result = await orchestrateOAuthConnect({
-              service: provider,
-              clientId,
-              clientSecret,
-              callbackTransport: opts.callbackTransport,
-              isInteractive: opts.browser !== false,
-              openUrl: opts.browser !== false ? openInHostBrowser : undefined,
-              ...(opts.scopes ? { requestedScopes: opts.scopes } : {}),
-            });
-
-            // f. Handle results
-            if (!result.success) {
-              writeError(result.error ?? "OAuth connect failed");
-              return;
-            }
-
-            if (result.deferred) {
-              if (jsonMode) {
-                writeOutput(cmd, {
-                  ok: true,
-                  deferred: true,
-                  // Wire key stays `authUrl` for backward compatibility with
-                  // existing CLI script consumers; the internal field on
-                  // `result` is `authorizeUrl`.
-                  authUrl: result.authorizeUrl,
-                  service: result.service,
-                });
-              } else {
-                process.stdout.write(
-                  `\nAuthorize with ${provider}:\n\n${result.authorizeUrl}\n\nThe connection will complete automatically once you authorize.\n`,
-                );
-              }
-              return;
-            }
-
-            // Interactive mode completed
-            if (jsonMode) {
-              writeOutput(cmd, {
-                ok: true,
-                grantedScopes: result.grantedScopes,
-                accountInfo: result.accountInfo,
-              });
-            } else {
-              const msg = `Connected to ${provider}${result.accountInfo ? ` as ${result.accountInfo}` : ""}`;
-              process.stdout.write(msg + "\n");
-            }
+            // IPC unavailable: the assistant must be running for OAuth connect. The
+            // gateway-routed callback lands in the assistant's process, and any tokens
+            // acquired need the assistant to store and use them — so an unreachable
+            // assistant is a fatal precondition. Surface a clear error and exit 1.
+            writeError(
+              startResult.error
+                ? `Could not reach the assistant: ${startResult.error}. Is the assistant running?`
+                : "Could not reach the assistant. Is the assistant running?",
+            );
+            return;
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
