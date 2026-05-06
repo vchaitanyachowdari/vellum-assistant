@@ -135,9 +135,9 @@ final class PlanCardTests: XCTestCase {
         XCTAssertEqual(card.displayState, .error(message: "Boom", buttonLabel: "Manage Plan"))
     }
 
-    /// Without a fallback CTA in the error state, an `auto-credit-topup`-disabled
-    /// user hitting a transient `/billing/subscription` failure has no path to
-    /// billing settings — the prior simple "Adjust Plan" card always had a button.
+    /// Without a fallback CTA in the error state, a user hitting a transient
+    /// `/billing/subscription` failure has no path to billing settings — the
+    /// prior simple "Adjust Plan" card always had a button.
     func testErrorStateExposesManageButton() {
         var manageInvocations = 0
         let card = PlanCard(
@@ -165,7 +165,6 @@ final class PlanCardTests: XCTestCase {
         let cancelISO = "2026-09-15T00:00:00Z"
         let view = SettingsBillingTab(
             authManager: AuthManager(),
-            assistantFeatureFlagStore: AssistantFeatureFlagStore(),
             initialSummary: nil,
             initialSubscription: makeProSubscription(
                 cancelAtPeriodEnd: true,
@@ -190,7 +189,6 @@ final class PlanCardTests: XCTestCase {
     func testActiveProSubscriptionRendersRenewsLine() {
         let view = SettingsBillingTab(
             authManager: AuthManager(),
-            assistantFeatureFlagStore: AssistantFeatureFlagStore(),
             initialSummary: nil,
             initialSubscription: makeProSubscription(cancelAtPeriodEnd: false),
             initialPlans: makePlanCatalog()
@@ -209,7 +207,6 @@ final class PlanCardTests: XCTestCase {
     func testBaseSubscriptionRendersNoRenewalLine() {
         let view = SettingsBillingTab(
             authManager: AuthManager(),
-            assistantFeatureFlagStore: AssistantFeatureFlagStore(),
             initialSummary: nil,
             initialSubscription: makeBaseSubscription(),
             initialPlans: makePlanCatalog()
@@ -224,7 +221,6 @@ final class PlanCardTests: XCTestCase {
     func testCancellingSubscriptionWithoutExplicitCancelAtFallsBackToPeriodEnd() {
         let view = SettingsBillingTab(
             authManager: AuthManager(),
-            assistantFeatureFlagStore: AssistantFeatureFlagStore(),
             initialSummary: nil,
             initialSubscription: makeProSubscription(
                 cancelAtPeriodEnd: true,
@@ -249,7 +245,6 @@ final class PlanCardTests: XCTestCase {
     func testCanceledStatusHidesRenewalLine() {
         let view = SettingsBillingTab(
             authManager: AuthManager(),
-            assistantFeatureFlagStore: AssistantFeatureFlagStore(),
             initialSummary: nil,
             initialSubscription: makeProSubscription(
                 cancelAtPeriodEnd: false,
