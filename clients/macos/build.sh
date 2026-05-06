@@ -42,28 +42,69 @@ set -euo pipefail
 # package-resolution failures (e.g. network timeouts downloading binary
 # artifacts). Retries up to MAX_ATTEMPTS times with a short delay.
 # ---------------------------------------------------------------------------
+restore_failed_dirty_spm_checkouts() {
+    local stdout_log="$1"
+    local stderr_log="$2"
+    local clients_dir
+    clients_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
+    local checkouts_dir="$clients_dir/.build/checkouts"
+    local restored_dirty=1
+
+    [ -d "$checkouts_dir" ] || return 1
+
+    for checkout in "$checkouts_dir"/*; do
+        [ -d "$checkout/.git" ] || continue
+
+        if ! git -C "$checkout" diff --quiet --ignore-submodules -- 2>/dev/null || \
+           ! git -C "$checkout" diff --cached --quiet --ignore-submodules -- 2>/dev/null || \
+           [ -n "$(git -C "$checkout" ls-files --others --exclude-standard 2>/dev/null)" ]; then
+            local physical_checkout
+            physical_checkout="$(cd "$checkout" && pwd -P 2>/dev/null || printf '%s' "$checkout")"
+            if ! grep -Fq "$checkout/" "$stderr_log" 2>/dev/null && \
+               ! grep -Fq "$physical_checkout/" "$stderr_log" 2>/dev/null && \
+               ! grep -Fq "$checkout/" "$stdout_log" 2>/dev/null && \
+               ! grep -Fq "$physical_checkout/" "$stdout_log" 2>/dev/null; then
+                continue
+            fi
+            echo "warning: dirty SPM checkout detected, restoring pinned package source: $(basename "$checkout")"
+            git -C "$checkout" restore --source=HEAD --staged --worktree . 2>/dev/null || return 1
+            git -C "$checkout" clean -fd 2>/dev/null || return 1
+            restored_dirty=0
+        fi
+    done
+
+    return "$restored_dirty"
+}
+
 swift_with_retry() {
     local max_attempts="${SWIFT_RETRY_ATTEMPTS:-3}"
     local attempt=1
     local _pch_cleaned=0
     local _build_cleaned=0
     local _artifact_cleaned=0
+    local _dirty_checkout_cleaned=0
+    local _stdout_log
+    _stdout_log=$(mktemp)
     local _stderr_log
     _stderr_log=$(mktemp)
-    # FIFO for stderr streaming. Process substitutions (2> >(tee ...)) are
+    # FIFOs for output streaming. Process substitutions (2> >(tee ...)) are
     # not tracked by `wait` in bash < 4.4 (macOS ships 3.2), so tee could
-    # still be writing when grep reads the log. A named pipe with an explicit
-    # tee PID gives correct synchronization on all bash versions.
+    # still be writing when grep reads the logs. Named pipes with explicit
+    # tee PIDs give correct synchronization on all bash versions.
     local _fifo_dir
     _fifo_dir=$(mktemp -d)
-    local _fifo="$_fifo_dir/stderr.fifo"
-    mkfifo "$_fifo"
-    trap "rm -rf '$_stderr_log' '$_fifo_dir'" RETURN
+    local _stdout_fifo="$_fifo_dir/stdout.fifo"
+    local _stderr_fifo="$_fifo_dir/stderr.fifo"
+    mkfifo "$_stdout_fifo" "$_stderr_fifo"
+    trap "rm -rf '$_stdout_log' '$_stderr_log' '$_fifo_dir'" RETURN
     while true; do
         local _cmd_exit=0
-        tee "$_stderr_log" >&2 < "$_fifo" &
+        tee "$_stdout_log" < "$_stdout_fifo" &
+        local _stdout_tee_pid=$!
+        tee "$_stderr_log" >&2 < "$_stderr_fifo" &
         local _tee_pid=$!
-        "$@" 2>"$_fifo" || _cmd_exit=$?
+        "$@" >"$_stdout_fifo" 2>"$_stderr_fifo" || _cmd_exit=$?
+        wait "$_stdout_tee_pid"
         wait "$_tee_pid"
         if [ "$_cmd_exit" -eq 0 ]; then
             return 0
@@ -105,6 +146,15 @@ swift_with_retry() {
                     [ -n "$_stale_path" ] && rm -rf "$_stale_path"
                 done
             _artifact_cleaned=1
+            continue
+        fi
+        # SwiftPM checkouts are generated cache contents. If one is edited
+        # locally, SwiftPM keeps reusing it and can fail in dependency source
+        # before package resolution has a chance to restore the pinned version.
+        if [ "$_dirty_checkout_cleaned" -eq 0 ] && restore_failed_dirty_spm_checkouts "$_stdout_log" "$_stderr_log"; then
+            echo "warning: restored dirty SPM checkout cache, retrying..."
+            [ -d "$SPM_MODULE_CACHE" ] && rm -rf "$SPM_MODULE_CACHE"
+            _dirty_checkout_cleaned=1
             continue
         fi
         # Signal 5 (SIGTRAP) is a non-transient crash (e.g. WebKit
