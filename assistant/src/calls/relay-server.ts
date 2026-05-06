@@ -66,6 +66,8 @@ import {
 } from "./speaker-identification.js";
 
 const log = getLogger("relay-server");
+const UUID_SHAPED_NAME =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 // ── ConversationRelay message types ──────────────────────────────────
 
@@ -1615,7 +1617,11 @@ export class RelayConnection {
   private resolveAssistantLabel(): string | null {
     try {
       const name = getAssistantName();
-      return name?.trim() || null;
+      const trimmedName = name?.trim();
+      if (!trimmedName || UUID_SHAPED_NAME.test(trimmedName)) {
+        return null;
+      }
+      return trimmedName;
     } catch {
       return null;
     }
