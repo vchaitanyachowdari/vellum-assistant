@@ -197,7 +197,7 @@ Prefer migrating the parent to `@Observable` so the bridge becomes unnecessary (
 - **Lazy containers for large collections.** Use `LazyVStack`, `LazyHStack`, `LazyVGrid` instead of eager equivalents when the item count is unbounded or large. In particular, avoid `VStack`/`HStack` inside a `ScrollView` for large or unbounded data-driven lists — eager loading kills scroll performance. Small, fixed-size lists where visibility-sensitive logic (e.g., `onAppear` pagination triggers) matters may use eager containers intentionally. See `clients/macos/AGENTS.md` §§ "No `.frame(maxWidth:)` …" for the FlexFrame anti-pattern that compounds with lazy containers (mechanically enforced in CI via `clients/scripts/check-flexframe.sh`).
 - **Keep modifier chains lean.** Every SwiftUI modifier wraps its content in a new view value. Long chains of redundant or duplicated modifiers deepen the view tree and increase diffing cost. Group related modifiers, remove redundant ones (e.g., don't set `.font` on every row when the parent already sets it), and extract heavily-modified subtrees into standalone `@ViewBuilder` methods.
 - **Scope observation narrowly.** Only observe the specific properties a view needs. Prefer granular `@Observable` properties or `withObservationTracking` over observing an entire store that publishes on unrelated changes. When a view reads `@Observable` properties from many different objects, extract logical sections (toolbar, overlays, content) into standalone child `View` structs — each child creates its own [observation tracking scope](https://developer.apple.com/videos/play/wwdc2023/10149/) so changes to one section's state don't re-evaluate the entire parent body. **Note:** private `@ViewBuilder` functions do NOT create separate observation scopes — they execute during the caller's `body` evaluation, so all their `@Observable` reads are tracked in the caller's scope. Use standalone `View` structs or [`ObservationBoundaryView`](https://developer.apple.com/videos/play/wwdc2023/10149/) (deferred `@escaping @ViewBuilder` closure) when extraction into a full `View` struct is impractical.
-- **Cache derived booleans from high-frequency collections.** Reading `.isEmpty` or `.count` on an `@Observable` stored property [tracks the property, not the value](https://developer.apple.com/videos/play/wwdc2023/10149/) — any mutation invalidates the view even when the derived boolean hasn't changed. For frequently-mutated collections, maintain a separate stored boolean with a write-only-on-change guard (`if new != old { prop = new }`). This also applies to modifiers like `.onChange(of:)` — if the `of:` expression reads a collection property, the outer body observes it.
+- **Cache derived booleans from high-frequency collections.** Reading `.isEmpty`, `.count`, `.first`, or `.contains` on an `@Observable` stored property [tracks the property, not the value](https://developer.apple.com/videos/play/wwdc2023/10149/) — any mutation invalidates the view even when the derived value hasn't changed, including reads inside `.onChange(of:)`. For frequently-mutated collections, maintain a separate stored scalar / lookup updated in `didSet` behind a `!=` guard, and route view-body and `.onChange` reads through the cached form. To prevent regression, mark the underlying collection [`@ObservationIgnored`](https://developer.apple.com/documentation/observation/observationignored()) so accidental view-body reads silently stop reacting (caught at code review) rather than working but expensive.
 - **Use `.task` + async sequences instead of `.onReceive` for `NotificationCenter`.** Each `.onReceive` modifier adds a generic wrapper layer to the view type and exists only for side effects — no rendering value. Use a single [`.task`](https://developer.apple.com/documentation/swiftui/view/task(priority:_:)) with [`NotificationCenter.notifications(named:)`](https://developer.apple.com/documentation/foundation/notificationcenter/notifications(named:object:)) async sequences instead. `.task` has identical lifecycle semantics (auto-cancelled on view disappear) without inflating the view type.
 - **Enable non-contiguous layout on TextKit 1 stacks in `NSViewRepresentable`.** When constructing an `NSLayoutManager` for an `NSTextView` hosted via `NSViewRepresentable`, set `layoutManager.allowsNonContiguousLayout = true`. The default (`false`) forces full-document glyph layout from character 0 on the main thread whenever a glyph range is queried — which happens the first time the text view is attached to its hosting view (`setDocumentView:` / `addSubview:` → `_setSuperview:` → `setNeedsDisplayInRect:` → `_glyphRangeForBoundingRect:`). Reference: [`NSLayoutManager.allowsNonContiguousLayout`](https://developer.apple.com/documentation/appkit/nslayoutmanager/allowsnoncontiguouslayout). **Exception — streaming text with a separate measurement stack:** when the representable measures height via a sibling TextKit stack that always fully lays out every glyph (e.g. `ensureLayout(for:)` + `usedRect(for:)`), the measured frame assumes the render stack will also lay out every glyph in that rect. Non-contiguous layout leaves glyphs pending until the view scrolls or draws them, which races with streaming updates — producing a gap (render paints a smaller laid-out region inside the correct frame) and then overlap (the next sibling is placed via the measured frame and the lazy glyphs later paint outside it). In that case set `allowsNonContiguousLayout = false` and document why. See `clients/shared/DesignSystem/Components/Display/SelectableTextView.swift` (lines 180–205) for the canonical example; `VCodeView` / `HighlightedTextView` still opt into non-contiguous layout independently because they do not share this measurement model.
 - **Prefer line-count math over `ensureLayout(for:)` for `sizeThatFits` when line wrapping is disabled and line height is pinned.** If the TextKit 1 stack uses an unbounded-width `NSTextContainer` (so lines never wrap) and the paragraph style pins `minimumLineHeight == maximumLineHeight`, the total height is exactly `lineCount * lineHeight + insets` — no glyph layout required. This avoids an O(glyph count) main-thread layout pass that SwiftUI would otherwise re-run on every cell during `LazyVStack` layout. Reference: [`NSLayoutManager.defaultLineHeight(for:)`](https://developer.apple.com/documentation/appkit/nslayoutmanager/defaultlineheight(for:)).
@@ -208,6 +208,48 @@ Prefer migrating the parent to `@Observable` so the bridge becomes unnecessary (
 
 - **Use per-entity `@Observable` objects for dictionary-stored data.** `@Observable` tracks at the property level, not per dictionary key. A `var items: [Key: Value]` property invalidates *all* readers when *any* key changes. When views display individual entries (e.g., per-subagent event lists), store each entry's data in its own `@Observable` class instance (e.g., `var states: [String: EntityState]` where `EntityState` is `@Observable`). Views that read a specific `EntityState`'s properties are only invalidated when *that* instance changes — not when a sibling entry is mutated. The dictionary itself should only be mutated when entries are added or removed (infrequent), while high-frequency updates go through the per-entity object's properties.
 - **Use targeted `@Published` + `.removeDuplicates()` instead of forwarding `objectWillChange`.** Wiring one object's `objectWillChange` publisher into another's invalidates the entire SwiftUI tree on every emission. Expose a narrow `@Published var activeMessageCount: Int` (or equivalent) and attach `.removeDuplicates()` so downstream views only re-render when the value actually changes.
+
+</details>
+<details>
+<summary><strong>Worked example — caching derived scalars from high-frequency `@Observable` collections</strong></summary>
+
+The Observation framework records access at the property level, not the value level: every assignment to an `@Observable` stored property fires the `willSet` hook and notifies every observer registered via [`withObservationTracking(_:onChange:)`](https://developer.apple.com/documentation/observation/withobservationtracking(_:onchange:)) — even when the new value equals the old one. SwiftUI runs the resulting graph update synchronously inside `willSet`, so a `.onChange(of: collection.derivedScalar)` modifier ends up subscribing to every mutation of the underlying collection, not just to changes in the scalar.
+
+```swift
+// Anti-pattern: `.onChange` reads `.isEmpty` from an @Observable collection, so
+// every per-row mutation fires the observer even though `isEmpty` is unchanged.
+.onChange(of: store.conversations.isEmpty) { _, isEmpty in ... }
+
+private var unreadCount: Int {
+    store.conversations.count { !$0.isArchived && $0.hasUnread }
+}
+.onChange(of: unreadCount) { _, count in ... } // also subscribes to the full array
+```
+
+```swift
+// Recommended: cache the scalar on the store behind an equality guard so
+// observers are only notified when the derived value actually changes.
+@Observable @MainActor final class Store {
+    var conversations: [Conversation] = [] {
+        didSet { recompute() }
+    }
+    private(set) var hasAnyConversations: Bool = false
+    private(set) var unreadCount: Int = 0
+
+    private func recompute() {
+        let any = !conversations.isEmpty
+        if hasAnyConversations != any { hasAnyConversations = any }
+        let count = conversations.count { !$0.isArchived && $0.hasUnread }
+        if unreadCount != count { unreadCount = count }
+    }
+}
+.onChange(of: store.hasAnyConversations) { _, hasAny in ... }
+.onChange(of: store.unreadCount) { _, count in ... }
+```
+
+For the pattern (and its enforcement) in this repo, see `ConversationListStore.recomputeDerivedProperties()` (`hasAnyConversations`, `unseenScheduledCount`, `visibleConversations`, …). Apply this any time a view-body or `.onChange` observer reads a scalar derived from an `@Observable` collection that mutates more than once per render frame.
+
+To make accidental regression impossible, mark the underlying collection [`@ObservationIgnored`](https://developer.apple.com/documentation/observation/observationignored()) and route all view-body reads through the cached scalars / lookups (see `ConversationListStore.conversations`). Note the failure mode: views that bypass the cache and read the ignored property silently stop reacting to mutations — verify there are no remaining view-body reads before adding the attribute.
 
 </details>
 

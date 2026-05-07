@@ -58,7 +58,7 @@ final class ConversationSelectionStore {
         draftViewModel = nil
         draftLocalId = nil
         activeConversationId = conversationId
-        activeConversation = listStore.conversations.first { $0.id == conversationId }
+        activeConversation = listStore.conversationsByLocalId[conversationId]
 
         let vm = getOrCreateViewModel(for: conversationId)
         vm?.ensureMessageLoopStarted()
@@ -216,9 +216,32 @@ final class ConversationSelectionStore {
             if activeConversation != nil { activeConversation = nil }
             return
         }
-        let updated = listStore.conversations.first { $0.id == activeConversationId }
+        let updated = listStore.conversationsByLocalId[activeConversationId]
         if updated != activeConversation {
             activeConversation = updated
+        }
+    }
+
+    // MARK: - Visible Selection Validation Cache
+
+    /// Local IDs of all non-archived conversations. Used by selection-validation
+    /// observers in `MainWindowView` to confirm that a selection target still
+    /// exists and is visible without scanning the full `listStore.conversations`
+    /// array — and without subscribing to it, which would re-invalidate the
+    /// validation observers on every unrelated list mutation.
+    ///
+    /// Synchronized by ``syncVisibleNonArchivedConversationIds()``, which is
+    /// invoked from ConversationManager's `onDerivedPropertiesRecomputed`
+    /// callback alongside ``syncActiveConversationCache()``.
+    private(set) var visibleNonArchivedConversationIds: Set<UUID> = []
+
+    /// Refresh ``visibleNonArchivedConversationIds`` from the cached visible
+    /// list. The equality guard skips the write when the membership set hasn't
+    /// changed (e.g. a per-message seen flip on an existing conversation).
+    func syncVisibleNonArchivedConversationIds() {
+        let updated = Set(listStore.visibleConversations.map(\.id))
+        if updated != visibleNonArchivedConversationIds {
+            visibleNonArchivedConversationIds = updated
         }
     }
 
@@ -259,7 +282,7 @@ final class ConversationSelectionStore {
             return vm
         }
         // Only create if the conversation exists
-        guard let conversation = listStore.conversations.first(where: { $0.id == conversationId }) else { return nil }
+        guard let conversation = listStore.conversationsByLocalId[conversationId] else { return nil }
         guard let viewModel = viewModelFactory?() else { return nil }
         viewModel.conversationId = conversation.conversationId
         viewModel.isChannelConversation = conversation.isChannelConversation
@@ -426,7 +449,7 @@ final class ConversationSelectionStore {
               previousId != nextId,
               let vm = chatViewModels[previousId],
               vm.messages.isEmpty else { return }
-        let conversation = listStore.conversations.first(where: { $0.id == previousId })
+        let conversation = listStore.conversationsByLocalId[previousId]
         guard conversation?.conversationId == nil else { return }
         listStore.conversations.removeAll { $0.id == previousId }
         chatViewModels.removeValue(forKey: previousId)
@@ -443,7 +466,7 @@ final class ConversationSelectionStore {
     /// channel conversation (Slack, etc.). Cancels any existing refresh task first.
     func startChannelRefreshIfNeeded(conversationId localId: UUID) {
         stopChannelRefresh()
-        guard let conversation = listStore.conversations.first(where: { $0.id == localId }),
+        guard let conversation = listStore.conversationsByLocalId[localId],
               conversation.isChannelConversation,
               let daemonConversationId = conversation.conversationId else { return }
 

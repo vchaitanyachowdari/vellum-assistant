@@ -169,9 +169,7 @@ final class ConversationManager: ConversationRestorerDelegate {
 
     var sortedGroups: [ConversationGroup] { listStore.sortedGroups }
 
-    var groupedConversations: [(group: ConversationGroup?, conversations: [ConversationModel])] {
-        listStore.groupedConversations
-    }
+    var groupedConversations: [GroupedConversations] { listStore.groupedConversations }
 
     var sidebarGroupEntries: [SidebarGroupEntry] { listStore.sidebarGroupEntries }
 
@@ -326,11 +324,12 @@ final class ConversationManager: ConversationRestorerDelegate {
             self?.markActiveConversationSeenIfNeeded()
         }
 
-        // List store → selection store: refresh cached active conversation after
-        // any conversations mutation so views stay current without tracking the
-        // full conversations array.
+        // List store → selection store: refresh cached active conversation and
+        // visible-selection-validation set after any conversations mutation so
+        // views stay current without tracking the full conversations array.
         listStore.onDerivedPropertiesRecomputed = { [weak self] in
             self?.selectionStore.syncActiveConversationCache()
+            self?.selectionStore.syncVisibleNonArchivedConversationIds()
         }
 
         // List store → selection store: schedule eviction after appending conversations
