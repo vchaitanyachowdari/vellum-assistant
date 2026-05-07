@@ -649,7 +649,24 @@ export function loadConfig(): AssistantConfig {
     let configFileExisted = true;
     if (existsSync(configPath)) {
       try {
-        fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+        const parsed: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
+        if (!isPlainObject(parsed)) {
+          // Same shape contract as `loadRawConfig`: top-level value must be a
+          // plain object. A `null`, primitive, or array is treated like a
+          // parse error so downstream code (`warnAndStripDeprecatedFields`,
+          // `setNestedValue` in the managed-Gemini migration block, etc.)
+          // never iterates a non-record. Quarantine + fall through to defaults.
+          quarantineCorruptConfig(
+            configPath,
+            new Error(
+              `config.json must contain a JSON object at the top level; got ${describeJsonShape(parsed)}`,
+            ),
+          );
+          fileConfig = {};
+          configFileExisted = false;
+        } else {
+          fileConfig = parsed;
+        }
       } catch (err) {
         // The daemon must never block startup (assistant/CLAUDE.md). A config
         // file that fails JSON.parse — truncated during a mid-write crash, or
@@ -827,24 +844,67 @@ export function invalidateConfigCache(): void {
  * Load the raw config from disk without any secure-storage merging.
  * Used by CLI config commands to read/write the file directly.
  * API keys in secure storage are managed via `assistant keys` commands.
+ *
+ * Contract: returns a plain object (`Record<string, unknown>`). When
+ * `config.json` is missing → returns `{}`. When the file is unparseable
+ * (truncated, hand-edited to invalid JSON) OR when it parses to a value
+ * that is technically valid JSON but NOT a plain object (`null`, a
+ * primitive like `42`, `"hello"`, `true`, or an array `[…]`) → quarantines
+ * the file and returns `{}`. Callers can therefore rely on the return
+ * type without runtime shape-checking — the boundary check happens here.
  */
 export function loadRawConfig(): Record<string, unknown> {
   ensureMigratedDataDir();
   const configPath = getConfigPath();
-  let raw: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    try {
-      raw = JSON.parse(readFileSync(configPath, "utf-8"));
-    } catch (err) {
-      // Mirror loadConfig(): quarantine the corrupt file and return an empty
-      // object rather than throwing. This prevents /v1/config from surfacing
-      // a 500 when the user's config.json is malformed.
-      quarantineCorruptConfig(configPath, err);
-      raw = {};
-    }
+  if (!existsSync(configPath)) {
+    return {};
   }
 
-  return raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    // Mirror loadConfig(): quarantine the corrupt file and return an empty
+    // object rather than throwing. This prevents /v1/config from surfacing
+    // a 500 when the user's config.json is malformed.
+    quarantineCorruptConfig(configPath, err);
+    return {};
+  }
+
+  if (!isPlainObject(parsed)) {
+    // Valid JSON but the wrong shape — `null`, a primitive, or an array.
+    // Treat the same as a parse error so the return-type contract above is
+    // truthful and downstream callers (e.g. /v1/config handlers, twilio
+    // integration routes, settings routes) can iterate keys safely.
+    quarantineCorruptConfig(
+      configPath,
+      new Error(
+        `config.json must contain a JSON object at the top level; got ${describeJsonShape(parsed)}`,
+      ),
+    );
+    return {};
+  }
+
+  return parsed;
+}
+
+/**
+ * Predicate for "the value is a plain JSON object" — i.e. not `null`, not
+ * a primitive, and not an array. The cast on the truthy branch is safe
+ * because the caller's static type narrowed accordingly.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Human-readable shape label for error messages. Distinguishes the four
+ * non-object JSON shapes the loader rejects.
+ */
+function describeJsonShape(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
 }
 
 export function saveRawConfig(config: Record<string, unknown>): void {
