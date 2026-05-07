@@ -75,7 +75,12 @@ function startManagedRedirectServer(provider: string): Promise<{
 
 type OAuthConnectStatusResponse =
   | { status: "pending"; service: string }
-  | { status: "complete"; service: string; account_info?: string; granted_scopes?: string[] }
+  | {
+      status: "complete";
+      service: string;
+      account_info?: string;
+      granted_scopes?: string[];
+    }
   | { status: "error"; service: string; error?: string };
 
 async function pollOAuthConnectStatus(
@@ -95,11 +100,19 @@ async function pollOAuthConnectStatus(
       }
     }
     if (!r.ok && r.statusCode !== undefined) {
-      return { status: "error", service: "?", error: r.error ?? "assistant error during OAuth status poll" };
+      return {
+        status: "error",
+        service: "?",
+        error: r.error ?? "assistant error during OAuth status poll",
+      };
     }
     await new Promise<void>((res) => setTimeout(res, opts.intervalMs));
   }
-  return { status: "error", service: "?", error: "Timed out waiting for OAuth callback" };
+  return {
+    status: "error",
+    service: "?",
+    error: "Timed out waiting for OAuth callback",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,25 +223,31 @@ Examples:
               body.requested_scopes = opts.scopes;
             }
 
-            // When opening the browser, start a local server to show a nice
-            // completion page instead of redirecting to the platform website.
-            //
-            // In containerized mode the loopback server is unreachable from
-            // the host browser, so redirect to the platform's own completion
-            // page instead.
+            // Always send an explicit `redirect_after_connect`. The platform's
+            // default resolves against HEADLESS_BASE_URL, which on production
+            // is the marketing site and does not render OAuth result params.
+            // `/account/oauth/desktop-complete` is the dedicated success page
+            // served by the web app, suitable when the post-auth browser hop
+            // happens on a surface this process does not control (e.g.
+            // `--no-browser`, containerized hosts, or any caller that just
+            // hands the URL to a third party).
+            body.redirect_after_connect = "/account/oauth/desktop-complete";
+
+            // When the browser is opened locally on a non-containerized host,
+            // prefer a loopback URL that serves `renderOAuthCompletionPage` in
+            // this process. The loopback page lets the polling loop below
+            // short-circuit on the callback rather than waiting on the next
+            // poll tick.
             let redirectServer:
               | { redirectUrl: string; cleanup: () => void }
               | undefined;
-            if (opts.browser !== false) {
-              if (getIsContainerized()) {
-                body.redirect_after_connect = "/account/oauth/desktop-complete";
-              } else {
-                try {
-                  redirectServer = await startManagedRedirectServer(provider);
-                  body.redirect_after_connect = redirectServer.redirectUrl;
-                } catch {
-                  // Non-fatal — fall back to platform default redirect
-                }
+            if (opts.browser !== false && !getIsContainerized()) {
+              try {
+                redirectServer = await startManagedRedirectServer(provider);
+                body.redirect_after_connect = redirectServer.redirectUrl;
+              } catch {
+                // Loopback server is best-effort; the explicit fallback above
+                // still lands the user on a real success surface.
               }
             }
 
@@ -426,18 +445,18 @@ Examples:
             }
 
             // e. Try daemon-orchestrated path first (fixes heap-split for gateway transport).
-            const startResult = await cliIpcCall<{ auth_url: string; state: string }>(
-              "internal_oauth_connect_start",
-              {
-                body: {
-                  service: provider,
-                  clientId,
-                  ...(clientSecret !== undefined ? { clientSecret } : {}),
-                  callbackTransport: opts.callbackTransport,
-                  ...(opts.scopes ? { requestedScopes: opts.scopes } : {}),
-                },
+            const startResult = await cliIpcCall<{
+              auth_url: string;
+              state: string;
+            }>("internal_oauth_connect_start", {
+              body: {
+                service: provider,
+                clientId,
+                ...(clientSecret !== undefined ? { clientSecret } : {}),
+                callbackTransport: opts.callbackTransport,
+                ...(opts.scopes ? { requestedScopes: opts.scopes } : {}),
               },
-            );
+            });
 
             if (startResult.ok && startResult.result?.auth_url) {
               const { auth_url, state } = startResult.result;
@@ -446,7 +465,9 @@ Examples:
                 await openInHostBrowser(auth_url);
 
                 if (!jsonMode) {
-                  log.info("Waiting for authorization in browser... (press Ctrl+C to cancel)");
+                  log.info(
+                    "Waiting for authorization in browser... (press Ctrl+C to cancel)",
+                  );
                 }
                 const final = await pollOAuthConnectStatus(state, {
                   intervalMs: 2000,
@@ -476,7 +497,9 @@ Examples:
 
                 // Defensive: pollOAuthConnectStatus should never return pending,
                 // but TS narrowing requires us to handle it.
-                writeError("OAuth connect ended in an unexpected pending state");
+                writeError(
+                  "OAuth connect ended in an unexpected pending state",
+                );
                 return;
               } else {
                 // --no-browser: return the URL immediately, matching existing deferred behavior.
@@ -501,7 +524,9 @@ Examples:
             // than falling back to in-process (which would re-introduce the heap-split bug for
             // gateway transport).
             if (startResult.ok && !startResult.result?.auth_url) {
-              writeError("assistant returned unexpected response for OAuth connect start");
+              writeError(
+                "assistant returned unexpected response for OAuth connect start",
+              );
               return;
             }
 
@@ -509,7 +534,9 @@ Examples:
             // falling back to in-process (which would re-introduce the heap-split bug for
             // gateway transport).
             if (!startResult.ok && startResult.statusCode !== undefined) {
-              writeError(startResult.error ?? "OAuth connect failed (assistant error)");
+              writeError(
+                startResult.error ?? "OAuth connect failed (assistant error)",
+              );
               return;
             }
 
