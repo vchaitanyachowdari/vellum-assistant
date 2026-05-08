@@ -38,6 +38,18 @@ public final class SettingsStore: ObservableObject {
     @Published var hasKey: Bool = false
     @Published var hasVercelKey: Bool = false
 
+    /// Set of provider names the encrypted secret store currently has an
+    /// `api_key` for. Settings UI presence checks (STT card, TTS card,
+    /// API Keys sheet) read this set rather than reaching into the local
+    /// `vellum_provider_*` files so the encrypted store stays the single
+    /// source of truth. Refreshed via ``refreshProviderKeys()``; on transport
+    /// failure the previous snapshot is preserved (stale-but-correct beats
+    /// blank). Mutated optimistically by ``insertProviderKey(_:)`` /
+    /// ``removeProviderKey(_:)`` after successful save/delete so cards that
+    /// re-read it (e.g. on `onChange` of the provider dropdown) see the
+    /// freshly-written value without a round-trip.
+    @Published private(set) var providerKeys: Set<String> = []
+
     // MARK: - Embedding Config State
     @Published var embeddingProvider: String = "auto"
     @Published var embeddingModel: String? = nil
@@ -997,6 +1009,7 @@ public final class SettingsStore: ObservableObject {
 
     func clearAPIKeyForProvider(_ provider: String) {
         APIKeyManager.deleteKey(for: provider)
+        removeProviderKey(provider)
         scheduleRoutingSourceRefresh()
         refreshModelInfo()
         Task {
@@ -1022,6 +1035,7 @@ public final class SettingsStore: ObservableObject {
                 apiKeySaving = false
             }
             if result.success {
+                insertProviderKey(provider)
                 scheduleRoutingSourceRefresh()
                 onSuccess?()
                 refreshModelInfo()
@@ -1089,6 +1103,32 @@ public final class SettingsStore: ObservableObject {
         guard let response = await settingsClient.fetchVercelConfig() else { return false }
         applyVercelConfigResponse(response)
         return response.success && response.hasToken
+    }
+
+    /// Refresh ``providerKeys`` from `GET /v1/secrets`. Called from
+    /// settings-card `.task` blocks. Returns `true` when the bulk listing
+    /// succeeded; `false` lets callers fall back to per-provider checks so a
+    /// transient outage on first load doesn't blank out the UI. On failure
+    /// the existing set is left in place — saves/deletes that already updated
+    /// the cache via ``insertProviderKey(_:)`` / ``removeProviderKey(_:)``
+    /// stay reflected.
+    @discardableResult
+    func refreshProviderKeys() async -> Bool {
+        guard let listed = await APIKeyManager.listKeys() else { return false }
+        providerKeys = listed
+        return true
+    }
+
+    /// Optimistically reflect a successful `setKey` write in ``providerKeys``
+    /// so subsequent presence checks (e.g. `onChange` of the STT/TTS provider
+    /// dropdown) see the new key without waiting for the next bulk refresh.
+    func insertProviderKey(_ provider: String) {
+        providerKeys.insert(provider)
+    }
+
+    /// Optimistically reflect a successful `deleteKey` in ``providerKeys``.
+    func removeProviderKey(_ provider: String) {
+        providerKeys.remove(provider)
     }
 
     private func applyVercelConfigResponse(_ response: VercelApiConfigResponseMessage) {
@@ -3880,11 +3920,12 @@ public final class SettingsStore: ObservableObject {
         removeDeletionTombstone(type: "api_key", name: keyProvider)
         let result = await APIKeyManager.setKey(trimmed, for: keyProvider)
         if result.success {
+            insertProviderKey(keyProvider)
             scheduleRoutingSourceRefresh()
             return result
         }
         if let error = result.error {
-            log.error("Failed to sync STT key for \(sttProviderId, privacy: .public) to daemon: \(error, privacy: .public)")
+            log.error("Failed to sync STT key for \(sttProviderId, privacy: .public): \(error, privacy: .public)")
         }
         if !result.isTransient {
             let _: Void = APIKeyManager.deleteKey(for: keyProvider)
@@ -3907,18 +3948,19 @@ public final class SettingsStore: ObservableObject {
     }
 
     /// Clears the API key for the given STT provider from both local and
-    /// daemon credential stores.
+    /// remote credential stores.
     func clearSTTKey(sttProviderId: String) {
         let keyProvider = Self.sttApiKeyProviderName(for: sttProviderId)
         APIKeyManager.deleteKey(for: keyProvider)
+        removeProviderKey(keyProvider)
         Task {
             let deleted = await APIKeyManager.deleteKey(for: keyProvider)
             if !deleted { addDeletionTombstone(type: "api_key", name: keyProvider) }
         }
     }
 
-    /// Checks whether the daemon has an API key stored for the given STT
-    /// provider.
+    /// Checks whether the encrypted secret store has an API key for the given
+    /// STT provider.
     func hasSTTKey(sttProviderId: String) async -> Bool {
         let keyProvider = Self.sttApiKeyProviderName(for: sttProviderId)
         return await APIKeyManager.hasKey(for: keyProvider)
@@ -3975,8 +4017,10 @@ public final class SettingsStore: ObservableObject {
     /// Checks whether a TTS credential exists for the given provider using
     /// the registry's credential metadata. Credential-mode providers are
     /// looked up via `APIKeyManager.getCredential(service:field:)`; api-key
-    /// mode providers via `APIKeyManager.getKey(for:)`.
-    static func ttsCredentialExists(for ttsProviderId: String) -> Bool {
+    /// mode providers read from the ``providerKeys`` snapshot — call
+    /// ``refreshProviderKeys()`` on view appear so the cache is current
+    /// before this is consulted.
+    func ttsCredentialExists(for ttsProviderId: String) -> Bool {
         let entry = loadTTSProviderRegistry().provider(withId: ttsProviderId)
         guard let entry else { return false }
         switch entry.credentialMode {
@@ -3985,7 +4029,7 @@ public final class SettingsStore: ObservableObject {
             return APIKeyManager.getCredential(service: namespace, field: "api_key") != nil
         case .apiKey:
             let keyProvider = entry.apiKeyProviderName ?? entry.id
-            return APIKeyManager.getKey(for: keyProvider) != nil
+            return providerKeys.contains(keyProvider)
         }
     }
 
@@ -4019,6 +4063,7 @@ public final class SettingsStore: ObservableObject {
             Task {
                 let result = await APIKeyManager.setKey(trimmed, for: keyProvider)
                 if result.success {
+                    insertProviderKey(keyProvider)
                     onSuccess?()
                 } else if let error = result.error {
                     log.error("Failed to sync TTS key for \(ttsProviderId, privacy: .public): \(error, privacy: .public)")
@@ -4043,6 +4088,7 @@ public final class SettingsStore: ObservableObject {
         case .apiKey:
             let keyProvider = entry.apiKeyProviderName ?? entry.id
             APIKeyManager.deleteKey(for: keyProvider)
+            removeProviderKey(keyProvider)
             Task {
                 let deleted = await APIKeyManager.deleteKey(for: keyProvider)
                 if !deleted { addDeletionTombstone(type: "api_key", name: keyProvider) }

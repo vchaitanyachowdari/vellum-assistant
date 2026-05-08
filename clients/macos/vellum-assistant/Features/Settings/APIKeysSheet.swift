@@ -267,29 +267,27 @@ struct APIKeysSheet: View {
     // MARK: - Key Status Loading
 
     private func loadAllKeyStatuses() async {
-        // Prefer one bulk `GET /v1/secrets` over N per-provider `secrets/read`
-        // calls — the listing endpoint reports every stored api_key in a single
-        // round-trip. Fall back to per-provider `hasKey` only on transport
-        // failure so a brief outage doesn't render every row as "not configured".
-        let providersWithKeys: Set<String>
-        if let listed = await APIKeyManager.listKeys() {
-            providersWithKeys = listed
+        // Refresh the shared store cache once — settings cards (STT/TTS) read
+        // the same `providerKeys` set, so a single bulk call covers all of
+        // them. On bulk-listing failure with an empty cache (e.g. first load
+        // during a transient outage), fall back to per-provider `hasKey`
+        // calls so the sheet doesn't render every row as "not configured".
+        let refreshed = await store.refreshProviderKeys()
+        if refreshed || !store.providerKeys.isEmpty {
             for provider in keyRequiredProviders {
-                keyStatuses[provider.id] = listed.contains(provider.id)
+                keyStatuses[provider.id] = store.providerKeys.contains(provider.id)
             }
         } else {
-            var fallback: Set<String> = []
             for provider in keyRequiredProviders {
                 let hasKey = await APIKeyManager.hasKey(for: provider.id)
                 keyStatuses[provider.id] = hasKey
-                if hasKey { fallback.insert(provider.id) }
+                if hasKey { store.insertProviderKey(provider.id) }
             }
-            providersWithKeys = fallback
         }
         // Masked previews live behind a different endpoint (`secrets/read`)
         // so they still need a per-provider call — but only for providers
         // we now know are present.
-        for provider in keyRequiredProviders where providersWithKeys.contains(provider.id) {
+        for provider in keyRequiredProviders where keyStatuses[provider.id] == true {
             maskedKeys[provider.id] = await APIKeyManager.maskedKey(for: provider.id)
         }
     }
