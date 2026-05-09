@@ -333,8 +333,8 @@ function handleUnarchiveConversation({ pathParams = {} }: RouteHandlerArgs) {
 
 function handleCancelGeneration({ pathParams = {} }: RouteHandlerArgs) {
   const resolvedId = resolveConversationId(pathParams.id!) ?? pathParams.id!;
-  cancelGeneration(resolvedId);
-  return undefined;
+  const cancelled = cancelGeneration(resolvedId);
+  return { ok: true, cancelled, conversationId: resolvedId };
 }
 
 async function handleUndoLastMessage({ pathParams = {} }: RouteHandlerArgs) {
@@ -582,6 +582,11 @@ export const ROUTES: RouteDefinition[] = [
     tags: ["conversations"],
     pathParams: [{ name: "id" }],
     responseStatus: "202",
+    responseBody: z.object({
+      ok: z.boolean(),
+      cancelled: z.boolean(),
+      conversationId: z.string(),
+    }),
     handler: handleCancelGeneration,
   },
   {
