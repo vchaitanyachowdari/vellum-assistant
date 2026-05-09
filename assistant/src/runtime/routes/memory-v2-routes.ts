@@ -40,6 +40,7 @@ import {
   renderPageContent,
 } from "../../memory/v2/page-store.js";
 import {
+  conceptPageCollectionExists,
   hybridQueryConceptPages,
   sampleConceptPageDenseVectors,
 } from "../../memory/v2/qdrant.js";
@@ -148,7 +149,7 @@ async function handleValidate({
       const page = await readPage(workspaceDir, slug);
       if (!page) continue;
       knownSlugs.add(slug);
-      const chars = Buffer.byteLength(page.body, "utf8");
+      const chars = page.body.length;
       if (chars > maxPageChars) {
         oversizedPages.push({ slug, chars });
       }
@@ -316,8 +317,10 @@ async function handleReembedSkills({
 
   // Unlike the queued backfill jobs above, this is a CLI-driven sync
   // request: the operator wants the cache replaced before the next prompt
-  // assembly, so we await the seed inline rather than enqueueing it.
-  await seedV2SkillEntries();
+  // assembly, so we await the seed inline rather than enqueueing it. Pass
+  // `throwOnError` so embedding/Qdrant failures surface to the CLI instead
+  // of being swallowed by the default best-effort behavior.
+  await seedV2SkillEntries({ throwOnError: true });
 
   return { success: true };
 }
@@ -341,7 +344,7 @@ export interface MemoryV2ExplainSimilarityRow {
   sparseRaw: number | null;
   /** Sparse score divided by the per-batch max, in [0, 1]. */
   sparseNorm: number | null;
-  /** `clamp01(dense_weight·dense + sparse_weight·sparseNorm)` — the simBatch fused value. */
+  /** `clamp01(dense_weight · max(0, cosine) + sparse_weight · sparseNorm)` — the simBatch fused value. */
   fused: number;
 }
 
@@ -439,12 +442,15 @@ async function scoreChannel(
   } = effectiveWeights(hits, maxSparse, denseWeight, sparseWeight, config);
 
   const rows: MemoryV2ExplainSimilarityRow[] = hits.map((hit) => {
-    const dense = hit.denseScore ?? 0;
+    // Clamp negative cosines to 0 before fusion to mirror simBatch — keeps
+    // anti-correlated documents from subtracting against the sparse channel.
+    const denseClamped =
+      hit.denseScore !== undefined ? Math.max(0, hit.denseScore) : 0;
     const sparseNorm =
       hit.sparseScore !== undefined && maxSparse > 0
         ? hit.sparseScore / maxSparse
         : 0;
-    const fusedRaw = effDense * dense + effSparse * sparseNorm;
+    const fusedRaw = effDense * denseClamped + effSparse * sparseNorm;
     const fused = Math.max(0, Math.min(1, fusedRaw));
     return {
       slug: hit.slug,
@@ -493,6 +499,18 @@ async function handleExplainSimilarity({
   const config = loadConfig();
   const { dense_weight: denseWeight, sparse_weight: sparseWeight } =
     config.memory.v2;
+
+  // Read-only diagnostic: refuse to bootstrap the v2 collection just by
+  // inspecting it. `hybridQueryConceptPages` would otherwise call
+  // `ensureConceptPageCollection()` and silently create state on a fresh
+  // workspace.
+  if (!(await conceptPageCollectionExists())) {
+    throw new RouteError(
+      "Memory v2 concept-page collection does not exist. Run 'assistant memory v2 migrate' (or 'reembed' on an existing workspace) to populate it before running explain.",
+      "MEMORY_V2_COLLECTION_MISSING",
+      409,
+    );
+  }
 
   const channels: MemoryV2ExplainSimilarityChannel[] = [];
   channels.push(

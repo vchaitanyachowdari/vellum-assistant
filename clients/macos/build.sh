@@ -140,7 +140,7 @@ swift_with_retry() {
         # Common on hosted CI runners with rotated/partial caches.
         if [ "$_artifact_cleaned" -eq 0 ] && grep -q "already exists in file system" "$_stderr_log" 2>/dev/null; then
             echo "warning: stale SPM binary artifact detected, cleaning and retrying..."
-            sed -nE 's/.*: (\/[^[:space:]]+) already exists in file system.*/\1/p' "$_stderr_log" 2>/dev/null \
+            sed -nE 's/.*: (\/.+) already exists in file system.*/\1/p' "$_stderr_log" 2>/dev/null \
                 | sort -u \
                 | while IFS= read -r _stale_path; do
                     [ -n "$_stale_path" ] && rm -rf "$_stale_path"
@@ -958,6 +958,24 @@ for stale in "$SCRIPT_DIR/dist"/*.app; do
     [ "$stale" = "$APP_DIR" ] && continue
     stale_id=$(plutil -extract CFBundleIdentifier raw "$stale/Contents/Info.plist" 2>/dev/null || true)
     if [ "$stale_id" = "$BUNDLE_ID" ]; then
+        # Kill processes from this bundle before removing it — the `run`
+        # kill pass below matches by reading each PID's Info.plist, so
+        # deleting first would orphan a running sibling and leave a
+        # duplicate Dock entry.
+        stale_pids=""
+        while IFS= read -r line; do
+            read -r pid exe_path <<< "$line"
+            [ -n "$pid" ] || continue
+            case "$exe_path" in
+                "$stale"/Contents/MacOS/*) stale_pids+="$pid " ;;
+            esac
+        done < <(ps -ax -o pid=,comm=)
+        if [ -n "$stale_pids" ]; then
+            echo "Stopping process(es) inside stale bundle $stale: $stale_pids"
+            echo "$stale_pids" | xargs kill 2>/dev/null || true
+            sleep 0.3
+            echo "$stale_pids" | xargs kill -9 2>/dev/null || true
+        fi
         echo "Removing stale bundle with matching ID: $stale"
         rm -rf "$stale"
     fi

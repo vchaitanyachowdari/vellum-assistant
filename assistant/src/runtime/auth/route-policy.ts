@@ -378,7 +378,10 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
   { endpoint: "acp/steer", scopes: ["chat.write"] },
   { endpoint: "acp/cancel", scopes: ["chat.write"] },
   { endpoint: "acp/close", scopes: ["chat.write"] },
-  { endpoint: "acp/sessions:DELETE", scopes: ["chat.write"] },
+  // Bulk-clear acp_session_history is a destructive global operation;
+  // require settings.write to match conversations/clear-all. The per-row
+  // delete below (acp/sessions/delete) stays at chat.write.
+  { endpoint: "acp/sessions:DELETE", scopes: ["settings.write"] },
   { endpoint: "acp/sessions/delete", scopes: ["chat.write"] },
   { endpoint: "acp", scopes: ["chat.read"] },
 
@@ -427,6 +430,11 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
   // Queued message deletion
   { endpoint: "messages/queued", scopes: ["chat.write"] },
 
+  // Bookmarks
+  { endpoint: "bookmarks:GET", scopes: ["chat.read"] },
+  { endpoint: "bookmarks:POST", scopes: ["chat.write"] },
+  { endpoint: "bookmarks/by-message:DELETE", scopes: ["chat.write"] },
+
   // Interfaces
   { endpoint: "interfaces", scopes: ["settings.read"] },
 
@@ -453,7 +461,6 @@ const ACTOR_ENDPOINTS: Array<{ endpoint: string; scopes: Scope[] }> = [
     scopes: ["settings.write"],
   },
   { endpoint: "memory/v2/concept-frequency:POST", scopes: ["settings.read"] },
-  { endpoint: "memory/v2/fit-anisotropy:POST", scopes: ["settings.write"] },
 
   // Trust rule listing
   { endpoint: "trust-rules/manage:GET", scopes: ["settings.read"] },
