@@ -377,11 +377,12 @@ interface RenderInjectionBlockResult {
 }
 
 /**
- * Leading instruction line emitted at the top of every non-empty injection
- * block. Tells the agent that what follows are page summaries and that it
- * should read the underlying file when a summary looks relevant. Pages
- * without a `summary` field render in full instead — the agent treats
- * those as inline content and doesn't need to follow up.
+ * Leading instruction line emitted at the top of an injection block when at
+ * least one section was rendered from a page's `summary` field. Tells the
+ * agent the truncated entries are summaries and to read the underlying file
+ * if relevant. Suppressed when every section is a full-page fallback —
+ * claiming "these are summaries" over already-complete content would mislead
+ * the agent into wasted reads.
  */
 const INJECTION_HEADER =
   "**CRITICAL:** These are page summaries. Read the page file if it looks relevant.";
@@ -449,6 +450,7 @@ async function renderInjectionBlock(
 
   const sections: string[] = [];
   const missingSlugs: string[] = [];
+  let anySummarySection = false;
   for (const { slug, page } of pages) {
     if (!page) {
       missingSlugs.push(slug);
@@ -458,6 +460,7 @@ async function renderInjectionBlock(
     const path = `memory/concepts/${slug}.md`;
     if (summary && summary.length > 0) {
       sections.push(`# ${path}\n${summary}`);
+      anySummarySection = true;
       continue;
     }
     // Fallback: page predates the `summary` field (or the field was set to
@@ -480,8 +483,9 @@ async function renderInjectionBlock(
 
   if (sections.length === 0) return { block: null, missingSlugs };
 
+  const body = sections.join("\n\n");
   return {
-    block: `${INJECTION_HEADER}\n\n${sections.join("\n\n")}`,
+    block: anySummarySection ? `${INJECTION_HEADER}\n\n${body}` : body,
     missingSlugs,
   };
 }
