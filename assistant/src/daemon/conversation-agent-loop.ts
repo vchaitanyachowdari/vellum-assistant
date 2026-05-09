@@ -75,7 +75,7 @@ import { PKB_WORKSPACE_SCOPE } from "../memory/pkb/types.js";
 import type { QdrantSparseVector } from "../memory/qdrant-client.js";
 import {
   readMemoryV2StaticContent,
-  shouldLoadMemoryV2Static,
+  shouldExposePersonalMemory,
 } from "../memory/v2/static-context.js";
 import type { PermissionPrompter } from "../permissions/prompter.js";
 import { defaultCompactionTerminal } from "../plugins/defaults/compaction.js";
@@ -1412,33 +1412,44 @@ export async function runAgentLoopImpl(
 
     // The `remember` tool handles scratchpad-style memory writes directly to the graph.
 
+    // Personal-memory trust gate: PKB, NOW.md, and v2 static blocks all
+    // hold private user content. Block exposure to non-guardian actors
+    // arriving over a remote channel; internal/local flows pass through.
+    // See `shouldExposePersonalMemory` for the threat model.
+    const personalMemoryAllowed = shouldExposePersonalMemory({
+      sourceChannel: ctx.trustContext?.sourceChannel,
+      isTrustedActor,
+    });
+
     // Inject NOW.md and PKB content only on the first turn (or after
     // compaction re-strips them).  Old injections persist in history and
     // are never stripped on normal turns — this preserves the cached prefix.
     // PKB/NOW content is sourced from the `memoryRetrieval` pipeline above
     // so plugins can override either source without touching the agent loop.
-    const currentNowContent = memoryResult.nowContent;
+    const currentNowContent = personalMemoryAllowed
+      ? memoryResult.nowContent
+      : null;
     const shouldInjectNowAndPkb = isFirstMessage || compactedThisTurn;
     const nowScratchpad = shouldInjectNowAndPkb ? currentNowContent : null;
 
-    const currentPkbContent = memoryResult.pkbContent;
+    const currentPkbContent = personalMemoryAllowed
+      ? memoryResult.pkbContent
+      : null;
     const pkbContext = shouldInjectNowAndPkb ? currentPkbContent : null;
     const pkbActive = currentPkbContent !== null;
 
-    // V2 static memory block (essentials/threads/recent/buffer). Same
-    // first-turn / post-compaction cadence as PKB. `shouldLoadMemoryV2Static`
-    // also blocks remote-channel non-guardian actors from inducing the
-    // model to recite private memory; `readMemoryV2StaticContent` self-gates
-    // on the v2 flag + config and returns null when v2 is off, so the file
-    // reads are skipped on non-injection turns.
-    const currentMemoryV2Static = shouldLoadMemoryV2Static({
-      shouldInjectNowAndPkb,
-      sourceChannel: ctx.trustContext?.sourceChannel,
-      isTrustedActor,
-    })
+    // V2 static memory block (essentials/threads/recent/buffer).
+    // `currentMemoryV2Static` is the trust-gated content reused by every
+    // re-injection path — it stays non-null on non-full-mode turns so
+    // that mid-turn reducer compaction (which strips the prior `<memory>`
+    // block) can restore the freshest content. `memoryV2Static` is the
+    // first-turn / post-compaction cadence-gated value for initial
+    // injection only. `readMemoryV2StaticContent` self-gates on the v2
+    // flag + config and returns null when v2 is off.
+    const currentMemoryV2Static = personalMemoryAllowed
       ? readMemoryV2StaticContent()
       : null;
-    const memoryV2Static = currentMemoryV2Static;
+    const memoryV2Static = shouldInjectNowAndPkb ? currentMemoryV2Static : null;
 
     // PKB relevance-hint inputs. Resolved once per turn and reused across
     // re-injections so post-compaction rebuilds pick up fresh hints against
@@ -1576,7 +1587,8 @@ export async function runAgentLoopImpl(
       injection.blocks.pkbSystemReminder ||
       injection.blocks.workspaceBlock ||
       injection.blocks.nowScratchpadBlock ||
-      injection.blocks.pkbContextBlock
+      injection.blocks.pkbContextBlock ||
+      injection.blocks.memoryV2StaticBlock
     ) {
       try {
         const metadataUpdates: Record<string, unknown> = {};
@@ -1597,6 +1609,10 @@ export async function runAgentLoopImpl(
         }
         if (injection.blocks.pkbContextBlock) {
           metadataUpdates.pkbContextBlock = injection.blocks.pkbContextBlock;
+        }
+        if (injection.blocks.memoryV2StaticBlock) {
+          metadataUpdates.memoryV2StaticBlock =
+            injection.blocks.memoryV2StaticBlock;
         }
         await runPipeline<PersistArgs, PersistResult>(
           "persistence",

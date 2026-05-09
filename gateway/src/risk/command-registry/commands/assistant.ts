@@ -129,6 +129,10 @@ const ASSISTANT_SUPPORTED_COMMAND_PATHS = [
   "image-generation generate",
   "inference",
   "inference send",
+  "inference profile",
+  "inference profile open",
+  "inference profile close",
+  "inference profile list",
   "llm",
   "llm send",
   "keys",
@@ -153,6 +157,7 @@ const ASSISTANT_SUPPORTED_COMMAND_PATHS = [
   "memory v2 migrate",
   "memory v2 rebuild-edges",
   "memory v2 reembed",
+  "memory v2 reembed-skills",
   "memory v2 activation",
   "memory v2 validate",
   "notifications",
@@ -399,6 +404,22 @@ const riskOverrides: AssistantRiskOverride[] = [
   { path: "image-generation generate", risk: "medium" },
   { path: "inference send", risk: "medium" },
   { path: "llm send", risk: "medium" },
+  {
+    path: "inference profile open",
+    risk: "low",
+    reason:
+      "Opens a reversible conversation-scoped profile session; server validates the profile name",
+  },
+  {
+    path: "inference profile close",
+    risk: "low",
+    reason: "Closes an active profile session; idempotent",
+  },
+  {
+    path: "inference profile list",
+    risk: "low",
+    reason: "Read-only listing of active sessions",
+  },
   { path: "mcp reload", risk: "low" },
   { path: "mcp add", risk: "high" },
   { path: "mcp auth", risk: "medium" },
@@ -408,10 +429,38 @@ const riskOverrides: AssistantRiskOverride[] = [
   { path: "memory rebuild-index", risk: "low" },
   { path: "memory re-extract", risk: "low" },
   { path: "memory compact", risk: "low" },
-  { path: "memory v2 migrate", risk: "low" },
-  { path: "memory v2 rebuild-edges", risk: "low" },
-  { path: "memory v2 reembed", risk: "low" },
-  { path: "memory v2 activation", risk: "low" },
+  {
+    path: "memory v2 migrate",
+    risk: "medium",
+    reason:
+      "Enqueues a v1->v2 synthesis job; --force overwrites the existing v2 state",
+  },
+  {
+    path: "memory v2 rebuild-edges",
+    risk: "medium",
+    reason: "Retired subcommand; kept for registry coverage",
+  },
+  {
+    path: "memory v2 reembed",
+    risk: "medium",
+    reason: "Enqueues bulk re-embedding of every concept page",
+  },
+  {
+    path: "memory v2 reembed-skills",
+    risk: "medium",
+    reason:
+      "Synchronously re-seeds the v2 skill catalog into the concept-page collection",
+  },
+  {
+    path: "memory v2 activation",
+    risk: "medium",
+    reason: "Enqueues recompute of persisted activation state",
+  },
+  {
+    path: "memory v2 validate",
+    risk: "low",
+    reason: "Read-only diagnostic walk over concept pages and edges",
+  },
   { path: "notifications send", risk: "low" },
   {
     path: "oauth request",

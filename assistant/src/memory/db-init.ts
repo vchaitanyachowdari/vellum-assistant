@@ -39,6 +39,7 @@ import {
   migrate230AcpSessionHistory,
   migrate231RepairMemoryGraphEventDates,
   migrateActivationState,
+  migrateActivationStateFkCascade,
   migrateAddConversationInferenceProfile,
   migrateAddSourceTypeColumns,
   migrateAssistantContactMetadata,
@@ -114,6 +115,7 @@ import {
   migrateMemoryItemSupersession,
   migrateMemoryRecallLogsQueryContext,
   migrateMemoryV2ActivationLogs,
+  migrateMessageBookmarks,
   migrateMessagesConversationCreatedAtIndex,
   migrateMessagesFtsBackfill,
   migrateNormalizePhoneIdentities,
@@ -400,6 +402,7 @@ export function initializeDb(): void {
     migrate230AcpSessionHistory,
     migrate231RepairMemoryGraphEventDates,
     migrateActivationState,
+    migrateActivationStateFkCascade,
     migrateMemoryV2ActivationLogs,
     migrateCreateDocumentConversations,
     migrateLlmUsageAttribution,
@@ -412,6 +415,7 @@ export function initializeDb(): void {
     migrateScheduleRetryPolicy,
     migrateTraceEventsCreatedAtIndex,
     migrateConversationInferenceProfileSession,
+    migrateMessageBookmarks,
   ];
 
   // Run each migration step, catching and logging individual failures so one

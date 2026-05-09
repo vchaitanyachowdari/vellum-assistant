@@ -56,7 +56,7 @@ extension MainWindowView {
         case .chat:
             chatView
         case .settings:
-            SettingsPanel(onClose: { windowState.navigateBackOrDismiss() }, store: settingsStore, connectionManager: connectionManager, conversationManager: conversationManager, authManager: authManager, assistantFeatureFlagStore: assistantFeatureFlagStore, showToast: { msg, style in windowState.showToast(message: msg, style: style) }, onEnableIntegration: {
+            SettingsPanel(onClose: { windowState.navigateBackOrDismiss() }, store: settingsStore, connectionManager: connectionManager, conversationManager: conversationManager, authManager: authManager, assistantFeatureFlagStore: assistantFeatureFlagStore, bookmarkStore: bookmarkStore, showToast: { msg, style in windowState.showToast(message: msg, style: style) }, onEnableIntegration: {
                     conversationManager.openConversation(
                         message: "I'd like to enable an oauth integration. What integrations are available for me to connect to?",
                         forceNew: true
@@ -749,6 +749,7 @@ extension MainWindowView {
                 ambientAgent: ambientAgent,
                 settingsStore: settingsStore,
                 conversationManager: conversationManager,
+                bookmarkStore: bookmarkStore,
                 diskPressureStatusStore: diskPressureStatusStore,
                 onMicrophoneToggle: onMicrophoneToggle,
                 isReadonly: activeConversation?.isChannelConversation ?? false,
@@ -783,6 +784,7 @@ extension MainWindowView {
                 },
                 conversationId: conversationManager.activeConversationId ?? conversationManager.draftLocalId,
                 anchorMessageId: $conversationManager.pendingAnchorMessageId,
+                anchorDaemonMessageId: $conversationManager.pendingAnchorDaemonMessageId,
                 highlightedMessageId: $conversationManager.highlightedMessageId,
                 isInteractionEnabled: viewModel.isHistoryLoaded
             )
@@ -793,7 +795,7 @@ extension MainWindowView {
     func fullWindowPanel(_ panel: SidePanelType) -> some View {
         switch panel {
         case .settings:
-            SettingsPanel(onClose: { windowState.navigateBackOrDismiss() }, store: settingsStore, connectionManager: connectionManager, conversationManager: conversationManager, authManager: authManager, assistantFeatureFlagStore: assistantFeatureFlagStore, showToast: { msg, style in windowState.showToast(message: msg, style: style) }, onEnableIntegration: {
+            SettingsPanel(onClose: { windowState.navigateBackOrDismiss() }, store: settingsStore, connectionManager: connectionManager, conversationManager: conversationManager, authManager: authManager, assistantFeatureFlagStore: assistantFeatureFlagStore, bookmarkStore: bookmarkStore, showToast: { msg, style in windowState.showToast(message: msg, style: style) }, onEnableIntegration: {
                     conversationManager.openConversation(
                         message: "I'd like to enable an oauth integration. What integrations are available for me to connect to?",
                         forceNew: true
@@ -981,6 +983,7 @@ struct ActiveChatViewWrapper: View {
     var ambientAgent: AmbientAgent
     @ObservedObject var settingsStore: SettingsStore
     let conversationManager: ConversationManager
+    let bookmarkStore: BookmarkStore
     let diskPressureStatusStore: DiskPressureStatusStore
     let onMicrophoneToggle: () -> Void
     var isReadonly: Bool = false
@@ -993,6 +996,11 @@ struct ActiveChatViewWrapper: View {
     var onOpenConversationDocument: ((ConversationArtifact) -> Void)? = nil
     var conversationId: UUID?
     @Binding var anchorMessageId: UUID?
+    /// Daemon (server-side) message ID to anchor on. Forwarded from
+    /// `ConversationSelectionStore.pendingAnchorDaemonMessageId` so deep
+    /// links from settings panes (e.g. Bookmarks) can scroll to a message
+    /// without first knowing its client-generated `UUID`.
+    @Binding var anchorDaemonMessageId: String?
     @Binding var highlightedMessageId: UUID?
     var isInteractionEnabled: Bool = true
 
@@ -1023,6 +1031,13 @@ struct ActiveChatViewWrapper: View {
                     }
                 },
                 onInspectMessage: { presentInspector(for: $0) },
+                onToggleBookmark: isReadonly ? nil : { [bookmarkStore] daemonMessageId, conversationId in
+                    Task { @MainActor in
+                        await bookmarkStore.toggle(messageId: daemonMessageId, conversationId: conversationId)
+                    }
+                },
+                bookmarkStore: bookmarkStore,
+                bookmarkConversationId: viewModel.conversationId,
                 onSubagentTap: { windowState.selectedSubagentId = $0 },
                 onAddFunds: {
                     settingsStore.pendingSettingsTab = .billing
@@ -1055,6 +1070,7 @@ struct ActiveChatViewWrapper: View {
                     windowState.selection = .panel(.settings)
                 },
                 anchorMessageId: $anchorMessageId,
+                anchorDaemonMessageId: $anchorDaemonMessageId,
                 highlightedMessageId: $highlightedMessageId,
                 conversationId: conversationId,
                 isInteractionEnabled: isInteractionEnabled && windowState.inspectorMessageId == nil,

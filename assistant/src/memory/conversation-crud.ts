@@ -47,6 +47,7 @@ import {
 import { ensureDisplayOrderMigration } from "./conversation-display-order-migration.js";
 import { ensureGroupMigration } from "./conversation-group-migration.js";
 import { getDb, getSqliteFrom } from "./db-connection.js";
+import { forkGraphMemoryState } from "./graph/graph-memory-state-store.js";
 import { indexMessageNow } from "./indexer.js";
 import { rawExec, rawGet, rawRun } from "./raw-query.js";
 import {
@@ -61,6 +62,7 @@ import {
   toolInvocations,
 } from "./schema.js";
 import { cancelPendingJobsForConversation } from "./task-memory-cleanup.js";
+import { forkActivationState } from "./v2/activation-store.js";
 
 const log = getLogger("conversation-store");
 
@@ -113,6 +115,7 @@ export const messageMetadataSchema = z
     workspaceBlock: z.string().optional(),
     nowScratchpadBlock: z.string().optional(),
     pkbContextBlock: z.string().optional(),
+    memoryV2StaticBlock: z.string().optional(),
   })
   .passthrough();
 
@@ -665,6 +668,12 @@ export function forkConversation(params: {
       latestAssistantMessageId: latestForkedAssistant?.messageId ?? null,
       latestAssistantMessageAt: latestForkedAssistant?.messageAt ?? null,
     });
+
+    // Carry the parent's per-conversation memory state into the child so the
+    // forked thread resumes with the same activation/injection log and
+    // in-context tracker the parent had at fork time.
+    forkActivationState(db, sourceConversation.id, fc.id);
+    forkGraphMemoryState(sourceConversation.id, fc.id);
 
     return fc;
   });
@@ -1623,8 +1632,10 @@ export function updateMessageMetadata(
 /**
  * Bulk-remove the metadata fields that back the blocks stripped by
  * `stripInjectionsForCompaction` — currently `pkbSystemReminderBlock`
- * (`<system_reminder>`), `nowScratchpadBlock` (`<NOW.md …>`), and
- * `pkbContextBlock` (`<knowledge_base>`). Called from compaction-strip
+ * (`<system_reminder>`), `nowScratchpadBlock` (`<NOW.md …>`),
+ * `pkbContextBlock` (`<knowledge_base>`), and `memoryV2StaticBlock`
+ * (the static `<memory>\n…</memory>` block matched by the `<memory>\n`
+ * prefix in `RUNTIME_INJECTION_PREFIXES`). Called from compaction-strip
  * sites so post-restart rehydration stays consistent with the in-memory
  * state produced by `stripInjectionsForCompaction` (which removes those
  * tags from live messages but cannot touch the DB). Fields backing
@@ -1640,7 +1651,8 @@ export function clearStrippedInjectionMetadataForConversation(
           metadata,
           '$.pkbSystemReminderBlock',
           '$.nowScratchpadBlock',
-          '$.pkbContextBlock'
+          '$.pkbContextBlock',
+          '$.memoryV2StaticBlock'
         )
       WHERE conversation_id = ?
         AND role = 'user'
@@ -1649,6 +1661,7 @@ export function clearStrippedInjectionMetadataForConversation(
           json_extract(metadata, '$.pkbSystemReminderBlock') IS NOT NULL
           OR json_extract(metadata, '$.nowScratchpadBlock') IS NOT NULL
           OR json_extract(metadata, '$.pkbContextBlock') IS NOT NULL
+          OR json_extract(metadata, '$.memoryV2StaticBlock') IS NOT NULL
         )`,
     conversationId,
   );
